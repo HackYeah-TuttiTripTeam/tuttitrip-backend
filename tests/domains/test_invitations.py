@@ -1,10 +1,12 @@
 """Trip invitations: issue, preview, join (with a profile), revoke."""
 
+import asyncio
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from typing import cast
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -16,6 +18,7 @@ from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
 from tuttitrip.profiles import db as profiles_db
+from tuttitrip.profiles.db import link_account as real_link_account
 from tuttitrip.profiles.models import Profile
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
@@ -52,6 +55,7 @@ class World:
             "max_uses": 5,
             "uses": 0,
             "revoked_at": None,
+            "profile_id": None,
         } | overrides
         row = TripInvitation(**values)
         self.invitations[row.token_hash] = row
@@ -125,6 +129,34 @@ class World:
             for r in self.invitations.values()
         )
 
+    def person(self, name: str, age: int = 70, sub: str | None = None) -> Profile:
+        """A profile on the trip, with or without an account."""
+        profile = Profile(
+            id=uuid.uuid4(), trip_id=TRIP, display_name=name, age=age, user_sub=sub
+        )
+        self.profiles.append(profile)
+        return profile
+
+    def claimable(self, _s: object, _t: uuid.UUID) -> list[Profile]:
+        return [p for p in self.profiles if p.user_sub is None]
+
+    def profile(
+        self, _s: object, trip_id: uuid.UUID, profile_id: uuid.UUID
+    ) -> Profile | None:
+        return next(
+            (p for p in self.profiles if p.id == profile_id and p.trip_id == trip_id),
+            None,
+        )
+
+    def link(
+        self, _s: object, trip_id: uuid.UUID, profile_id: uuid.UUID, sub: str
+    ) -> bool:
+        profile = self.profile(_s, trip_id, profile_id)
+        if profile is None or profile.user_sub is not None:
+            return False
+        profile.user_sub = sub
+        return True
+
     def role_of(self, _s: object, _t: uuid.UUID, sub: str) -> TripRole | None:
         return self.roles.get(sub)
 
@@ -145,6 +177,9 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
         (trips_db, "select_member_role", w.role_of),
         (profiles_db, "insert_profile", w.insert_profile),
         (profiles_db, "select_account_profile_id", w.account_profile),
+        (profiles_db, "select_claimable", w.claimable),
+        (profiles_db, "select_profile", w.profile),
+        (profiles_db, "link_account", w.link),
     ):
         monkeypatch.setattr(module, name, AsyncMock(side_effect=fake))
     return w
@@ -158,6 +193,7 @@ def session(world: World) -> AsyncMock:
         world.commits += 1
 
     mock.commit = AsyncMock(side_effect=commit)
+    mock.rollback = AsyncMock(side_effect=lambda: world.undo(GUEST.sub))
     return mock
 
 
@@ -328,6 +364,7 @@ def test_preview_shows_the_trip(guest: TestClient, world: World) -> None:
         "trip_name": "Kraków",
         "destination": "PL",
         "already_member": False,
+        "claimable_profiles": [],
     }
     assert response.headers["cache-control"] == "no-store"
     assert GUEST.sub not in world.roles
@@ -438,3 +475,163 @@ def test_the_use_is_taken_by_one_conditional_update() -> None:
         "RETURNING trip_invitations.id",
     ):
         assert part in sql
+
+
+def _claimable(client: TestClient) -> list[dict[str, str]]:
+    body = client.post(path("preview_invitation"), json=BODY).json()
+    return cast("list[dict[str, str]]", body["claimable_profiles"])
+
+
+def test_preview_lists_only_name_and_age_group_of_profiles_without_an_account(
+    guest: TestClient, world: World
+) -> None:
+    world.invite()
+    granny = world.person("Babcia", age=72)
+    world.person("Ala", sub="auth0|ala")  # has an account: not offered
+    assert _claimable(guest) == [
+        {"profile_id": str(granny.id), "display_name": "Babcia", "age_group": "senior"}
+    ]
+
+
+def test_preview_offers_nothing_to_someone_already_on_the_trip(
+    guest: TestClient, world: World
+) -> None:
+    world.invite()
+    world.person("Babcia")
+    world.roles[GUEST.sub] = TripRole.MEMBER
+    assert _claimable(guest) == []
+
+
+def test_taking_over_a_profile_links_the_account_and_creates_no_new_one(
+    guest: TestClient, world: World
+) -> None:
+    row = world.invite()
+    granny = world.person("Babcia")
+    before = len(world.profiles)
+    response = guest.post(path(ACCEPT), json=BODY | {"profile_id": str(granny.id)})
+    assert response.status_code == 200
+    assert response.json()["profile_id"] == str(granny.id)
+    assert response.json()["profile_claimed"] is True
+    assert granny.user_sub == GUEST.sub
+    assert len(world.profiles) == before
+    assert world.roles[GUEST.sub] is TripRole.MEMBER
+    assert (row.uses, world.commits) == (1, 1)
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_a_profile_that_has_an_account_is_a_409_and_nothing_changes(
+    guest: TestClient, world: World
+) -> None:
+    world.invite()
+    taken = world.person("Ala", sub="auth0|ala")
+    response = guest.post(path(ACCEPT), json=BODY | {"profile_id": str(taken.id)})
+    assert response.status_code == 409
+    assert response.headers["cache-control"] == "no-store"
+    assert taken.user_sub == "auth0|ala"
+    assert GUEST.sub not in world.roles
+    assert world.commits == 0
+
+
+def test_a_profile_of_another_trip_is_a_404(guest: TestClient, world: World) -> None:
+    world.invite()
+    foreign = Profile(
+        id=uuid.uuid4(), trip_id=uuid.uuid4(), display_name="Obca", age=30
+    )
+    world.profiles.append(foreign)
+    response = guest.post(path(ACCEPT), json=BODY | {"profile_id": str(foreign.id)})
+    assert response.status_code == 404
+    assert foreign.user_sub is None
+    assert GUEST.sub not in world.roles
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_two_accounts_racing_for_one_profile_one_wins_and_one_gets_409(
+    session: AsyncMock, world: World
+) -> None:
+    world.invite()
+    granny = world.person("Babcia")
+    other = AuthenticatedUser(sub="auth0|other")
+    statuses = [
+        client.post(
+            path(ACCEPT), json=BODY | {"profile_id": str(granny.id)}
+        ).status_code
+        for user in (GUEST, other)
+        for client in _client(session, user)
+    ]
+    assert statuses == [200, 409]
+    assert granny.user_sub == GUEST.sub
+
+
+def test_the_claim_is_one_conditional_update() -> None:
+    session = AsyncMock()
+    session.execute.return_value = MagicMock()
+    asyncio.run(real_link_account(session, TRIP, uuid.uuid4(), GUEST.sub))
+    sql = str(session.execute.await_args.args[0].compile(dialect=postgresql.dialect()))
+    for part in (
+        "UPDATE profiles SET user_sub=",
+        "profiles.user_sub IS NULL",
+        "profiles.trip_id =",
+        "RETURNING profiles.id",
+    ):
+        assert part in sql
+
+
+def test_a_named_invitation_hands_over_its_profile_without_a_choice(
+    guest: TestClient, world: World
+) -> None:
+    granny = world.person("Babcia")
+    world.person("Dziadek")
+    world.invite(profile_id=granny.id, max_uses=1)
+    assert [p["profile_id"] for p in _claimable(guest)] == [str(granny.id)]
+    body = guest.post(path(ACCEPT), json=BODY).json()
+    assert (body["profile_id"], body["profile_claimed"]) == (str(granny.id), True)
+    assert granny.user_sub == GUEST.sub
+
+
+def test_a_named_invitation_refuses_a_different_profile(
+    guest: TestClient, world: World
+) -> None:
+    granny = world.person("Babcia")
+    grandpa = world.person("Dziadek")
+    world.invite(profile_id=granny.id)
+    response = guest.post(path(ACCEPT), json=BODY | {"profile_id": str(grandpa.id)})
+    assert response.status_code == 409
+    assert grandpa.user_sub is None
+    assert GUEST.sub not in world.roles
+
+
+def test_a_host_creates_a_named_invitation_that_works_once(
+    host: TestClient, world: World
+) -> None:
+    granny = world.person("Babcia")
+    response = host.post(
+        path("create_invitation", trip_id=TRIP),
+        json={"profile_id": str(granny.id), "max_uses": 50},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert (body["profile_id"], body["max_uses"]) == (str(granny.id), 1)
+
+
+@pytest.mark.parametrize(("make", "expected"), [("account", 409), ("foreign", 404)])
+def test_a_named_invitation_needs_a_free_profile_of_this_trip(
+    host: TestClient, world: World, make: str, expected: int
+) -> None:
+    if make == "account":
+        profile = world.person("Ala", sub="auth0|ala")
+    else:
+        profile = Profile(id=uuid.uuid4(), trip_id=uuid.uuid4(), display_name="X")
+        world.profiles.append(profile)
+    response = host.post(
+        path("create_invitation", trip_id=TRIP), json={"profile_id": str(profile.id)}
+    )
+    assert response.status_code == expected
+    assert not world.invitations
+
+
+def test_a_removed_members_profile_can_be_taken_over(
+    guest: TestClient, world: World
+) -> None:
+    world.invite()
+    left = world.person("Dawny uczestnik")  # unlink_account left user_sub empty
+    assert _claimable(guest)[0]["profile_id"] == str(left.id)

@@ -24,6 +24,7 @@ from tuttitrip.profiles.logic.weight_presets import (
 from tuttitrip.profiles.models import Profile
 from tuttitrip.profiles.schemas import (
     AgeGroup,
+    ClaimableProfile,
     ProfileCreate,
     ProfileRead,
     ProfileUpdate,
@@ -55,6 +56,10 @@ class ProfileComfortError(ValueError):
 
 class ProfileAccountError(Exception):
     """The account link cannot change: it is not allowed, or already taken."""
+
+
+class ProfileClaimedError(Exception):
+    """The profile already belongs to an account (or was taken a moment ago)."""
 
 
 MEMBERSHIP_VIA_MEMBERS = (
@@ -248,6 +253,69 @@ async def find_account_profile(
         The profile id, or None when the account has no profile there.
     """
     return await db.select_account_profile_id(session, trip_id, sub)
+
+
+async def list_claimable(
+    session: AsyncSession, trip_id: UUID
+) -> list[ClaimableProfile]:
+    """Profiles without an account that an invited person can take over.
+
+    Includes the profile of a removed member (their account link is gone), so
+    a person who left can be taken over by whoever the host invites next.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+
+    Returns:
+        Id, name and age group of each profile; nothing else about the person.
+    """
+    rows = await db.select_claimable(session, trip_id)
+    return [
+        ClaimableProfile(
+            profile_id=p.id, display_name=p.display_name, age_group=p.age_group
+        )
+        for p in rows
+    ]
+
+
+async def require_claimable(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID
+) -> None:
+    """Raise unless the profile is on the trip and has no account.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+        profile_id: Profile to check.
+
+    Raises:
+        ProfileNotFoundError: The profile is not on this trip.
+        ProfileClaimedError: The profile has an account.
+    """
+    profile = await _get(session, trip_id, profile_id)
+    if profile.user_sub is not None:
+        raise ProfileClaimedError(str(profile_id))
+
+
+async def claim_profile(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID, sub: str
+) -> None:
+    """Link an account to a profile without one; flushes, the caller commits.
+
+    Args:
+        session: Open session.
+        trip_id: The trip the profile must be on.
+        profile_id: Profile to take over.
+        sub: Auth0 subject of the person.
+
+    Raises:
+        ProfileNotFoundError: The profile is not on this trip.
+        ProfileClaimedError: It has an account, or another claim won the race.
+    """
+    await require_claimable(session, trip_id, profile_id)
+    if not await db.link_account(session, trip_id, profile_id, sub):
+        raise ProfileClaimedError(str(profile_id))
 
 
 async def _get(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> Profile:
