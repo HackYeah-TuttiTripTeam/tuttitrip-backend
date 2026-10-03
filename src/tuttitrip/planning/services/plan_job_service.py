@@ -3,7 +3,11 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.planning.schemas import PlanJobRequest
-from tuttitrip.shared.jobs.contracts import GenerateTripPlanInput, Workflow
+from tuttitrip.shared.jobs.contracts import (
+    GenerateTripPlanInput,
+    Workflow,
+    queue_for,
+)
 from tuttitrip.shared.jobs.services.job_queue import JobQueue
 from tuttitrip.shared.jobs.services.worker_liveness import ensure_worker_available
 from tuttitrip.trips.services import trip_service
@@ -25,7 +29,13 @@ async def start_plan_generation(
     """
     await trip_service.get_owned_trip(session, data.trip_id, owner_sub)
     await ensure_worker_available(session)
-    payload = GenerateTripPlanInput(trip_id=data.trip_id, request=data.request)
+    payload = GenerateTripPlanInput(
+        trip_id=data.trip_id, request=data.request, provider=data.provider
+    )
     return await queue.enqueue(
-        Workflow.GENERATE_TRIP_PLAN, payload, user=owner_sub, key=str(data.trip_id)
+        Workflow.GENERATE_TRIP_PLAN,
+        payload,
+        user=owner_sub,
+        key=str(data.trip_id),
+        queue=queue_for(data.provider),
     )

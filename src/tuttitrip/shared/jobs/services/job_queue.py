@@ -17,6 +17,7 @@ from tuttitrip.shared.jobs.contracts import (
     WORKFLOWS,
     ContractPayload,
     Progress,
+    Queue,
     Workflow,
 )
 from tuttitrip.shared.jobs.schemas import JobState
@@ -24,6 +25,7 @@ from tuttitrip.shared.jobs.schemas import JobState
 # Start-to-close limits; DBOS cancels a workflow that runs longer.
 TIMEOUT_SECONDS: dict[Workflow, float] = {
     Workflow.GENERATE_TRIP_PLAN: 900.0,
+    Workflow.EMBED_TEXTS: 300.0,
     Workflow.PING: 60.0,
 }
 
@@ -58,9 +60,15 @@ class JobQueue(Protocol):
     """What the API needs from the job system (a fake implements it in tests)."""
 
     async def enqueue(
-        self, workflow: Workflow, payload: ContractPayload, *, user: str, key: str
+        self,
+        workflow: Workflow,
+        payload: ContractPayload,
+        *,
+        user: str,
+        key: str,
+        queue: Queue | None = None,
     ) -> str:
-        """Enqueue (idempotently) and return the workflow id."""
+        """Enqueue (idempotently) on ``queue`` or the default one; return the id."""
         ...
 
     async def get(self, workflow_id: str) -> JobState:
@@ -86,7 +94,13 @@ class DbosJobQueue:
         self._version = application_version
 
     async def enqueue(
-        self, workflow: Workflow, payload: ContractPayload, *, user: str, key: str
+        self,
+        workflow: Workflow,
+        payload: ContractPayload,
+        *,
+        user: str,
+        key: str,
+        queue: Queue | None = None,
     ) -> str:
         """Enqueue with a deterministic id, portable JSON and the env version.
 
@@ -95,13 +109,15 @@ class DbosJobQueue:
             payload: Input model, sent as one JSON object.
             user: Auth0 subject recorded as the workflow's authenticated user.
             key: Domain id used in the workflow id.
+            queue: Queue override (e.g. ``queue_for(provider)``); defaults to
+                the workflow's queue in the contract.
 
         Returns:
             The workflow id (an existing one if the same request was sent before).
         """
         options: EnqueueOptions = {
             "workflow_name": workflow.value,
-            "queue_name": WORKFLOWS[workflow].queue.value,
+            "queue_name": (queue or WORKFLOWS[workflow].queue).value,
             "workflow_id": workflow_id_for(workflow, key, payload),
             "workflow_id_reuse_policy": "return-existing",
             # Workers only dequeue their own version; both sides read it from

@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from tuttitrip.shared.jobs.contracts import ProviderName
+
 
 class TripPlan(BaseModel):
     """A short trip plan suggested to the user."""
@@ -21,3 +23,6 @@ class PlanJobRequest(BaseModel):
 
     trip_id: UUID
     request: str = Field(min_length=1, max_length=4000)
+    provider: ProviderName = Field(
+        default="openrouter", description="LLM backend: OpenRouter or the local model."
+    )

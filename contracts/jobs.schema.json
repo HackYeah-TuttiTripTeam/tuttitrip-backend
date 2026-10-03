@@ -21,16 +21,83 @@
     }
   },
   "queues": [
-    "planning",
-    "system"
+    "default",
+    "local_llm",
+    "openrouter"
   ],
   "workflows": {
+    "embed_texts": {
+      "input": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "source_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "source_kind": {
+            "maxLength": 50,
+            "minLength": 1,
+            "type": "string"
+          },
+          "texts": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "source_kind",
+          "source_id",
+          "texts"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "dimensions": {
+            "type": "integer"
+          },
+          "model": {
+            "type": "string"
+          },
+          "stored": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "model",
+          "dimensions",
+          "stored"
+        ],
+        "type": "object"
+      },
+      "queue": "default"
+    },
     "generate_trip_plan": {
       "input": {
         "properties": {
           "contract_version": {
             "default": 1,
             "type": "integer"
+          },
+          "provider": {
+            "default": "openrouter",
+            "enum": [
+              "openrouter",
+              "local"
+            ],
+            "type": "string"
           },
           "request": {
             "maxLength": 4000,
@@ -74,7 +141,7 @@
         ],
         "type": "object"
       },
-      "queue": "planning"
+      "queue": "openrouter"
     },
     "ping": {
       "input": {
@@ -112,7 +179,7 @@
         ],
         "type": "object"
       },
-      "queue": "system"
+      "queue": "default"
     }
   }
 }
