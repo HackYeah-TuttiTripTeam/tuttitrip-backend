@@ -27,7 +27,7 @@ def test_health_ok_when_database_answers(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(health_check, "ping", AsyncMock(return_value=True))
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
     assert response.status_code == 200
     assert response.json()["database"] == "ok"
 
@@ -36,7 +36,7 @@ def test_health_503_when_database_is_down(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(health_check, "ping", AsyncMock(return_value=False))
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
     assert response.status_code == 503
     assert response.json() == {
         "status": "degraded",
@@ -62,20 +62,20 @@ def test_health_degraded_when_worker_contract_is_incompatible(
     monkeypatch.setattr(
         health_check, "worker_liveness", AsyncMock(return_value=liveness)
     )
-    response = client.get("/health")
+    response = client.get("/api/v1/health")
     assert response.status_code == 503
     assert response.json()["worker_contract_version"] == CONTRACT_VERSION + 2
 
 
 def test_live_does_not_need_the_database(client: TestClient) -> None:
-    assert client.get("/health/live").json() == {"status": "ok"}
+    assert client.get("/api/v1/health/live").json() == {"status": "ok"}
 
 
 def test_openapi_schema_is_public(client: TestClient) -> None:
     # The frontend generates its TypeScript client from this at build time.
-    response = client.get("/openapi.json")
+    response = client.get("/api/v1/openapi.json")
     assert response.status_code == 200
-    assert "/trips" in response.json()["paths"]
+    assert "/api/v1/trips" in response.json()["paths"]
 
 
 ALLOWED_ORIGINS = [
@@ -93,11 +93,11 @@ BLOCKED_ORIGINS = [
 
 @pytest.mark.parametrize("origin", ALLOWED_ORIGINS)
 def test_cors_allows_our_frontends(client: TestClient, origin: str) -> None:
-    response = client.get("/health/live", headers={"Origin": origin})
+    response = client.get("/api/v1/health/live", headers={"Origin": origin})
     assert response.headers.get("access-control-allow-origin") == origin
 
 
 @pytest.mark.parametrize("origin", BLOCKED_ORIGINS)
 def test_cors_blocks_other_origins(client: TestClient, origin: str) -> None:
-    response = client.get("/health/live", headers={"Origin": origin})
+    response = client.get("/api/v1/health/live", headers={"Origin": origin})
     assert "access-control-allow-origin" not in response.headers

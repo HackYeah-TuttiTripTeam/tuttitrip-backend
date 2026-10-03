@@ -71,7 +71,7 @@ jobs:
       - name: Public health check
         run: |
           . deploy/lib.sh
-          url="https://$(tt_hostname "$(tt_env "${GITHUB_REF_NAME}")")/health"
+          url="https://$(tt_hostname "$(tt_env "${GITHUB_REF_NAME}")")/api/v1/health"
           for _ in $(seq 30); do
             if curl -fsS "$url"; then echo; echo "OK: $url"; exit 0; fi
             sleep 5

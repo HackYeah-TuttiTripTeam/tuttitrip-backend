@@ -164,7 +164,7 @@ with a local round trip):
   old and the new version and its heartbeat advertises both; (2) the backend
   switches `CONTRACT_VERSION`; (3) the worker drops the old version.
   A worker that gets an unsupported version fails the workflow with a clear
-  message. The backend shows it in `GET /jobs/{id}` (`status=ERROR`, `error`).
+  message. The backend shows it in `GET /api/v1/jobs/{id}` (`status=ERROR`, `error`).
 
 | Workflow | Queue | Input | Output | Timeout (backend) |
 | --- | --- | --- | --- | --- |
@@ -183,7 +183,7 @@ domain tables such as `embeddings`. The backend reads those.
   enqueued with `workflow_id_reuse_policy="return-existing"`, so a repeated
   request returns the same job.
 - The backend sets `workflow_timeout` per workflow (table above).
-- `POST /jobs/{id}/cancel` cancels. Workflows should be written so that a
+- `POST /api/v1/jobs/{id}/cancel` cancels. Workflows should be written so that a
   cancellation between steps is safe.
 - `authenticated_user` = the caller's Auth0 `sub`. Only that user sees the job.
 
@@ -193,21 +193,21 @@ domain tables such as `embeddings`. The backend reads those.
   `worker_heartbeats(worker_id PK, env, contract_version, min_contract_version,
   app_version, last_seen)` with `env = TUTTITRIP_ENVIRONMENT`, `contract_version` =
   the highest supported and `min_contract_version` = the lowest supported.
-- Backend `/health` reports `worker: ok` (beat ≤ 90 s old), `stale`, or
+- Backend `/api/v1/health` reports `worker: ok` (beat ≤ 90 s old), `stale`, or
   `missing` (none, or older than 600 s; both thresholds are settings). It also
   reports `contract_version` and `worker_contract_version`. If the backend
-  version is outside `[min_contract_version, contract_version]`, `/health`
+  version is outside `[min_contract_version, contract_version]`, `/api/v1/health`
   answers 503 `degraded`.
 - Enqueue endpoints answer 503 with a readable message while the worker is
   `missing` or incompatible.
 
 ### Smoke test after deploy
 
-`POST /jobs/ping` (public) enqueues `ping`, and `GET /jobs/ping/{id}` shows it.
+`POST /api/v1/jobs/ping` (public) enqueues `ping`, and `GET /api/v1/jobs/ping/{id}` shows it.
 After every backend deploy, `deploy/deploy.sh` runs it through the gateway and
 fails the deploy if the job does not reach `SUCCESS` within ~3 minutes. It
 skips with a warning only when no worker container exists for the env. The
-worker deploy runs the same check against `https://<api host>/jobs/ping`.
+worker deploy runs the same check against `https://<api host>/api/v1/jobs/ping`.
 
 ## Worker image fallback (backend deploy)
 
@@ -238,4 +238,4 @@ and env files.
    and `DBOS__APPVERSION=local` (= backend default `TUTTITRIP_DBOS__APPLICATION_VERSION`).
    Locally the worker may use the owner role. The restricted role is enforced
    on the host.
-3. `curl -X POST localhost:8000/jobs/ping`, then `GET /jobs/ping/<id>`.
+3. `curl -X POST localhost:8000/api/v1/jobs/ping`, then `GET /api/v1/jobs/ping/<id>`.

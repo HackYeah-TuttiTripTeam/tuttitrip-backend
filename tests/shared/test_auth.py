@@ -99,18 +99,20 @@ def client(verifier: TokenVerifier) -> Iterator[TestClient]:
 
 
 def test_me_requires_a_token(client: TestClient) -> None:
-    response = client.get("/me")
+    response = client.get("/api/v1/me")
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
 
 
 def test_me_rejects_garbage(client: TestClient) -> None:
-    response = client.get("/me", headers={"Authorization": "Bearer nope"})
+    response = client.get("/api/v1/me", headers={"Authorization": "Bearer nope"})
     assert response.status_code == 401
 
 
 def test_me_returns_the_caller(client: TestClient) -> None:
-    response = client.get("/me", headers={"Authorization": f"Bearer {make_token()}"})
+    response = client.get(
+        "/api/v1/me", headers={"Authorization": f"Bearer {make_token()}"}
+    )
     assert response.status_code == 200
     assert response.json() == {
         "sub": "google-oauth2|42",
@@ -123,7 +125,7 @@ def test_me_returns_the_caller(client: TestClient) -> None:
 
 def test_me_reports_the_admin_role(client: TestClient) -> None:
     token = make_token(**{ROLES_CLAIM: ["admin"]})
-    response = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+    response = client.get("/api/v1/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.json()["roles"] == ["admin"]
     assert response.json()["is_admin"] is True
@@ -193,4 +195,4 @@ def test_require_admin_lets_admins_through(admin_client: TestClient) -> None:
 
 
 def test_trip_endpoints_require_a_token(client: TestClient) -> None:
-    assert client.get("/trips").status_code == 401
+    assert client.get("/api/v1/trips").status_code == 401

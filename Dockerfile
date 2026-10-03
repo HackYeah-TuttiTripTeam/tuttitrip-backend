@@ -40,9 +40,9 @@ USER nonroot
 WORKDIR /app
 EXPOSE 8000
 
-# Liveness only (no DB): /health/live. Readiness with the DB is /health.
+# Liveness only (no DB): /api/v1/health/live. Readiness with the DB is /api/v1/health.
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live', timeout=2)"]
 
 CMD ["uvicorn", "tuttitrip.main:app", "--host", "0.0.0.0", "--port", "8000", \
      "--proxy-headers", "--forwarded-allow-ips", "*"]
