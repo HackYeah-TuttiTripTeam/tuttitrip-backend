@@ -3,11 +3,21 @@
 from enum import StrEnum
 from typing import Annotated, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 DEFAULT_SIZE = 20
 MAX_SIZE = 100
 MAX_BULK_IDS = 100
+
+type BulkId = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+"""Default id type of a bulk selection; pass the real one (e.g. `UUID`) as `I`."""
 
 
 class SortDir(StrEnum):
@@ -17,11 +27,21 @@ class SortDir(StrEnum):
     DESC = "desc"
 
 
-class PageParams(BaseModel):
-    """Query parameters every list endpoint accepts.
+class ListFilters(BaseModel):
+    """Base of an endpoint's typed filters, declared once per list.
 
-    An endpoint subclasses this and adds `sort` (its own enum, mapped to
-    columns in its `db.py`) and its filter fields.
+    The list query is `class MyQuery(PageParams, MyFilters)` plus `sort`; a bulk
+    operation takes `BulkSelection[MyFilters]`, so both mean the same rows.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class PageParams(BaseModel):
+    """Paging parameters every list endpoint accepts.
+
+    Combine with the endpoint's filters and add `sort` (its own enum, mapped to
+    columns in its `db.py`): `class MyQuery(PageParams, MyFilters)`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -68,21 +88,27 @@ class Page[T](BaseModel):
             total=total,
             page=params.page,
             size=params.size,
-            pages=-(-total // params.size),
+            pages=(total + params.size - 1) // params.size,
         )
 
 
-class BulkSelection[F: BaseModel](BaseModel):
+class BulkSelection[F: ListFilters, I = BulkId](BaseModel):
     """What a bulk operation acts on: `ids` (max 100) or the list's filters.
 
-    Exactly one is set, never both. The service always intersects the selection
-    with what the caller may touch.
+    Exactly one is set, never both. Ids are deduplicated in order. The service
+    never uses the selection alone: it applies it to the caller-scoped select
+    through `shared.db.pagination.selected`.
     """
 
-    ids: Annotated[list[str] | None, Field(min_length=1, max_length=MAX_BULK_IDS)] = (
-        None
-    )
+    model_config = ConfigDict(extra="forbid")
+
+    ids: Annotated[list[I] | None, Field(min_length=1, max_length=MAX_BULK_IDS)] = None
     filters: F | None = None
+
+    @field_validator("ids", mode="after")
+    @classmethod
+    def _dedupe(cls, ids: list[I] | None) -> list[I] | None:
+        return None if ids is None else list(dict.fromkeys(ids))
 
     @model_validator(mode="after")
     def _exactly_one(self) -> Self:

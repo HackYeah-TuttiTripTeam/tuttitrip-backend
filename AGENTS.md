@@ -40,7 +40,7 @@ src/tuttitrip/
     permissions/       feature registry, roles/grants, requires(), GET /api/v1/me, admin API
     health/            GET /api/v1/health (DB + worker), GET /api/v1/health/live
     llm/               Pydantic AI model catalog (services/model_catalog.py)
-    pagination/        list contract: PageParams, Page[T], BulkSelection (paginate() is in db/pagination.py)
+    pagination/        list contract: PageParams, Page[T], BulkSelection (paginate()/selected() are in db/pagination.py)
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
@@ -137,11 +137,24 @@ exceptions are listed in tests/architecture/test_lists.py and only shrink.
 - A bulk operation on a list takes either ids (max 100) or the same filter
   model, never both, and always scopes by the caller.
 
-How: subclass `PageParams` (`shared/pagination/schemas.py`) with `sort` and the
-filters, take it as `Annotated[MyQuery, Query()]`, build the scoped and filtered
-select in `db.py`, then `paginate(session, stmt, params, ordering(COLUMNS,
-params.sort, Model.id))` (`shared/db/pagination.py`) and return `Page[Read]`.
-`BulkSelection[MyFilters]` is the body shape for bulk operations.
+How:
+
+- Declare the filters once: `class MyFilters(ListFilters)`. The list query is
+  `class MyQuery(PageParams, MyFilters)` plus `sort: MySort`, taken as
+  `Annotated[MyQuery, Query()]`. A bulk body is `BulkSelection[MyFilters]`
+  (pass the real id type as the second parameter, e.g. `UUID`).
+- In `db.py`: one `scoped(caller)` select and one `apply_filters(stmt, filters)`.
+  The list is `paginate(session, apply_filters(scoped(caller), q), q,
+  ordering(COLUMNS, q.sort, Model.id))` (`shared/db/pagination.py`) and returns
+  `Page[Read]`. `stmt` selects one entity; filter on to-many relations with
+  `EXISTS`, never a join. NULLs sort last.
+- A bulk service takes the caller scope and must use it: it builds the target
+  ids with `selected(scoped(caller), Model.id, selection, apply_filters)` and
+  puts that in the `UPDATE`/`DELETE` (`Model.id.in_(...)`), never the raw
+  `selection.ids`.
+- `LEGACY_UNPAGED` in `tests/architecture/test_lists.py` may only shrink: never
+  add a route to it. The test also looks at return annotations and unwraps
+  `Optional`, `Annotated` and `Sequence`.
 
 ## Conventions
 
