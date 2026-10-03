@@ -6,6 +6,7 @@ not depend on URL prefixes.
 """
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -18,12 +19,16 @@ from tuttitrip.main import create_app
 from tuttitrip.shared.permissions.api import (
     PermissionRequirement,
     PublicMarker,
+    TokenRequirement,
     api_routes,
+    get_token_access,
     public,
     requires,
     route_markers,
+    token_access,
 )
 from tuttitrip.shared.permissions.registry import Access, Feature, is_leaf
+from tuttitrip.shared.permissions.schemas import TokenScope
 from tuttitrip.trips.api import TripAccess
 
 APP = create_app()
@@ -31,6 +36,9 @@ API_ROUTES = api_routes(APP)
 
 # Endpoint function names of the only routes that may be public.
 PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status"}
+# Endpoint function names of the only routes reachable with an access token
+# instead of an account (the token's trip and profile come from the token).
+TOKEN_ENDPOINTS = {"read_vote_access"}
 
 
 def docs_paths(app: FastAPI) -> set[str | None]:
@@ -43,7 +51,7 @@ def docs_paths(app: FastAPI) -> set[str | None]:
 
 
 def uncovered_routes(app: FastAPI) -> list[str]:
-    """Routes without exactly one marker (``requires`` or ``public``)."""
+    """Routes without exactly one marker (requires, public or token_access)."""
     problems: list[str] = []
     for route in iter_route_contexts(app.routes):
         if isinstance(route.original_route, APIRoute):
@@ -97,6 +105,90 @@ def test_coverage_check_catches_unmarked_and_double_marked_routes() -> None:
         "GET /open: 0 markers",
         "GET /twice: 2 markers",
     ]
+
+
+def test_a_token_marker_counts_as_a_marker() -> None:
+    app = FastAPI()
+    app.get("/ok", dependencies=[token_access(TokenScope.VOTE)])(lambda: None)
+    app.get(
+        "/token-and-public",
+        dependencies=[token_access(TokenScope.VOTE), public()],
+    )(lambda: None)
+    app.get(
+        "/token-and-requires",
+        dependencies=[
+            token_access(TokenScope.VOTE),
+            requires(Feature.SEARCH, Access.READ),
+        ],
+    )(lambda: None)
+    assert uncovered_routes(app) == [
+        "GET /token-and-public: 2 markers",
+        "GET /token-and-requires: 2 markers",
+    ]
+
+
+def test_only_the_allow_listed_routes_use_a_token() -> None:
+    token_routes = {
+        r.name
+        for r in API_ROUTES
+        if any(isinstance(m, TokenRequirement) for m in route_markers(r))
+    }
+    assert token_routes == TOKEN_ENDPOINTS
+
+
+def _token_routes(app: FastAPI) -> list[RouteContext]:
+    return [
+        r
+        for r in api_routes(app)
+        if any(isinstance(m, TokenRequirement) for m in route_markers(r))
+    ]
+
+
+def token_routes_with_identifying_path(app: FastAPI) -> list[str]:
+    """Token routes whose path names a trip, a profile or any such object."""
+    return [
+        route.path or ""
+        for route in _token_routes(app)
+        if any(
+            word in name
+            for name in re.findall(r"{(\w+)", route.path or "")
+            for word in ("trip", "profile")
+        )
+    ]
+
+
+def token_routes_outside(app: FastAPI, allowed: set[str]) -> list[str | None]:
+    return [r.name for r in _token_routes(app) if r.name not in allowed]
+
+
+def token_routes_without_token_check(app: FastAPI) -> list[str | None]:
+    return [
+        r.name
+        for r in _token_routes(app)
+        if not any(d.call is get_token_access for d in _dependants(r))
+    ]
+
+
+def test_token_routes_take_the_trip_from_the_token_not_the_path() -> None:
+    assert _token_routes(APP)
+    assert token_routes_with_identifying_path(APP) == []
+
+
+def test_token_routes_check_the_token() -> None:
+    assert token_routes_without_token_check(APP) == []
+
+
+def test_token_route_checks_catch_violations() -> None:
+    app = FastAPI()
+    token = [token_access(TokenScope.VOTE)]
+    app.get("/v/{trip_id}", dependencies=token)(lambda trip_id: trip_id)
+    app.get("/p/{profile_id}", dependencies=token)(lambda profile_id: profile_id)
+    app.get("/ok", dependencies=token)(lambda: None)
+    assert token_routes_with_identifying_path(app) == [
+        "/v/{trip_id}",
+        "/p/{profile_id}",
+    ]
+    assert token_routes_outside(app, TOKEN_ENDPOINTS) == ["<lambda>"] * 3
 
 
 def test_only_the_allow_listed_routes_are_public() -> None:

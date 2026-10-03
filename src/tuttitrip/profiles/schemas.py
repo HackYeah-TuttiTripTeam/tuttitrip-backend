@@ -169,3 +169,11 @@ class WeightsUpdate(BaseModel):
             msg = "Give either preset or weights"
             raise ValueError(msg)
         return self
+
+
+class AccessTokenCreate(BaseModel):
+    """Payload for a token that lets the profile's person act without an account."""
+
+    expires_in_days: int = Field(
+        default=14, ge=1, le=90, description="Days until the link stops working."
+    )

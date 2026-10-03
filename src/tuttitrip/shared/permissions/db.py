@@ -1,12 +1,15 @@
 """Queries on roles, role grants, user roles and user grants."""
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import delete, select, union_all
+from sqlalchemy import delete, func, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.shared.permissions.models import (
+    AccessToken,
     PermissionAudit,
     Role,
     RoleGrant,
@@ -282,3 +285,133 @@ async def select_audit(
     if target_sub is not None:
         statement = statement.where(PermissionAudit.target_sub == target_sub)
     return (await session.scalars(statement)).all()
+
+
+async def insert_access_token(session: AsyncSession, row: AccessToken) -> AccessToken:
+    """Insert a token (hash only) and flush to get server defaults.
+
+    Args:
+        session: Open session (caller commits).
+        row: The new token, built by the service.
+
+    Returns:
+        The persisted row.
+    """
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
+async def select_access_token_by_hash(
+    session: AsyncSession, token_hash: str
+) -> AccessToken | None:
+    """Find a token by its hash.
+
+    Args:
+        session: Open session.
+        token_hash: SHA-256 hex of the presented token.
+
+    Returns:
+        The row (active or not) or None.
+    """
+    return await session.scalar(
+        select(AccessToken).where(AccessToken.token_hash == token_hash)
+    )
+
+
+async def select_access_token(
+    session: AsyncSession, token_id: UUID, trip_id: UUID, profile_id: UUID
+) -> AccessToken | None:
+    """Find a token of one profile of one trip by id.
+
+    Args:
+        session: Open session.
+        token_id: Token id.
+        trip_id: Trip the caller was checked for.
+        profile_id: Profile in the path.
+
+    Returns:
+        The row or None (also when it belongs to another trip or profile).
+    """
+    return await session.scalar(
+        select(AccessToken).where(
+            AccessToken.id == token_id,
+            AccessToken.trip_id == trip_id,
+            AccessToken.profile_id == profile_id,
+        )
+    )
+
+
+async def update_last_used(
+    session: AsyncSession, token_id: UUID, now: datetime, stale_before: datetime
+) -> bool:
+    """Set ``last_used_at`` unless it is newer than ``stale_before``.
+
+    Args:
+        session: Open session (caller commits).
+        token_id: Token id.
+        now: New value.
+        stale_before: Only rows never used or last used before this change.
+
+    Returns:
+        Whether a row changed.
+    """
+    changed = await session.scalar(
+        update(AccessToken)
+        .where(
+            AccessToken.id == token_id,
+            (AccessToken.last_used_at.is_(None))
+            | (AccessToken.last_used_at < stale_before),
+        )
+        .values(last_used_at=now)
+        .returning(AccessToken.id)
+    )
+    return changed is not None
+
+
+async def count_active_access_tokens(
+    session: AsyncSession, profile_id: UUID, now: datetime
+) -> int:
+    """Count a profile's tokens that are neither revoked nor expired.
+
+    Args:
+        session: Open session.
+        profile_id: Profile.
+        now: Current time.
+
+    Returns:
+        The number of active tokens.
+    """
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(AccessToken)
+            .where(
+                AccessToken.profile_id == profile_id,
+                AccessToken.revoked_at.is_(None),
+                AccessToken.expires_at > now,
+            )
+        )
+    ) or 0
+
+
+async def select_access_tokens(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID
+) -> Sequence[AccessToken]:
+    """Tokens of one profile of one trip, newest first.
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        profile_id: Profile.
+
+    Returns:
+        Rows.
+    """
+    result = await session.scalars(
+        select(AccessToken)
+        .where(AccessToken.trip_id == trip_id, AccessToken.profile_id == profile_id)
+        .order_by(AccessToken.created_at.desc())
+    )
+    return result.all()

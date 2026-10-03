@@ -1,11 +1,62 @@
 """Permission DTOs: feature tree, roles, user assignments and ``GET /me``."""
 
 from datetime import datetime
+from enum import StrEnum, unique
 from typing import Annotated, Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from tuttitrip.shared.permissions.registry import Access, Feature
+
+
+@unique
+class TokenScope(StrEnum):
+    """What an access token lets its holder do (one narrow function each)."""
+
+    VOTE = "vote"
+
+
+class TokenAccess(BaseModel):
+    """Proof that a valid access token was presented (like ``TripMembership``).
+
+    Carries ids only, never the token. Services take it as proof that the
+    caller may act on exactly this trip and profile.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    token_id: UUID
+    trip_id: UUID
+    profile_id: UUID
+    scope: TokenScope
+
+
+class AccessTokenRead(BaseModel):
+    """A stored token's public data (the token itself is never stored)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    scope: TokenScope
+    trip_id: UUID
+    profile_id: UUID
+    expires_at: datetime
+    revoked_at: datetime | None
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class AccessTokenCreated(AccessTokenRead):
+    """Response of token creation: the only time the token is shown."""
+
+    token: str = Field(
+        description=(
+            "The secret. Shown once and not recoverable; put it in a URL "
+            "fragment (`#t=...`) and send it back as `X-Access-Token`."
+        )
+    )
+
 
 RoleName = Annotated[
     str, StringConstraints(pattern=r"^[a-z][a-z0-9_-]{1,49}$", max_length=50)
