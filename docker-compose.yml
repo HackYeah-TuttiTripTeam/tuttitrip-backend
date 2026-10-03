@@ -37,10 +37,14 @@ services:
       timeout: 3s
       retries: 30
 
-  # Migrations run once, before the API starts (never inside the API process).
+  # Migrations run once, before the API starts (never inside the API process):
+  # Alembic for app tables, then the DBOS system schema used by tuttitrip-worker.
   migrate:
     <<: *app
-    command: ["alembic", "upgrade", "head"]
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && dbos migrate -s postgresql://tuttitrip:tuttitrip@db:5432/tuttitrip
     restart: "no"
     depends_on:
       db:

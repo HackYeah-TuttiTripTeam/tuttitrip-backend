@@ -33,9 +33,24 @@ jobs:
       - name: Tests
         run: uv run pytest
 
+  contracts-check:
+    name: contracts-check
+    runs-on: [self-hosted, hackathon]
+    timeout-minutes: 5
+    env:
+      # Fine-grained PAT (or GitHub App token) with Contents: read on
+      # HackYeah-TuttiTripTeam/tuttitrip-worker. GITHUB_TOKEN cannot read
+      # another private repository.
+      GH_TOKEN: ${{ secrets.WORKER_REPO_TOKEN }}
+      BRANCH: ${{ github.head_ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Compare contracts/jobs.schema.json with tuttitrip-worker
+        run: deploy/check-contract.sh
+
   deploy:
     name: deploy
-    needs: checks
+    needs: [checks, contracts-check]
     if: github.event_name == 'push'
     # Runner installed on the deploy host itself (dellpromaxgb10).
     runs-on: [self-hosted, tuttitrip-deploy]

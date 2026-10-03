@@ -18,7 +18,10 @@ description: Create, review and apply an Alembic migration in tuttitrip-backend 
    - `downgrade()` must really revert `upgrade()`.
 5. Verify: `uv run alembic upgrade head && uv run alembic downgrade -1 && uv run alembic upgrade head && uv run alembic check`
    (`check` must say "No new upgrade operations detected").
-6. Run the full check suite and commit the migration with the model change.
+6. If tuttitrip-worker must read or write the new table, add it to
+   `deploy/worker-grants.sql` (read-only or read-write section);
+   `tests/test_worker_grants.py` checks the names.
+7. Run the full check suite and commit the migration with the model change.
 
 Deployments run `alembic upgrade head` in a one-off container before the new
 API container starts; never migrate from application code.

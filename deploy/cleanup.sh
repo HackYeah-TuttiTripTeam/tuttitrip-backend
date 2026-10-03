@@ -27,6 +27,8 @@ mapfile -t envs < <(
   {
     docker ps -a --filter label=tuttitrip.managed=true --filter label=tuttitrip.role=api \
       --format '{{.Label "tuttitrip.env"}}'
+    docker ps -a --filter label=tuttitrip.managed=true --filter label=tuttitrip.role=worker \
+      --format '{{.Label "tuttitrip.env"}}'
     docker exec "$TT_POSTGRES" psql -U tuttitrip -d postgres -tAc \
       "SELECT substr(datname, 14) FROM pg_database WHERE datname LIKE 'tuttitrip\_br\_%'" 2>/dev/null \
       | tr '_' '-'
@@ -44,7 +46,13 @@ for env in "${envs[@]}"; do
   if [ "$(docker inspect -f '{{index .Config.Labels "tuttitrip.managed"}}' "$container" 2>/dev/null || true)" = true ]; then
     docker rm -f "$container" >/dev/null
   fi
-  docker image ls --filter label=tuttitrip.managed=true --filter "label=tuttitrip.env=$env" \
+  worker="tuttitrip-worker-$env"
+  if [ "$(docker inspect -f '{{index .Config.Labels "tuttitrip.managed"}}' "$worker" 2>/dev/null || true)" = true ]; then
+    docker rm -f "$worker" >/dev/null
+  fi
+  rm -f "$TT_STATE_DIR/envs/$env.env" "$TT_STATE_DIR/envs/$env.worker.env"
+  # Only our API images; tuttitrip-worker images are cleaned by the worker repo.
+  docker image ls tuttitrip-api --filter label=tuttitrip.managed=true --filter "label=tuttitrip.env=$env" \
     --format '{{.Repository}}:{{.Tag}}' | xargs -r docker rmi >/dev/null 2>&1 || true
   db=$(tt_database "$env")
   if [[ $db =~ ^tuttitrip_br_[a-z0-9_]+$ ]]; then

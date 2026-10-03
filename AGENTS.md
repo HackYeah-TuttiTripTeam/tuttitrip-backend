@@ -37,13 +37,16 @@ src/tuttitrip/
     config/            Settings (pydantic-settings)
     db/                Base, async engine/sessions, SessionDep (db/api.py)
     auth/              Auth0 JWT verification, CurrentUser, GET /me
-    health/            GET /health (DB), GET /health/live
+    health/            GET /health (DB + worker), GET /health/live
+    jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
   trips/               reference slice: api -> services -> db -> models
   profiles/            people on a trip (weights, age groups)
   interview/           AI interview agent (AG-UI endpoint goes here)
   planning/            planner agent; subdomains fairness/ and linter/
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
+  search/              pgvector embeddings (written by the worker)
+contracts/             jobs.schema.json: rendered job contract (compared with the worker)
 migrations/            Alembic (async); versions/ holds revisions
 deploy/                host deployment scripts (bash), gateway config
 tests/architecture/    structure + dependency rules (pytest-archon)
@@ -83,6 +86,8 @@ the parent when it shares everything else with it.
    `sqlalchemy`, `asyncpg` or `httpx`, even transitively. `logic` also must not
    reach `api`, `db`, `models`, `services`, `shared.db/config/auth` or `main`.
 7. Every router in an `api.py` is registered in `tuttitrip.main.ROUTERS`.
+8. Only `shared.jobs.services` imports `dbos`; `pgvector` only in
+   models/db/services (both are also banned from pure modules).
 
 pytest-archon notes (checked in its source): `should_not_import` is transitive
 by default, `only_direct_imports=True` limits it, imports in functions and
@@ -134,6 +139,41 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   automatically), review the file, then `uv run alembic upgrade head`.
 - The app never migrates on startup. A one-off `alembic upgrade head` runs
   before the new container starts (compose `migrate` service, `deploy/deploy.sh`).
+
+## Background jobs and tuttitrip-worker
+
+Long-running work (LLM agents, embeddings, enrichment) runs in a separate repo,
+[tuttitrip-worker](https://github.com/HackYeah-TuttiTripTeam/tuttitrip-worker),
+as DBOS workflows. This backend only enqueues jobs and reads their state
+through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
+`deploy/CONVENTIONS.md`, section "Integracja z workerem". The short version:
+
+- The contract (workflow and queue names, payloads, events, `CONTRACT_VERSION`)
+  is canonical in the worker. The mirror is `shared/jobs/contracts.py`, rendered
+  to `contracts/jobs.schema.json` (a test keeps them in sync). CI job
+  `contracts-check` diffs it against the worker's file (same branch, else
+  develop, else main) using the `WORKER_REPO_TOKEN` secret.
+- Enqueue from a feature service: `await queue.enqueue(Workflow.X, XInput(...),
+  user=user.sub, key=<domain id>)`, with `queue: JobQueueDep` injected in
+  `api.py`. Call `ensure_worker_available(session)` first. Return `JobAccepted`
+  (202), and the client polls `GET /jobs/{id}` (`POST /jobs/{id}/cancel` cancels).
+- Payloads are small (ids and parameters) and travel as portable JSON with a
+  deterministic workflow id (idempotent), a timeout and the env's app version.
+- Incompatible contract change: (1) the worker accepts old+new, (2) the backend
+  bumps `CONTRACT_VERSION` and regenerates the JSON, (3) the worker drops the old
+  version. Use the `sync-contracts` skill.
+- The backend owns all DDL: Alembic for app tables, `dbos migrate` for the DBOS
+  schema. The worker uses role `tuttitrip_worker` (no DDL). Tables it may write
+  are listed in `deploy/worker-grants.sql`.
+- `/health` reports `worker: ok|stale|missing` from `worker_heartbeats` and
+  turns `degraded` on an incompatible contract. Enqueue endpoints return 503
+  while the worker is missing.
+- Every deploy runs a `ping` job through the worker (smoke test). If the env
+  has no worker image yet, the deploy starts one from `:develop` or `:main`.
+- Locally: `docker compose up -d --wait db && uv run alembic upgrade head &&
+  uv run dbos migrate -s postgresql://tuttitrip:tuttitrip@localhost:5432/tuttitrip`,
+  then start the worker from its repo with the same `DBOS_SYSTEM_DATABASE_URL`
+  and `DBOS__APPVERSION=local`.
 
 ## Git flow
 

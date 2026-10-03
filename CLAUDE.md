@@ -3,7 +3,7 @@
 ## Claude Code notes
 
 - Project skills live in `.claude/skills/`: `new-domain`, `new-migration`,
-  `open-pr`, `deploy-debug`. Use them for those tasks.
+  `open-pr`, `deploy-debug`, `sync-contracts`. Use them for those tasks.
 - Before claiming work is done, run the four checks from "Commands" and show
   their result.
 - Commits and PRs carry no AI attribution: no `Co-Authored-By: Claude` /

@@ -1,5 +1,6 @@
 """Planning: planner agent (no network), fairness objective, plan linter."""
 
+import asyncio
 import math
 from decimal import Decimal
 
@@ -23,7 +24,8 @@ def test_planner_agent_returns_trip_plan() -> None:
         },
     )
     with planner_agent.override(model=model):
-        result = planner_agent.run_sync("Weekend w Krakowie")
+        # run() under asyncio.run: run_sync leaves its event loop unclosed.
+        result = asyncio.run(planner_agent.run("Weekend w Krakowie"))
     assert result.output == TripPlan(
         destination="Kraków", days=3, highlights=["Wawel", "Kazimierz"]
     )

@@ -33,13 +33,18 @@ chmod 700 "$TT_STATE_DIR"
 exec 9>"$TT_STATE_DIR/deploy.lock"
 flock 9  # one deploy/cleanup at a time on this host
 
-if [ ! -f "$TT_STATE_DIR/deploy.env" ]; then
-  umask 077
-  printf 'POSTGRES_PASSWORD=%s\n' "$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)" >"$TT_STATE_DIR/deploy.env"
-  tt_log "generated $TT_STATE_DIR/deploy.env"
-fi
+gen_password() { head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32; }
+umask 077
+touch "$TT_STATE_DIR/deploy.env"
+for var in POSTGRES_PASSWORD WORKER_DB_PASSWORD; do
+  if ! grep -q "^$var=" "$TT_STATE_DIR/deploy.env"; then
+    printf '%s=%s\n' "$var" "$(gen_password)" >>"$TT_STATE_DIR/deploy.env"
+    tt_log "generated $var in $TT_STATE_DIR/deploy.env"
+  fi
+done
 # shellcheck disable=SC1091
 . "$TT_STATE_DIR/deploy.env"
+mkdir -p "$TT_STATE_DIR/envs"
 
 tt_log "deploying branch '$branch' ($sha) as env '$env' -> https://$host"
 
@@ -66,6 +71,9 @@ if [ -z "$(psql_admin "SELECT 1 FROM pg_database WHERE datname = '$database'")" 
   psql_admin "CREATE DATABASE \"$database\"" >/dev/null
   tt_log "created database $database"
 fi
+# Worker role: cluster-wide, least privilege; grants per database below.
+psql_admin "DO \$\$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'tuttitrip_worker') THEN CREATE ROLE tuttitrip_worker; END IF; END \$\$" >/dev/null
+psql_admin "ALTER ROLE tuttitrip_worker WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '$WORKER_DB_PASSWORD'" >/dev/null
 
 mkdir -p "$TT_STATE_DIR/gateway"
 cp "$here/gateway/nginx.conf" "$TT_STATE_DIR/gateway/nginx.conf"
@@ -85,23 +93,39 @@ labels=(--label tuttitrip.managed=true --label tuttitrip.env="$env" --label tutt
 docker build -q -t "$image" "${labels[@]}" "$repo" >/dev/null
 tt_log "built $image"
 
-envfile=$(mktemp)
-trap 'rm -f "$envfile"' EXIT
-chmod 600 "$envfile"
+# Env files shared with the worker repo (deploy/CONVENTIONS.md), mode 600.
+envfile="$TT_STATE_DIR/envs/$env.env"
+workerenv="$TT_STATE_DIR/envs/$env.worker.env"
+db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$database"; }
 {
   printf 'TUTTITRIP_ENVIRONMENT=%s\n' "$env"
   printf 'TUTTITRIP_DATABASE__HOST=%s\nTUTTITRIP_DATABASE__PORT=5432\n' "$TT_POSTGRES"
   printf 'TUTTITRIP_DATABASE__USER=tuttitrip\nTUTTITRIP_DATABASE__PASSWORD=%s\n' "$POSTGRES_PASSWORD"
   printf 'TUTTITRIP_DATABASE__NAME=%s\n' "$database"
+  printf 'TUTTITRIP_DBOS__APPLICATION_VERSION=%s\n' "$env"
   for var in TUTTITRIP_AUTH0__DOMAIN TUTTITRIP_AUTH0__AUDIENCE TUTTITRIP_CORS_ORIGINS \
     TUTTITRIP_CORS_ORIGIN_REGEX TUTTITRIP_LLM__MODEL; do
-    [ -n "${!var:-}" ] && printf '%s=%s\n' "$var" "${!var}"
+    if [ -n "${!var:-}" ]; then printf '%s=%s\n' "$var" "${!var}"; fi
   done
-  [ -f "$TT_STATE_DIR/app.env" ] && grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env"
-} >"$envfile" || true
+  if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
+} >"$envfile"
+{
+  printf 'TUTTITRIP_ENVIRONMENT=%s\n' "$env"
+  printf 'DBOS_SYSTEM_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
+  printf 'TUTTITRIP_WORKER_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
+  printf 'DBOS__APPVERSION=%s\n' "$env"
+  if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
+} >"$workerenv"
 
 tt_log "running migrations on $database"
 docker run --rm --network "$TT_NETWORK" --env-file "$envfile" "$image" alembic upgrade head
+# DBOS system tables (schema "dbos") are created by the backend, as the owner,
+# with access granted to the worker role, so the worker never runs DDL.
+docker run --rm --network "$TT_NETWORK" -e DBOS_URL="$(db_url tuttitrip "$POSTGRES_PASSWORD")" "$image" \
+  sh -c 'dbos migrate -s "$DBOS_URL" -r tuttitrip_worker' >/dev/null
+docker exec -i "$TT_POSTGRES" psql -q -v ON_ERROR_STOP=1 -v dbname="$database" -U tuttitrip -d "$database" \
+  <"$here/worker-grants.sql" >/dev/null
+tt_log "migrations, DBOS schema and worker grants applied"
 
 docker rm -f "$container" >/dev/null 2>&1 || true
 docker run -d --name "$container" --network "$TT_NETWORK" --restart unless-stopped \
@@ -120,8 +144,47 @@ cf_ingress_ensure "$host" "http://$TT_GATEWAY_BIND"
 cf_dns_ensure "$host"
 
 # Old images of this environment (keep the one just deployed).
-docker image ls --filter "label=tuttitrip.env=$env" --format '{{.Repository}}:{{.Tag}}' \
+docker image ls tuttitrip-api --filter "label=tuttitrip.env=$env" --format '{{.Repository}}:{{.Tag}}' \
   | grep -vx "$image" | xargs -r docker rmi >/dev/null 2>&1 || true
+
+# --- worker (fallback image) and end-to-end smoke test -------------------------
+worker="tuttitrip-worker-$env"
+if [ "$(docker inspect -f '{{.State.Running}}' "$worker" 2>/dev/null || true)" != true ]; then
+  worker_image=""
+  for tag in "$env" develop main; do
+    if docker image inspect "tuttitrip-worker:$tag" >/dev/null 2>&1; then worker_image="tuttitrip-worker:$tag"; break; fi
+  done
+  if [ -n "$worker_image" ]; then
+    docker rm -f "$worker" >/dev/null 2>&1 || true
+    extra=()
+    if [ -f "$TT_STATE_DIR/worker.env" ]; then extra=(--env-file "$TT_STATE_DIR/worker.env"); fi
+    docker run -d --name "$worker" --network "$TT_NETWORK" --restart unless-stopped \
+      --label tuttitrip.managed=true --label tuttitrip.env="$env" --label tuttitrip.role=worker \
+      --env-file "$workerenv" "${extra[@]}" "$worker_image" >/dev/null
+    tt_log "started $worker from fallback image $worker_image"
+  else
+    tt_log "WARNING: no tuttitrip-worker image (:$env, :develop, :main); jobs stay queued"
+  fi
+fi
+
+if [ "$(docker inspect -f '{{.State.Running}}' "$worker" 2>/dev/null || true)" = true ]; then
+  tt_log "smoke test: ping workflow through the worker"
+  ping_id=$(curl -fsS -X POST -H "Host: $host" "http://$TT_GATEWAY_BIND/jobs/ping" | jq -r .workflow_id)
+  state=""
+  for _ in $(seq 60); do
+    state=$(curl -fsS -H "Host: $host" "http://$TT_GATEWAY_BIND/jobs/ping/$ping_id" | jq -r .status)
+    case "$state" in SUCCESS|ERROR|CANCELLED|MAX_RECOVERY_ATTEMPTS_EXCEEDED) break ;; esac
+    sleep 3
+  done
+  if [ "$state" != SUCCESS ]; then
+    tt_log "smoke test FAILED: ping $ping_id ended as '${state:-unknown}'"
+    docker logs --tail 50 "$worker" >&2 || true
+    exit 1
+  fi
+  tt_log "smoke test passed (ping $ping_id)"
+else
+  tt_log "WARNING: smoke test skipped, no worker running for $env"
+fi
 
 flock -u 9
 # A failed cleanup never fails the deploy (the cleanup workflow reports it).

@@ -25,6 +25,7 @@ klienta TypeScript z `/openapi.json` tego API.
 | API | [FastAPI](https://fastapi.tiangolo.com/) + [Pydantic](https://docs.pydantic.dev/) |
 | Agenci AI | [Pydantic AI](https://ai.pydantic.dev/) |
 | Baza danych | PostgreSQL 18 + pgvector 0.8.7, SQLAlchemy 2 (async, asyncpg), Alembic |
+| Zadania w tle | [DBOS](https://docs.dbos.dev/) (klient; workflowy wykonuje [tuttitrip-worker](https://github.com/HackYeah-TuttiTripTeam/tuttitrip-worker)) |
 | Konfiguracja | pydantic-settings |
 | Logowanie | Auth0 (Google, Discord), tokeny JWT RS256 |
 | Jakość | Ruff (`ALL` + preview), ty (wszystkie reguły jako błędy), pytest, pytest-archon |
@@ -59,7 +60,10 @@ Docker Compose wystawi wtedy bazę na tym porcie i aplikacja połączy się z ni
 ```bash
 docker compose up -d --wait db    # PostgreSQL 18 z pgvector
 uv run alembic upgrade head       # tabele i rozszerzenie vector
+uv run dbos migrate -s postgresql://tuttitrip:tuttitrip@localhost:5432/tuttitrip   # schemat DBOS dla workera
 ```
+
+Przy innym porcie bazy zmień go też w adresie dla `dbos migrate`.
 
 ### 3. API
 
@@ -69,10 +73,10 @@ uv run uvicorn tuttitrip.main:app --reload
 
 - http://localhost:8000/docs: dokumentacja Swagger
 - http://localhost:8000/openapi.json: schemat dla generatora klienta TS
-- http://localhost:8000/health: stan aplikacji i bazy (`503`, gdy baza nie odpowiada)
+- http://localhost:8000/health: stan aplikacji, bazy i workera (`503`, gdy baza nie odpowiada albo worker ma niezgodną wersję kontraktu)
 - http://localhost:8000/me: dane zalogowanego użytkownika (wymaga tokenu Auth0)
 
-Całość w kontenerach (baza, jednorazowa migracja, API):
+Całość w kontenerach (baza, jednorazowe migracje, API):
 
 ```bash
 docker compose up --build
@@ -101,6 +105,37 @@ uv run alembic revision --autogenerate -m "opis zmiany"
 uv run alembic upgrade head
 ```
 
+## Worker i zadania w tle
+
+Długie operacje (agenci LLM, embeddingi w pgvector, wzbogacanie danych)
+wykonuje osobna usługa
+[tuttitrip-worker](https://github.com/HackYeah-TuttiTripTeam/tuttitrip-worker)
+jako workflowy DBOS. Backend tylko dodaje zadania do kolejki i odczytuje ich
+stan przez `DBOSClient` (`src/tuttitrip/shared/jobs/`), a sam żadnych workflowów
+nie uruchamia.
+
+- `POST /planning/jobs` zleca wygenerowanie planu i zwraca `workflow_id`.
+  Stan, wynik, błąd i postęp zwraca `GET /jobs/{id}`, a `POST /jobs/{id}/cancel` anuluje zadanie.
+- Kontrakt (nazwy workflowów i kolejek, payloady, `CONTRACT_VERSION`) jest
+  w repozytorium workera. Tutaj trzymamy jego kopię w `shared/jobs/contracts.py`
+  i wygenerowany plik `contracts/jobs.schema.json`. Job CI `contracts-check`
+  porównuje ten plik z wersją workera.
+- Schemat bazy i migracje należą do backendu. Worker łączy się rolą
+  `tuttitrip_worker` bez prawa do DDL i zapisuje tylko tabele wymienione w
+  `deploy/worker-grants.sql`.
+- Worker co około 30 s zapisuje heartbeat, a `/health` pokazuje
+  `worker: ok | stale | missing`. Gdy workera brakuje, endpointy zlecające
+  zadania zwracają 503 z czytelnym komunikatem.
+- Po każdym wdrożeniu pipeline zleca workflow `ping` i czeka na jego wynik.
+
+Lokalnie backend i worker korzystają z tej samej bazy z Docker Compose. Po
+krokach z sekcji „Baza danych i migracje” uruchom workera z jego repozytorium
+z `DBOS_SYSTEM_DATABASE_URL=postgresql://tuttitrip:tuttitrip@localhost:5432/tuttitrip`
+i `DBOS__APPVERSION=local`, a potem sprawdź połączenie:
+`curl -X POST localhost:8000/jobs/ping`. Wszystkie zasady współpracy
+(nazwy, pliki env, wersje, sprzątanie) opisuje
+[deploy/CONVENTIONS.md](deploy/CONVENTIONS.md).
+
 ## Architektura
 
 Kod jest podzielony na pionowe moduły domenowe (vertical slices). Każda domena
@@ -121,7 +156,8 @@ src/tuttitrip/
 │   ├── config/        # Settings
 │   ├── db/            # Base, silnik, sesje
 │   ├── auth/          # weryfikacja tokenów Auth0, GET /me
-│   └── health/        # GET /health, GET /health/live
+│   ├── health/        # GET /health, GET /health/live
+│   └── jobs/          # klient DBOS: zlecanie zadań workerowi, kontrakt
 ├── trips/             # wyjazdy (wzorcowa domena: api -> services -> db)
 ├── profiles/          # uczestnicy wyjazdu (wagi, grupy wiekowe)
 ├── interview/         # wywiad prowadzony przez AI
@@ -129,8 +165,9 @@ src/tuttitrip/
 │   ├── fairness/      # solver sprawiedliwości (czysta logika)
 │   └── linter/        # linter planu (czysta logika)
 ├── accommodation/     # wymagania wobec noclegu
-└── expenses/          # wydatki
-    └── settlement/    # rozliczenie sald (czysta logika)
+├── expenses/          # wydatki
+│   └── settlement/    # rozliczenie sald (czysta logika)
+└── search/            # embeddingi w pgvector (zapisuje je worker)
 ```
 
 Zasady sprawdzane przez `tests/architecture/` (pytest-archon i testy struktury):
@@ -167,6 +204,8 @@ i cyfry zamieniony na `-`, a cała etykieta ma najwyżej 63 znaki. Przykład:
 Jak to działa na serwerze:
 
 - jedna baza `tuttitrip-postgres` (PostgreSQL 18 + pgvector), osobna baza danych dla każdej gałęzi;
+- obok API działa kontener workera `tuttitrip-worker-<env>`. Jeśli worker nie ma
+  jeszcze obrazu dla danej gałęzi, wdrożenie uruchamia go z obrazu `develop` albo `main`;
 - przed startem nowego kontenera migracje wykonuje jednorazowy kontener (`alembic upgrade head`);
 - `tuttitrip-gateway` (nginx) kieruje ruch do kontenera gałęzi według nagłówka `Host`;
 - skrypt dodaje regułę ruchu (ingress) dla gałęzi do współdzielonego Cloudflare

@@ -22,7 +22,16 @@ from pytest_archon import archrule
 from tests.architecture.layout import PACKAGE, top_level_domains
 
 FEATURE_DOMAINS = top_level_domains()
-FRAMEWORKS = ("fastapi", "starlette", "pydantic_ai", "sqlalchemy", "asyncpg", "httpx")
+FRAMEWORKS = (
+    "fastapi",
+    "starlette",
+    "pydantic_ai",
+    "sqlalchemy",
+    "asyncpg",
+    "httpx",
+    "dbos",
+    "pgvector",
+)
 
 
 def _tree(name: str) -> tuple[str, str]:
@@ -97,7 +106,7 @@ def test_only_persistence_layers_import_sqlalchemy() -> None:
         .exclude(
             r"\.(models|db)$", r"\.services(\.|$)", rf"^{PACKAGE}\.shared\.db(\.|$)"
         )
-        .should_not_import(r"^sqlalchemy(\.|$)", r"^asyncpg(\.|$)")
+        .should_not_import(r"^sqlalchemy(\.|$)", r"^asyncpg(\.|$)", r"^pgvector(\.|$)")
         .check(PACKAGE, only_direct_imports=True)
     )
 
@@ -124,4 +133,14 @@ def test_logic_does_not_reach_io_layers() -> None:
             rf"^{PACKAGE}\.main$",
         )
         .check(PACKAGE)
+    )
+
+
+def test_only_shared_jobs_services_talk_to_dbos() -> None:
+    (
+        archrule("DBOS client stays in shared.jobs.services", use_regex=True)
+        .match(rf"^{PACKAGE}(\.|$)")
+        .exclude(rf"^{PACKAGE}\.shared\.jobs\.services(\.|$)")
+        .should_not_import(r"^dbos(\.|$)")
+        .check(PACKAGE, only_direct_imports=True)
     )

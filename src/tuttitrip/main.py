@@ -17,16 +17,19 @@ from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.profiles.api import router as profiles_router
+from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.auth.api import router as auth_router
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
 from tuttitrip.shared.health.api import router as health_router
+from tuttitrip.shared.jobs.api import router as jobs_router
 from tuttitrip.trips.api import router as trips_router
 
 # Every `api.py` router must be listed here (a test checks it).
 ROUTERS: tuple[APIRouter, ...] = (
     health_router,
     auth_router,
+    jobs_router,
     trips_router,
     profiles_router,
     interview_router,
@@ -36,6 +39,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     accommodation_router,
     expenses_router,
     settlement_router,
+    search_router,
 )
 
 

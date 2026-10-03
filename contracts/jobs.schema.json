@@ -1,0 +1,118 @@
+{
+  "application_name": "tuttitrip-worker",
+  "contract_version": 1,
+  "events": {
+    "progress": {
+      "properties": {
+        "percent": {
+          "maximum": 100,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "stage",
+        "percent"
+      ],
+      "type": "object"
+    }
+  },
+  "queues": [
+    "planning",
+    "system"
+  ],
+  "workflows": {
+    "generate_trip_plan": {
+      "input": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "request": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "trip_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trip_id",
+          "request"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "destination": {
+            "type": "string"
+          },
+          "highlights": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "destination",
+          "days",
+          "highlights"
+        ],
+        "type": "object"
+      },
+      "queue": "planning"
+    },
+    "ping": {
+      "input": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "message": {
+            "maxLength": 200,
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "worker_app_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "worker_app_version"
+        ],
+        "type": "object"
+      },
+      "queue": "system"
+    }
+  }
+}
