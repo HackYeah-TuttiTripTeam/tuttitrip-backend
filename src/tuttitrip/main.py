@@ -12,6 +12,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from tuttitrip.accommodation.api import router as accommodation_router
+from tuttitrip.demo.api import router as demo_router
 from tuttitrip.expenses.api import router as expenses_router
 from tuttitrip.expenses.settlement.api import router as settlement_router
 from tuttitrip.interview.api import router as interview_router
@@ -43,6 +44,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     health_router,
     permissions_router,
     jobs_router,
+    demo_router,
     trips_router,
     invitations_router,
     profiles_router,

@@ -163,3 +163,19 @@ async def update_member_role(
         .where(TripMember.trip_id == trip_id, TripMember.user_sub == sub)
         .values(role=role)
     )
+
+
+async def delete_trips_owned_by(session: AsyncSession, owner_sub: str) -> int:
+    """Delete every trip created by one user (the database cascades).
+
+    Args:
+        session: Open session (caller commits).
+        owner_sub: Auth0 subject of the creator.
+
+    Returns:
+        How many trips were deleted.
+    """
+    result = await session.execute(
+        delete(Trip).where(Trip.owner_sub == owner_sub).returning(Trip.id)
+    )
+    return len(result.all())

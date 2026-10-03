@@ -74,6 +74,8 @@ ignore = [
     "magic-value-comparison", # magic values are fine in test assertions
     "D",                      # test docstrings are optional
     "DOC",                    # ...and so are their Args/Returns sections
+    "hardcoded-password-string",   # tests use made-up tokens and passwords
+    "hardcoded-password-func-arg", # ...also as arguments
 ]
 "scripts/**/*.py" = [
     "implicit-namespace-package", # standalone scripts, not a package

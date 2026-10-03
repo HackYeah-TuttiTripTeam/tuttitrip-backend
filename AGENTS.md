@@ -313,8 +313,8 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 ```
 
 - Bez tokenu 401, bez uprawnienia 403 `Missing permission trips.core:READ`.
-- `public()` (bez logowania) tylko dla `/api/v1/health`, `/api/v1/health/live` i smoke
-  testu `/api/v1/jobs/ping*`. Lista jest w `tests/architecture/test_permissions.py`;
+- `public()` (bez logowania) tylko dla `/api/v1/health`, `/api/v1/health/live`, smoke
+  testu `/api/v1/jobs/ping*` i logowania jury `POST /api/v1/auth/demo` (sekcja "Wejście jury"). Lista jest w `tests/architecture/test_permissions.py`;
   `/api/v1/docs`, `/api/v1/openapi.json` i `/api/v1/redoc` są publiczne z definicji.
 - `tests/architecture/test_permissions.py` przechodzi po `create_app().routes`
   (z zależnościami routerów) i nie przepuści trasy bez znacznika, z dwoma
@@ -402,6 +402,58 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 - Nowy zasób z właścicielem (inny niż wyjazd): ten sam wzorzec w jego domenie,
   czyli tabela członkostwa albo `owner_sub`, serwis z `get_membership`
   i zależność w `api.py`. Bez ogólnych ACL per obiekt.
+
+## Wejście jury jednym linkiem (domena `demo`)
+
+Jury wchodzi na wspólne, zwykłe konto demo (rola `user`, nigdy superadmin) linkiem
+`https://tuttitrip.gburek.app/demo#t=<token>`. Front czyta fragment, usuwa go z paska
+adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login` w
+`PUBLIC_ENDPOINTS` testu architektury). Backend porównuje SHA-256 tokenu z
+`TUTTITRIP_DEMO__TOKEN_SHA256`; przy zgodności robi w Auth0 grant `password-realm`
+(realm `Username-Password-Authentication`, audience API) i zwraca
+`{access_token, expires_in, token_type, refresh_token}` z `Cache-Control: no-store`.
+
+- Każdy zły kształt żądania (brak ciała, brak/pusty/za długi token, zły token) i wyłączone
+  demo (pusty `TUTTITRIP_DEMO__TOKEN_SHA256`) to to samo `404` z `Cache-Control: no-store`,
+  nigdy `422`. Limiter (domyślnie 10 żądań/min na IP, `429` z `Retry-After`) działa przed
+  czytaniem ciała. Błąd Auth0 to `502` (w logu tylko kod powodu, np. `status_403`). Tokenu
+  ani danych konta nie logujemy.
+- Limiter jest w pamięci procesu (twardy limit 10 000 kluczy, najstarsze wypadają), więc
+  zakładamy jeden proces API (jeden worker uvicorna); przy kilku każdy ma własny budżet.
+- IP klienta: gateway (`deploy/gateway/nginx.conf`) wysyła jawnie `CF-Connecting-IP`
+  (a gdy go brak, adres gniazda) i nadpisuje `X-Forwarded-For` jedną wartością. Uvicorn
+  ufa `X-Forwarded-*` tylko od adresów z `FORWARDED_ALLOW_IPS`; `deploy.sh` ustawia tam
+  podsieć sieci Docker `tuttitrip` (nie `*`). Trasa używa więc `request.client.host`,
+  a nagłówek dopisany przez klienta nie zmienia jego budżetu. Znane i przyjęte ograniczenie:
+  gateway nasłuchuje na adresie mostu docker0, więc kontener z domyślnego mostka mógłby
+  ustawić własny `CF-Connecting-IP` i ominąć limit na IP; publiczna ścieżka idzie przez
+  Cloudflare, który nadpisuje ten nagłówek na brzegu. Lokalnie bez gatewaya
+  uvicorn ufa tylko 127.0.0.1.
+- `refresh_token` wraca tylko przy `TUTTITRIP_DEMO__OFFLINE_ACCESS=true` (aplikacja
+  Auth0 musi mieć włączone refresh tokeny); domyślnie wyłączone, access token żyje
+  tyle, ile skonfigurowano w Auth0 dla API.
+- Ustawienia są sprawdzane przy starcie: `TOKEN_SHA256` to 64 znaki hex albo pusty, a gdy
+  nie jest pusty, `USERNAME`, `PASSWORD` i `CLIENT_ID` muszą być wpisane.
+- Dane konta (`USERNAME`, `PASSWORD`, `CLIENT_ID`, `CLIENT_SECRET` dla aplikacji
+  poufnej) tylko w środowisku hosta (`~/tuttitrip/app.env`), nigdy w repo ani odpowiedzi.
+  Zapytania do Auth0 idą przez httpx z własnym `User-Agent` (Cloudflare blokuje
+  domyślny agent Pythona).
+- Obrót tokenu bez wdrożenia kodu: `TOKEN=$(openssl rand -hex 24)`, w `app.env` wpisz
+  `TUTTITRIP_DEMO__TOKEN_SHA256=$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)`,
+  zrestartuj kontener (deploy zapisuje `envs/<env>.env` z `app.env`), nowy link to
+  `.../demo#t=$TOKEN`. Stary link przestaje działać od razu.
+- Dane demo: `python -m tuttitrip.demo.services.seed_command` loguje się na konto demo
+  (stąd bierze `sub`, nie ma osobnego ustawienia), kasuje tylko wyjazdy z
+  `owner_sub` równym temu `sub` (wyjazdy innych osób, do których konto tylko dołączyło,
+  zostają) i tworzy zestaw od nowa (Warszawa z rodziną: 4 osoby, preferencje, wymagania
+  noclegowe, wagi; Gdańsk, Kraków, Berlin; oceny miejsc, jeśli katalog ma miejsca danego
+  miasta). Plan to na razie stub solvera. Reset jest atomowy: jedna transakcja z
+  `pg_advisory_xact_lock` (równoległe resety czekają na siebie), a commity serwisów to
+  tylko savepointy, więc błąd w połowie cofa wszystko i poprzednie dane zostają.
+  Jest idempotentny; `deploy/deploy.sh` uruchamia go po wdrożeniu i włączeniu routingu
+  (`timeout 120`, log w `~/tuttitrip/demo-seed-<env>.log`, błąd nie psuje wdrożenia), a
+  codzienny reset robi harmonogram workera (osobne issue).
+- Wszyscy jurorzy dzielą jedno konto: zmiany jednego widzą inni do następnego resetu.
 
 ## Design system
 
