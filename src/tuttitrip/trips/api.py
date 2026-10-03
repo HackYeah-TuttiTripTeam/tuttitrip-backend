@@ -7,7 +7,7 @@ may import it from here.
 """
 
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,6 +24,7 @@ from tuttitrip.trips.schemas import (
     TripRead,
     TripRole,
     TripUpdate,
+    TripValidationErrors,
 )
 from tuttitrip.trips.services import member_service, trip_service
 from tuttitrip.trips.services.member_service import (
@@ -80,6 +81,11 @@ TripCoHost = Annotated[TripMembership, Depends(TripAccess(TripRole.CO_HOST))]
 TripHost = Annotated[TripMembership, Depends(TripAccess(TripRole.HOST))]
 
 
+INVALID_TRIP: dict[int | str, dict[str, Any]] = {
+    422: {"model": TripValidationErrors, "description": "A trip rule is broken."}
+}
+
+
 @router.get("", dependencies=[requires(Feature.TRIPS_CORE, Access.READ)])
 async def list_trips(user: CurrentUser, session: SessionDep) -> list[TripRead]:
     """List the trips the caller belongs to, with their role on each.
@@ -97,6 +103,7 @@ async def list_trips(user: CurrentUser, session: SessionDep) -> list[TripRead]:
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
+    responses=INVALID_TRIP,
     dependencies=[requires(Feature.TRIPS_CORE, Access.WRITE)],
 )
 async def create_trip(
@@ -108,9 +115,7 @@ async def create_trip(
     each budget range must come in pairs. The trip, its host and the host's
     profile are created in one transaction.
 
-    A broken rule answers 422 with `loc` `["body", field]` and a stable code in
-    `type`: `trip.dates_order`, `trip.budget_order`, `trip.day_window_order`,
-    `trip.pair_required`, `trip.null_not_allowed`. Read the code, not `msg`.
+    A broken rule answers 422 with a `TripErrorCode` in `type`.
 
     Args:
         data: Trip payload.
@@ -145,6 +150,7 @@ async def get_trip(membership: TripMember, session: SessionDep) -> TripRead:
 
 @router.patch(
     "/{trip_id}",  # ruff: ignore[fast-api-unused-path-parameter] TripAccess reads it
+    responses=INVALID_TRIP,
     dependencies=[requires(Feature.TRIPS_CORE, Access.WRITE)],
 )
 async def update_trip(
@@ -152,9 +158,7 @@ async def update_trip(
 ) -> TripRead:
     """Change trip details (co-host or host); only sent fields change.
 
-    A broken rule answers 422 with `loc` `["body", field]` and a stable code in
-    `type`: `trip.dates_order`, `trip.budget_order`, `trip.day_window_order`,
-    `trip.pair_required`, `trip.null_not_allowed`. Read the code, not `msg`.
+    A broken rule answers 422 with a `TripErrorCode` in `type`.
 
     Args:
         data: Fields to change.

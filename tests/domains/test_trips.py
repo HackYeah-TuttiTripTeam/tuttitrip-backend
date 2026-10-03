@@ -383,8 +383,33 @@ def test_patch_errors_carry_the_same_codes(
         ({"start_date": None}, "trip.pair_required"),  # stored end remains
         ({"budget_total_min": "20", "budget_total_max": "10"}, "trip.budget_order"),
         ({"day_start": None}, "trip.null_not_allowed"),
+        ({"day_start": "19:00:00", "day_end": "09:00:00"}, "trip.day_window_order"),
+        ({"budget_day_min": "5"}, "trip.pair_required"),
     ]
     for body, code in cases:
         response = detail_client.patch(path("update_trip", trip_id=TRIP), json=body)
         assert response.status_code == 422
         assert response.json()["detail"][0]["type"] == code
+
+
+def test_failing_host_profile_rolls_back_the_trip(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncMock
+) -> None:
+    client, _, host = _post_client(monkeypatch, session)
+    host.side_effect = RuntimeError("boom")
+    with pytest.raises(RuntimeError):
+        client.post(path("create_trip"), json={"name": "X"})
+    session.commit.assert_not_awaited()
+
+
+def test_openapi_lists_the_trip_error_codes() -> None:
+    schema = create_app().openapi()
+    schemas = schema["components"]["schemas"]
+    assert "trip.dates_order" in schemas["TripErrorCode"]["enum"]
+    for method, route in (
+        ("post", "/api/v1/trips"),
+        ("patch", "/api/v1/trips/{trip_id}"),
+    ):
+        content = schema["paths"][route][method]["responses"]["422"]["content"]
+        ref = content["application/json"]["schema"]["$ref"]
+        assert ref.endswith("/TripValidationErrors")
