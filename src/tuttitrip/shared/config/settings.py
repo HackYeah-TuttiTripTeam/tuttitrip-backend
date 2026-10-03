@@ -77,6 +77,31 @@ class JobsSettings(BaseModel):
     worker_missing_after_seconds: int = Field(default=600, ge=1)
 
 
+class DemoSettings(BaseModel):
+    """One-link jury login onto a regular demo account (``POST /auth/demo``).
+
+    Empty ``token_sha256`` switches the route off (404). The account's
+    username and password live only here, in the host's environment.
+    """
+
+    # Hex SHA-256 of the demo token from the link (`#t=<token>`).
+    token_sha256: str = ""
+    username: str = ""
+    password: SecretStr = SecretStr("")
+    # Auth0 application allowed to use the password-realm grant.
+    client_id: str = ""
+    # Only if that application is confidential (a regular web app).
+    client_secret: SecretStr = SecretStr("")
+    realm: str = "Username-Password-Authentication"
+    # Ask for `offline_access` so the response carries a refresh token (the
+    # Auth0 application must allow refresh tokens).
+    offline_access: bool = False
+    # Auth0 `sub` of the demo account. Empty: learned from a demo login.
+    user_sub: str = ""
+    # Requests per minute from one IP (all outcomes count).
+    rate_limit_per_minute: int = Field(default=10, ge=1)
+
+
 class Settings(BaseSettings):
     """Root settings object for the whole application."""
 
@@ -102,6 +127,7 @@ class Settings(BaseSettings):
     llm: LlmSettings = Field(default_factory=LlmSettings)
     dbos: DbosSettings = Field(default_factory=DbosSettings)
     jobs: JobsSettings = Field(default_factory=JobsSettings)
+    demo: DemoSettings = Field(default_factory=DemoSettings)
 
     def dbos_system_database_url(self) -> str:
         """DBOS system database URL, defaulting to the app database.
