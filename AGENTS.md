@@ -282,7 +282,7 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 
 | Rola | Uprawnienia | Uwagi |
 | --- | --- | --- |
-| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
+| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `planning.plans`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
 | `superadmin` | `*:WRITE` | Tylko z claimu Auth0 `admin` (lista osób jest w Akcji Auth0). API jej nie przypisze ani nie zmieni, a wiersz w bazie jest ignorowany. Nowe funkcjonalności obejmuje automatycznie (test). |
 | własne | dowolne | `POST /admin/permissions/roles`. |
 

@@ -106,6 +106,7 @@ class Feature(StrEnum):
 
     PLANNING = "planning"
     PLANNING_PROPOSALS = "planning.proposals"
+    PLANNING_PLANS = "planning.plans"
     PLANNING_FAIRNESS = "planning.fairness"
     PLANNING_LINTER = "planning.linter"
 
@@ -177,6 +178,7 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.INTERVIEW: "Wywiad z asystentem AI",
     Feature.PLANNING: "Planowanie wyjazdu",
     Feature.PLANNING_PROPOSALS: "Propozycje planu generowane przez AI",
+    Feature.PLANNING_PLANS: "Plan z miarą sprawiedliwości, księgą i werdyktami",
     Feature.PLANNING_FAIRNESS: "Ocena sprawiedliwości planu",
     Feature.PLANNING_LINTER: "Sprawdzanie planu (godziny, dystanse, budżet)",
     Feature.ACCOMMODATION: "Wymagania wobec noclegu",

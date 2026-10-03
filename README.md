@@ -120,6 +120,8 @@ nie uruchamia.
 
 - `POST /api/v1/planning/jobs` zleca wygenerowanie planu i zwraca `workflow_id`.
   Stan, wynik, błąd i postęp zwraca `GET /api/v1/jobs/{id}`, a `POST /api/v1/jobs/{id}/cancel` anuluje zadanie.
+- `POST /api/v1/trips/{trip_id}/plans` i `GET /api/v1/trips/{trip_id}/plans/latest` zwracają plan z miarą
+  sprawiedliwości (`docs/algorytm.md`, sekcja 10). Na razie stała odpowiedź (stub) do czasu solvera.
 - Kontrakt (nazwy workflowów i kolejek, payloady, `CONTRACT_VERSION`) jest
   w repozytorium workera. Tutaj trzymamy jego kopię w `shared/jobs/contracts.py`
   i wygenerowany plik `contracts/jobs.schema.json`. Job CI `contracts-check`
@@ -191,6 +193,7 @@ src/tuttitrip/
 ├── interview/         # wywiad prowadzony przez AI
 ├── planning/          # agent planujący
 │   ├── fairness/      # solver sprawiedliwości (czysta logika)
+│   ├── plans/         # plan z miarą, księgą i werdyktami (na razie stała odpowiedź)
 │   └── linter/        # linter planu (czysta logika)
 ├── accommodation/     # wymagania wobec noclegu
 ├── expenses/          # wydatki
