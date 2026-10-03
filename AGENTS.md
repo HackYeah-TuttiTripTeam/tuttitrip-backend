@@ -373,7 +373,9 @@ innym w drogę i żeby każda funkcja przeszła ten sam proces. Dotyczą też lu
    Popraw to, co znalazł, i **powtórz smoke test**. Wynik review i drugiego smoke testu wpisz w komentarzu.
 8. PR. Dopiero po tym otwórz PR do `develop` skillem `open-pr` (`Closes #<nr>`) i ustaw Status: In
    Review. Po merge'u zdejmij `in-progress`, usuń worktree
-   (`git -C ~/Documents/GitHub/<repo> worktree remove <ścieżka>`); issue zamyka `Closes`, Status: Done.
+   (`git -C ~/Documents/GitHub/<repo> worktree remove <ścieżka>`); zamknij issue ręcznie
+   (`gh issue close <nr> --comment "Zmergowane w #<PR>"`), bo `Closes` zamyka issue dopiero po merge'u
+   do `main` (wydanie). Status: Done.
 
 ## Zgłoszenia, PR i wydania
 
