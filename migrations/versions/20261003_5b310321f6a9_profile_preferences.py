@@ -1,8 +1,8 @@
 """Profile preferences: interests, importance pool, constraints, diet.
 
 Revision ID: 5b310321f6a9
-Revises: f3ed8c494ca7
-Create Date: 2026-10-03 22:10:00.000000
+Revises: d8fd431ca322
+Create Date: 2026-10-03 22:40:00.000000
 """
 
 from collections.abc import Sequence
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "5b310321f6a9"
-down_revision: str | None = "f3ed8c494ca7"
+down_revision: str | None = "d8fd431ca322"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
