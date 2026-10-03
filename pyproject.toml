@@ -134,6 +134,11 @@ testpaths = ["tests"]
 strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers", "--import-mode=importlib"]
 filterwarnings = ["error"]
+# CI runs `pytest -m "not integration and not e2e"`; the smoke step runs the rest locally.
+markers = [
+    "integration: needs a real Postgres, DBOS runtime or other service; local smoke step, not CI",
+    "e2e: end to end against a running stack, network or real models; local smoke step, not CI",
+]
 
 # --------------------------------------------------------------------------- #
 # Alembic (migrations live in ./migrations; the DB URL comes from Settings)

@@ -24,9 +24,20 @@ uv run alembic upgrade head               # migrate
 uv run uvicorn tuttitrip.main:app --reload
 docker compose up --build                 # db + migrate + api in containers
 
-# Must all pass before every commit (CI runs the same):
-uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
+# Must all pass before every commit (this is all CI runs: lint, types, unit + architecture tests):
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -m "not integration and not e2e"
+
+# Local only, before the PR is marked ready (CI does not run them; part of the smoke step).
+# Exit code 5 means "no such tests yet": today every test is a unit test (mocked services, SQL
+# rendered without a DB), so the set is empty.
+uv run pytest -m "integration or e2e"
 ```
+
+Test markers (registered in `pyproject.toml`, strict): `integration` for a test that needs a real
+Postgres, a DBOS runtime or another live service, `e2e` for one against a running stack, the
+network or a real model. Mark such a test at the moment you write it; it then stays off CI and
+runs in the local smoke step. A fast test with fakes, mocked services or a `TestClient` with
+overridden dependencies is a unit test and carries no marker.
 
 ## Layout: vertical slices
 
@@ -505,6 +516,10 @@ innym w drogę i żeby każda funkcja przeszła ten sam proces. Dotyczą też lu
    zmienna ma wartość `true`). Użyj etykiety wyłącznie, gdy żywy podgląd jest niezbędny; w pozostałych
    przypadkach smoke test robisz lokalnie, a po merge'u sprawdzasz develop. Pominięty podgląd zostawia
    w podsumowaniu joba jedną linię "Preview disabled (PREVIEW_DEPLOYS=false); add label `preview` to deploy".
+   CI sprawdza tylko lint, typy, testy jednostkowe i architektury (`pytest -m "not integration and not e2e"`).
+   Testy z markerami `integration` i `e2e` nie chodzą na CI, więc przed oznaczeniem PR jako gotowego
+   uruchom lokalnie `uv run pytest` (cały zestaw, albo osobno `uv run pytest -m "integration or e2e"`)
+   i wpisz wynik w komentarzu ze smoke testem.
    Przejdź scenariusz z kryteriów akceptacji issue:
    - lokalnie: lokalny stos (`docker compose`, albo `uv run` na lokalnym PostgreSQL; README), Swagger pod
      `/api/v1/docs`, endpointy z tokenem konta testowego i `/api/v1/health`; po merge'u to samo na API develop,
@@ -560,7 +575,8 @@ Zgłoszenia (issues):
   - [ ] Given gotowy plan, When kliknę "Pobierz PDF", Then dostanę plik z planem dzień po dniu
 
   ### Definition of Done
-  - [ ] CI zielone (lint, typy, testy, testy architektury)
+  - [ ] CI zielone (lint, typy, testy jednostkowe, testy architektury)
+  - [ ] Lokalnie przeszły testy integracyjne i smoke test (`uv run pytest -m "integration or e2e"`)
   - [ ] PR zmergowany do `develop` i sprawdzony na wdrożeniu develop
 
   ### Obszar
