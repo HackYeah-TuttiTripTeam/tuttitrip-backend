@@ -108,6 +108,11 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
     TUTTITRIP_CORS_ORIGIN_REGEX; do
     if [ -n "${!var:-}" ]; then printf '%s=%s\n' "$var" "${!var}"; fi
   done
+  # X-Forwarded-For is trusted only from the gateway's Docker network (uvicorn
+  # reads FORWARDED_ALLOW_IPS); fall back to the private ranges if unknown.
+  printf 'FORWARDED_ALLOW_IPS=%s\n' "$(docker network inspect "$TT_NETWORK" \
+    -f '{{range .IPAM.Config}}{{.Subnet}},{{end}}' 2>/dev/null | sed 's/,$//;s/,\{2,\}/,/g' \
+    | grep . || echo '172.16.0.0/12,192.168.0.0/16,10.0.0.0/8')"
   if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
 } >"$envfile"
 {
@@ -140,15 +145,20 @@ for i in $(seq 60); do
 done
 tt_log "healthy behind the gateway"
 
-# Demo account data (jury login): reset to the sample set; never fails the deploy.
-if grep -qE '^TUTTITRIP_DEMO__TOKEN_SHA256=.' "$envfile"; then
-  docker exec "$container" python -m tuttitrip.demo.services.seed_command >/dev/null 2>&1 \
-    && tt_log "demo account data reset" || tt_log "WARNING: demo account reset failed"
-fi
-
 # --- routing -------------------------------------------------------------------
 cf_ingress_ensure "$host" "http://$TT_GATEWAY_BIND"
 cf_dns_ensure "$host"
+
+# Demo account data (jury login) once routing is live: reset to the sample set.
+# Bounded, logged to a file, and never fails the deploy.
+if grep -qE '^TUTTITRIP_DEMO__TOKEN_SHA256=.' "$envfile"; then
+  demolog="$TT_STATE_DIR/demo-seed-$env.log"
+  if timeout 120 docker exec "$container" python -m tuttitrip.demo.services.seed_command >"$demolog" 2>&1; then
+    tt_log "demo account data reset"
+  else
+    tt_log "WARNING: demo account reset failed (see $demolog)"; tail -n 5 "$demolog" >&2 || true
+  fi
+fi
 
 # Old images of this environment (keep the one just deployed).
 docker image ls tuttitrip-api --filter "label=tuttitrip.env=$env" --format '{{.Repository}}:{{.Tag}}' \

@@ -177,3 +177,18 @@ async def delete_trip(session: AsyncSession, membership: TripMembership) -> None
     """
     await db.delete_trip(session, membership.trip_id)
     await session.commit()
+
+
+async def delete_trips_owned_by(session: AsyncSession, owner_sub: str) -> int:
+    """Delete every trip the user created, without committing.
+
+    For the demo reset, which owns the surrounding transaction.
+
+    Args:
+        session: Open session (caller commits).
+        owner_sub: Auth0 subject of the creator.
+
+    Returns:
+        How many trips were deleted.
+    """
+    return await db.delete_trips_owned_by(session, owner_sub)

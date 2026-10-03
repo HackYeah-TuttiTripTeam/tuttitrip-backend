@@ -413,12 +413,24 @@ adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login
 (realm `Username-Password-Authentication`, audience API) i zwraca
 `{access_token, expires_in, token_type, refresh_token}` z `Cache-Control: no-store`.
 
-- Zły, brakujący albo wyłączony token (pusty `TOKEN_SHA256`) to to samo `404`; limit
-  10 żądań/min na IP (w pamięci procesu, IP z `CF-Connecting-IP`) daje `429`; błąd
-  Auth0 to `502`. Tokenu ani danych konta nie logujemy.
+- Każdy zły kształt żądania (brak ciała, brak/pusty/za długi token, zły token) i wyłączone
+  demo (pusty `TUTTITRIP_DEMO__TOKEN_SHA256`) to to samo `404` z `Cache-Control: no-store`,
+  nigdy `422`. Limiter (domyślnie 10 żądań/min na IP, `429` z `Retry-After`) działa przed
+  czytaniem ciała. Błąd Auth0 to `502` (w logu tylko kod powodu, np. `status_403`). Tokenu
+  ani danych konta nie logujemy.
+- Limiter jest w pamięci procesu (twardy limit 10 000 kluczy, najstarsze wypadają), więc
+  zakładamy jeden proces API (jeden worker uvicorna); przy kilku każdy ma własny budżet.
+- IP klienta: gateway (`deploy/gateway/nginx.conf`) wysyła jawnie `CF-Connecting-IP`
+  (a gdy go brak, adres gniazda) i nadpisuje `X-Forwarded-For` jedną wartością. Uvicorn
+  ufa `X-Forwarded-*` tylko od adresów z `FORWARDED_ALLOW_IPS`; `deploy.sh` ustawia tam
+  podsieć sieci Docker `tuttitrip` (nie `*`). Trasa używa więc `request.client.host`,
+  a nagłówek dopisany przez klienta nie zmienia jego budżetu. Lokalnie bez gatewaya
+  uvicorn ufa tylko 127.0.0.1.
 - `refresh_token` wraca tylko przy `TUTTITRIP_DEMO__OFFLINE_ACCESS=true` (aplikacja
   Auth0 musi mieć włączone refresh tokeny); domyślnie wyłączone, access token żyje
   tyle, ile skonfigurowano w Auth0 dla API.
+- Ustawienia są sprawdzane przy starcie: `TOKEN_SHA256` to 64 znaki hex albo pusty, a gdy
+  nie jest pusty, `USERNAME`, `PASSWORD` i `CLIENT_ID` muszą być wpisane.
 - Dane konta (`USERNAME`, `PASSWORD`, `CLIENT_ID`, `CLIENT_SECRET` dla aplikacji
   poufnej) tylko w środowisku hosta (`~/tuttitrip/app.env`), nigdy w repo ani odpowiedzi.
   Zapytania do Auth0 idą przez httpx z własnym `User-Agent` (Cloudflare blokuje
@@ -427,13 +439,17 @@ adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login
   `TUTTITRIP_DEMO__TOKEN_SHA256=$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)`,
   zrestartuj kontener (deploy zapisuje `envs/<env>.env` z `app.env`), nowy link to
   `.../demo#t=$TOKEN`. Stary link przestaje działać od razu.
-- Dane demo: `python -m tuttitrip.demo.services.seed_command` kasuje wyjazdy, których
-  właścicielem jest konto demo, i tworzy zestaw od nowa (Warszawa z rodziną: 4 osoby,
-  preferencje, wymagania noclegowe, wagi; Gdańsk, Kraków, Berlin; oceny miejsc, jeśli
-  katalog ma miejsca danego miasta). Plan to na razie stub solvera. Jest idempotentne;
-  `deploy/deploy.sh` uruchamia je po każdym wdrożeniu, gdy demo jest włączone, a
-  codzienny reset robi harmonogram workera (osobne issue). `sub` konta bierze z
-  `TUTTITRIP_DEMO__USER_SUB` albo z zalogowania.
+- Dane demo: `python -m tuttitrip.demo.services.seed_command` loguje się na konto demo
+  (stąd bierze `sub`, nie ma osobnego ustawienia), kasuje tylko wyjazdy z
+  `owner_sub` równym temu `sub` (wyjazdy innych osób, do których konto tylko dołączyło,
+  zostają) i tworzy zestaw od nowa (Warszawa z rodziną: 4 osoby, preferencje, wymagania
+  noclegowe, wagi; Gdańsk, Kraków, Berlin; oceny miejsc, jeśli katalog ma miejsca danego
+  miasta). Plan to na razie stub solvera. Reset jest atomowy: jedna transakcja z
+  `pg_advisory_xact_lock` (równoległe resety czekają na siebie), a commity serwisów to
+  tylko savepointy, więc błąd w połowie cofa wszystko i poprzednie dane zostają.
+  Jest idempotentny; `deploy/deploy.sh` uruchamia go po wdrożeniu i włączeniu routingu
+  (`timeout 120`, log w `~/tuttitrip/demo-seed-<env>.log`, błąd nie psuje wdrożenia), a
+  codzienny reset robi harmonogram workera (osobne issue).
 - Wszyscy jurorzy dzielą jedno konto: zmiany jednego widzą inni do następnego resetu.
 
 ## Design system

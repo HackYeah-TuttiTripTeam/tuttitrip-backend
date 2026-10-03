@@ -17,5 +17,5 @@ def token_matches(token: str, expected_sha256: str) -> bool:
     expected = expected_sha256.strip().lower()
     if not expected:
         return False
-    actual = hashlib.sha256(token.encode()).hexdigest()
-    return hmac.compare_digest(actual, expected)
+    actual = hashlib.sha256(token.encode()).hexdigest().encode()
+    return hmac.compare_digest(actual, expected.encode())

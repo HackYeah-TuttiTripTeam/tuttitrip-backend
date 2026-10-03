@@ -12,15 +12,17 @@ import sys
 from tuttitrip.demo.services import auth0_login, demo_service
 from tuttitrip.shared.auth.services.token_verifier import TokenVerifier
 from tuttitrip.shared.config.settings import Settings, get_settings
-from tuttitrip.shared.db.session import dispose_engine, get_sessionmaker
+from tuttitrip.shared.db.session import dispose_engine, get_engine
 
 log = logging.getLogger("tuttitrip.demo.seed")
 
 
 async def _demo_sub(settings: Settings) -> str:
-    if settings.demo.user_sub:
-        return settings.demo.user_sub
-    # Learn the `sub` the way the API sees it: from a verified access token.
+    """The demo account's ``sub``, from a verified token of its own login.
+
+    Returns:
+        The Auth0 subject the credentials belong to.
+    """
     async with auth0_login.build_client() as client:
         session = await auth0_login.login(client, settings.auth0, settings.demo)
     verifier = TokenVerifier(
@@ -46,8 +48,10 @@ async def run(settings: Settings | None = None) -> int:
         return 0
     try:
         sub = await _demo_sub(settings)
-        async with get_sessionmaker()() as session:
-            await demo_service.reset_demo_account(session, sub)
+        await demo_service.run_reset(get_engine(), sub)
+    except auth0_login.DemoLoginError as exc:
+        log.error("Demo reset failed: %s", exc)  # ruff: ignore[error-instead-of-exception]  # no traceback: it may echo credentials
+        return 1
     except Exception:
         log.exception("Demo reset failed")
         return 1

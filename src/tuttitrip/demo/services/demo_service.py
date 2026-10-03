@@ -9,7 +9,8 @@ so it can run any number of times (at deploy, daily, before a presentation).
 import logging
 from datetime import date
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from tuttitrip.accommodation.schemas import RequirementItem, RequirementsWrite
 from tuttitrip.accommodation.services import requirements_service
@@ -30,26 +31,8 @@ from tuttitrip.trips.services import trip_service
 
 log = logging.getLogger(__name__)
 
+RESET_LOCK_KEY = 0x7475747469_64656D  # "tuttidem": a bigint key, only for this reset
 RATED_PLACES = 20  # how many of a city's catalog places ratings are picked from
-
-
-async def _delete_owned_trips(session: AsyncSession, sub: str) -> int:
-    """Delete the trips the account owns (what jurors added goes too).
-
-    Returns:
-        How many trips were deleted.
-    """
-    trips = [
-        t
-        for t in await trip_service.list_trips(session, sub)
-        if t.my_role is TripRole.HOST
-    ]
-    for trip in trips:
-        membership = await trip_service.get_membership(
-            session, trip.id, sub, TripRole.HOST
-        )
-        await trip_service.delete_trip(session, membership)
-    return len(trips)
 
 
 async def _rate_places(
@@ -146,7 +129,11 @@ async def _create_trip(
 async def reset_demo_account(
     session: AsyncSession, sub: str, today: date | None = None
 ) -> int:
-    """Bring the demo account back to the sample set of trips.
+    """Replace the account's own trips with the sample set.
+
+    Only trips with ``owner_sub == sub`` are deleted; trips the account merely
+    joined stay. The services commit, so call it on a session joined to an
+    outer transaction (see ``run_reset``) to make the whole reset atomic.
 
     Args:
         session: Open session.
@@ -157,10 +144,41 @@ async def reset_demo_account(
         The number of trips created.
     """
     today = today or date.today()  # ruff: ignore[call-date-today]  # a calendar day, not an instant
-    removed = await _delete_owned_trips(session, sub)
+    removed = await trip_service.delete_trips_owned_by(session, sub)
     for seed in DEMO_TRIPS:
         await _create_trip(session, sub, seed, today)
     log.info(
         "Demo account reset: %d trips removed, %d created", removed, len(DEMO_TRIPS)
     )
     return len(DEMO_TRIPS)
+
+
+async def run_reset(engine: AsyncEngine, sub: str, today: date | None = None) -> int:
+    """Reset the demo account in one transaction, one reset at a time.
+
+    A Postgres advisory lock serializes concurrent resets (deploy, schedule,
+    manual). The services' commits only release savepoints of the outer
+    transaction, so a failure anywhere rolls everything back and the previous
+    data stays.
+
+    Args:
+        engine: Database engine.
+        sub: Auth0 subject of the demo account.
+        today: The day dates are counted from (tests); defaults to today.
+
+    Returns:
+        The number of trips created.
+    """
+    async with engine.connect() as connection, connection.begin():
+        await connection.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": RESET_LOCK_KEY}
+        )
+        session = AsyncSession(
+            bind=connection,
+            join_transaction_mode="create_savepoint",
+            expire_on_commit=False,
+        )
+        try:
+            return await reset_demo_account(session, sub, today)
+        finally:
+            await session.close()

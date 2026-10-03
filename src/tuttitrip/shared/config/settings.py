@@ -5,10 +5,12 @@ Nested models use ``__`` as the delimiter, e.g. ``TUTTITRIP_DATABASE__HOST``.
 ``.env.example`` must list exactly these variables (a test enforces it).
 """
 
+import re
 from functools import lru_cache
+from typing import Self
 from urllib.parse import quote
 
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "TUTTITRIP_"
@@ -96,10 +98,31 @@ class DemoSettings(BaseModel):
     # Ask for `offline_access` so the response carries a refresh token (the
     # Auth0 application must allow refresh tokens).
     offline_access: bool = False
-    # Auth0 `sub` of the demo account. Empty: learned from a demo login.
-    user_sub: str = ""
     # Requests per minute from one IP (all outcomes count).
     rate_limit_per_minute: int = Field(default=10, ge=1)
+
+    @field_validator("token_sha256")
+    @classmethod
+    def _hex_digest_or_empty(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value and not re.fullmatch(r"[0-9a-f]{64}", value):
+            msg = "must be a 64-character hex SHA-256 digest (or empty)"
+            raise ValueError(msg)
+        return value
+
+    @model_validator(mode="after")
+    def _account_is_complete_when_enabled(self) -> Self:
+        if self.token_sha256:
+            given = {
+                "USERNAME": self.username,
+                "PASSWORD": self.password.get_secret_value(),
+                "CLIENT_ID": self.client_id,
+            }
+            missing = [name for name, value in given.items() if not value]
+            if missing:
+                msg = f"demo is on (token_sha256 set) but {', '.join(missing)} is empty"
+                raise ValueError(msg)
+        return self
 
 
 class Settings(BaseSettings):

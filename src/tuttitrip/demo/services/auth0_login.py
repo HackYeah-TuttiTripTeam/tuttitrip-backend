@@ -13,10 +13,24 @@ from tuttitrip.shared.config.settings import Auth0Settings, DemoSettings
 PASSWORD_REALM = "http://auth0.com/oauth/grant-type/password-realm"  # ruff: ignore[hardcoded-password-string]  # grant type URI
 USER_AGENT = "TuttiTripBackend/1.0 (+https://tuttitrip.gburek.app)"
 TIMEOUT_SECONDS = 10.0
+TIMEOUT, NETWORK, BAD_BODY = "timeout", "network", "bad_body"
 
 
 class DemoLoginError(Exception):
-    """Auth0 refused or could not be reached (the cause is never logged)."""
+    """Auth0 refused or could not be reached.
+
+    ``reason`` is a short code safe to log (``status_403``, ``timeout``,
+    ``network``, ``bad_body``); the response text is never kept.
+    """
+
+    def __init__(self, reason: str) -> None:
+        """Keep the reason code.
+
+        Args:
+            reason: Short code without any secret.
+        """
+        super().__init__(f"Auth0 demo login failed: {reason}")
+        self.reason = reason
 
 
 def build_client() -> httpx.AsyncClient:
@@ -60,14 +74,18 @@ async def login(
         body["client_secret"] = secret
     try:
         response = await client.post(f"https://{auth0.domain}/oauth/token", json=body)
-        response.raise_for_status()
+        if response.status_code != httpx.codes.OK:
+            reason = f"status_{response.status_code}"
+            raise DemoLoginError(reason)
         payload = response.json()
         return DemoSession(
             access_token=payload["access_token"],
             expires_in=int(payload["expires_in"]),
             refresh_token=payload.get("refresh_token") if demo.offline_access else None,
         )
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
-        # Only the exception type: its text may echo the request.
-        msg = f"Auth0 demo login failed ({type(exc).__name__})"
-        raise DemoLoginError(msg) from None
+    except httpx.TimeoutException:
+        raise DemoLoginError(TIMEOUT) from None
+    except httpx.HTTPError:
+        raise DemoLoginError(NETWORK) from None
+    except ValueError, KeyError, TypeError:
+        raise DemoLoginError(BAD_BODY) from None
