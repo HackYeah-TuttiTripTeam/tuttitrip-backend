@@ -7,6 +7,7 @@ user, so a voting link without an account can reuse the same service.
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.places.services import place_service
@@ -145,19 +146,21 @@ async def create_veto(
     """
     profile = await _profile_for_author(session, membership, data.profile_id)
     await _require_place(session, data.place_id)
-    if await db.select_active_veto(session, data.profile_id, data.place_id):
+    try:
+        veto = await db.insert_veto(
+            session,
+            PlaceVeto(
+                trip_id=membership.trip_id,
+                profile_id=data.profile_id,
+                place_id=data.place_id,
+                created_by_sub=membership.sub,
+                on_behalf=profile.user_sub != membership.sub,
+            ),
+        )
+    except IntegrityError as exc:  # the partial unique index of active vetoes
+        await session.rollback()
         msg = "This person already has an active veto on the place"
-        raise VetoExistsError(msg)
-    veto = await db.insert_veto(
-        session,
-        PlaceVeto(
-            trip_id=membership.trip_id,
-            profile_id=data.profile_id,
-            place_id=data.place_id,
-            created_by_sub=membership.sub,
-            on_behalf=profile.user_sub != membership.sub,
-        ),
-    )
+        raise VetoExistsError(msg) from exc
     await session.refresh(veto)
     read = VetoRead.model_validate(veto)
     await session.commit()

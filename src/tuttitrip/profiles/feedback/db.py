@@ -63,28 +63,6 @@ async def select_ratings_by_trip(
     return result.all()
 
 
-async def select_active_veto(
-    session: AsyncSession, profile_id: UUID, place_id: UUID
-) -> PlaceVeto | None:
-    """The veto in force of a person on a place.
-
-    Args:
-        session: Open session.
-        profile_id: Profile id.
-        place_id: Place id.
-
-    Returns:
-        The veto, or None.
-    """
-    return await session.scalar(
-        select(PlaceVeto).where(
-            PlaceVeto.profile_id == profile_id,
-            PlaceVeto.place_id == place_id,
-            PlaceVeto.revoked_at.is_(None),
-        )
-    )
-
-
 async def select_active_vetoes_by_trip(
     session: AsyncSession, trip_id: UUID
 ) -> Sequence[PlaceVeto]:

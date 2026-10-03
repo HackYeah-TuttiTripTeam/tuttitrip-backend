@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
@@ -161,7 +162,7 @@ async def test_member_rates_their_own_profile(
     assert (saved.value, saved.reason_code) == ("dont_want", "too_far")
     assert saved.updated_by_sub == GRANNY
     assert read.value is RatingValue.DONT_WANT
-    assert read.vote == -1
+    assert read.value.vote == -1
     session.commit.assert_awaited_once()
 
 
@@ -198,7 +199,7 @@ async def test_co_host_rates_for_someone_without_an_account(
         PLACE,
         RatingUpdate(value=RatingValue.WANT),
     )
-    assert read.vote == 1
+    assert read.value.vote == 1
 
 
 @_sync
@@ -228,7 +229,6 @@ async def test_unknown_profile_and_place_are_not_found(
 async def test_host_vetoes_on_behalf_of_granny_and_the_author_is_stored(
     monkeypatch: pytest.MonkeyPatch, session: AsyncMock, granny: Profile
 ) -> None:
-    monkeypatch.setattr(db, "select_active_veto", AsyncMock(return_value=None))
     inserted = AsyncMock(side_effect=lambda _s, veto: veto)
     monkeypatch.setattr(db, "insert_veto", inserted)
     session.refresh.side_effect = lambda veto: (
@@ -248,7 +248,6 @@ async def test_host_vetoes_on_behalf_of_granny_and_the_author_is_stored(
 async def test_own_veto_is_not_on_behalf(
     monkeypatch: pytest.MonkeyPatch, session: AsyncMock, granny: Profile
 ) -> None:
-    monkeypatch.setattr(db, "select_active_veto", AsyncMock(return_value=None))
     monkeypatch.setattr(db, "insert_veto", AsyncMock(side_effect=lambda _s, veto: veto))
     session.refresh.side_effect = lambda veto: (
         setattr(veto, "id", uuid.uuid4()),
@@ -279,9 +278,7 @@ async def test_second_active_veto_is_a_conflict(
     monkeypatch: pytest.MonkeyPatch, session: AsyncMock, granny: Profile
 ) -> None:
     monkeypatch.setattr(
-        db,
-        "select_active_veto",
-        AsyncMock(return_value=_veto(granny, on_behalf=False)),
+        db, "insert_veto", AsyncMock(side_effect=IntegrityError("x", {}, Exception()))
     )
     with pytest.raises(VetoExistsError):
         await feedback_service.create_veto(
@@ -336,7 +333,7 @@ async def test_list_for_trip_returns_ratings_and_only_active_vetoes(
     by_trip = AsyncMock(return_value=[active])
     monkeypatch.setattr(db, "select_active_vetoes_by_trip", by_trip)
     feedback = await feedback_service.list_for_trip(session, TRIP)
-    assert [r.vote for r in feedback.ratings] == [1]
+    assert [r.value.vote for r in feedback.ratings] == [1]
     assert [v.id for v in feedback.vetoes] == [active.id]
     by_trip.assert_awaited_once_with(session, TRIP)
 
@@ -429,9 +426,7 @@ def test_unknown_place_gives_404_and_duplicate_veto_409(
     assert client.post(url, json=body).status_code == 404
     monkeypatch.setattr(feedback_service, "_require_place", AsyncMock())
     monkeypatch.setattr(
-        db,
-        "select_active_veto",
-        AsyncMock(return_value=_veto(granny, on_behalf=False)),
+        db, "insert_veto", AsyncMock(side_effect=IntegrityError("x", {}, Exception()))
     )
     assert client.post(url, json=body).status_code == 409
 

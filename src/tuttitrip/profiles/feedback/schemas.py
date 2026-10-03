@@ -75,15 +75,6 @@ class RatingRead(BaseModel):
     updated_by_sub: str
     updated_at: datetime
 
-    @property
-    def vote(self) -> int:
-        """The vote in {-1, 0, +1}.
-
-        Returns:
-            The numeric vote of ``value``.
-        """
-        return self.value.vote
-
 
 class VetoCreate(BaseModel):
     """A veto of one person on one place."""
