@@ -175,6 +175,74 @@ through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
   then start the worker from its repo with the same `DBOS_SYSTEM_DATABASE_URL`
   and `DBOS__APPVERSION=local`.
 
+## Zgłoszenia, PR i wydania
+
+Zasady są wspólne dla całej organizacji, pełny opis jest w
+[CONTRIBUTING.md](https://github.com/HackYeah-TuttiTripTeam/.github/blob/main/CONTRIBUTING.md).
+
+Zgłoszenia (issues):
+
+- Tytuł zaczyna się od `feat:`, `docs:`, `chore:` albo `bug:`, opcjonalnie
+  z zakresem, np. `feat(backend): Eksport planu do PDF`. Regex:
+  `^(feat|docs|chore|bug)(\([a-z0-9-]+\))?: \S.{3,}`.
+- Treść ma sekcje `###` i żadna wymagana nie może być pusta. W `feat`,
+  `docs` i `chore` są to Opis, Dlaczego, Kryteria akceptacji, Definition of
+  Done i Obszar (w `feat` można dodać Poza zakresem). W `bug` są to Opis,
+  Kroki do odtworzenia, Oczekiwane zachowanie, Faktyczne zachowanie,
+  Środowisko, Dlaczego, Kryteria akceptacji, Definition of Done i Obszar.
+- `.github/workflows/issue-format.yml` sprawdza każde nowe i edytowane
+  zgłoszenie. Złe zamyka jako "not planned", dodaje etykietę
+  `invalid-format` i pisze w komentarzu, co poprawić. Po poprawce otwiera je
+  ponownie. Ustawia też etykietę `type:*`.
+- Z terminala (skill `new-issue` przygotuje treść i założy zgłoszenie):
+
+  ```bash
+  gh issue create --title "feat(backend): Eksport planu do PDF" --body-file - <<'MD'
+  ### Opis
+  Organizator pobiera gotowy plan jako PDF.
+
+  ### Dlaczego
+  W podróży plan musi być dostępny offline, a nie każdy instaluje PWA.
+
+  ### Kryteria akceptacji
+  - [ ] Given gotowy plan, When kliknę "Pobierz PDF", Then dostanę plik z planem dzień po dniu
+
+  ### Definition of Done
+  - [ ] CI zielone (lint, typy, testy, testy architektury)
+  - [ ] PR zmergowany do `develop` i sprawdzony na wdrożeniu develop
+
+  ### Obszar
+  Backend
+  MD
+  ```
+
+Pull requesty i merge:
+
+- Tytuł PR: `feat:`, `docs:`, `chore:` albo `bugfix:` (w PR nie `bug:`),
+  opcjonalnie z zakresem. PR wydania `develop` -> `main` ma tytuł
+  `release: opis`.
+- Opis po polsku według szablonu: `## Co i dlaczego`, `## Powiązane issue`
+  (`Closes #12` albo `Refs #12`; w `docs` i `chore` może być `brak`),
+  `## Lista zmian`, `## Jak przetestować`, `## Zrzuty ekranu`,
+  `## Checklista`. Gotowy szablon ma skill `open-pr`.
+- `.github/workflows/pr-format.yml` oznacza check na czerwono i komentuje,
+  gdy tytuł albo sekcje są złe. Bez ochrony gałęzi (darmowy plan) czerwony
+  check nie blokuje merge'a, więc nie mergujemy z czerwonym.
+- PR do `develop` mergujemy przez "Squash and merge" (tytuł PR staje się
+  commitem). PR wydania do `main` mergujemy przez "Create a merge commit".
+  GitHub nie pozwala ustawić metody osobno dla gałęzi, więc to zasada
+  zespołu.
+
+Wydania:
+
+- `.github/workflows/release-notes.yml` (Release Drafter, konfiguracja w
+  repozytorium `.github`) nadaje PR etykietę `type:*` według prefiksu tytułu
+  i po każdym merge'u do `develop` aktualizuje szkic następnego wydania w
+  GitHub Releases.
+- Merge PR `release:` do `main` publikuje szkic i zakłada tag `vX.Y.Z`.
+  `feat` podnosi wersję minor, pozostałe typy patch, pierwsze wydanie to
+  `v0.1.0`. Nie prowadzimy pliku CHANGELOG.md.
+
 ## Git flow
 
 - `main` is production; `develop` is integration. Both change only through
