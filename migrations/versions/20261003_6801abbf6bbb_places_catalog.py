@@ -1,8 +1,8 @@
 """Places catalog: cities, places, prices, transit fares; user READ grant.
 
-Revision ID: 22159f26a4eb
+Revision ID: 6801abbf6bbb
 Revises: 1c3eca9c16c6
-Create Date: 2026-10-03 20:20:58.024824
+Create Date: 2026-10-03 20:30:53.054660
 """
 
 from collections.abc import Sequence
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "22159f26a4eb"
+revision: str = "6801abbf6bbb"
 down_revision: str | None = "1c3eca9c16c6"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
@@ -33,11 +33,16 @@ def upgrade() -> None:
         sa.Column("bbox_west", sa.Double(), nullable=False),
         sa.Column("bbox_north", sa.Double(), nullable=False),
         sa.Column("bbox_east", sa.Double(), nullable=False),
+        sa.CheckConstraint("country ~ '^[A-Z]{2}$'", name=op.f("ck_cities_country")),
+        sa.CheckConstraint("currency ~ '^[A-Z]{3}$'", name=op.f("ck_cities_currency")),
+        sa.CheckConstraint("slug ~ '^[a-z0-9-]+$'", name=op.f("ck_cities_slug")),
         sa.PrimaryKeyConstraint("slug", name=op.f("pk_cities")),
     )
     op.create_table(
         "places",
-        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column(
+            "id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False
+        ),
         sa.Column("city_slug", sa.String(length=64), nullable=False),
         sa.Column("name", sa.String(length=200), nullable=False),
         sa.Column("category", sa.String(length=32), nullable=False),
@@ -51,6 +56,7 @@ def upgrade() -> None:
         sa.Column("lon", sa.Double(), nullable=False),
         sa.Column("osm_type", sa.String(length=8), nullable=True),
         sa.Column("osm_id", sa.BigInteger(), nullable=True),
+        sa.Column("source_key", sa.String(length=200), nullable=True),
         sa.Column("google_place_id", sa.String(length=200), nullable=True),
         sa.Column(
             "opening_hours", postgresql.JSONB(astext_type=sa.Text()), nullable=True
@@ -63,7 +69,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("hours_checked_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("typical_visit_min", sa.Integer(), nullable=False),
+        sa.Column(
+            "typical_visit_min",
+            sa.Integer(),
+            server_default=sa.text("60"),
+            nullable=False,
+        ),
         sa.Column(
             "segment_km", sa.Double(), server_default=sa.text("0"), nullable=False
         ),
@@ -75,38 +86,74 @@ def upgrade() -> None:
         ),
         sa.Column("stairs", sa.Double(), server_default=sa.text("0"), nullable=False),
         sa.Column("wheelchair", sa.Boolean(), nullable=True),
-        sa.Column(
-            "indoor", sa.Boolean(), server_default=sa.text("false"), nullable=False
-        ),
+        sa.Column("indoor", sa.Boolean(), nullable=True),
         sa.Column(
             "iconic", sa.Boolean(), server_default=sa.text("false"), nullable=False
         ),
-        sa.Column("cuisine", sa.String(length=100), nullable=True),
+        sa.Column("cuisine", sa.String(length=32), nullable=True),
         sa.Column(
             "diet_tags",
             sa.ARRAY(sa.String(length=32)),
             server_default=sa.text("'{}'"),
             nullable=False,
         ),
+        sa.Column(
+            "amenities",
+            sa.ARRAY(sa.String(length=32)),
+            server_default=sa.text("'{}'"),
+            nullable=False,
+        ),
         sa.Column("source", sa.String(length=16), nullable=False),
+        sa.CheckConstraint(
+            "amenities <@ ARRAY['pool', 'kitchen', 'parking', 'family_room', 'wifi', "
+            "'air_conditioning', 'breakfast', 'pets_allowed', 'elevator', "
+            "'wheelchair_accessible', 'washing_machine', 'balcony', 'crib', "
+            "'playground']::varchar[]",
+            name=op.f("ck_places_amenities"),
+        ),
         sa.CheckConstraint(
             "category IN ('attraction', 'museum', 'restaurant', 'cafe', 'park', "
             "'viewpoint', 'shopping', 'nightlife', 'entertainment', 'lodging')",
             name=op.f("ck_places_category"),
         ),
         sa.CheckConstraint(
+            "cuisine IN ('polish', 'italian', 'french', 'german', 'british', "
+            "'spanish', 'greek', 'turkish', 'middle_eastern', 'indian', 'chinese', "
+            "'japanese', 'thai', 'vietnamese', 'mexican', 'american', "
+            "'international')",
+            name=op.f("ck_places_cuisine"),
+        ),
+        sa.CheckConstraint(
+            "diet_tags <@ ARRAY['vegetarian', 'vegan', 'pescatarian', 'gluten_free', "
+            "'lactose_free', 'nut_free', 'halal', 'kosher']::varchar[]",
+            name=op.f("ck_places_diet_tags"),
+        ),
+        sa.CheckConstraint(
             "osm_type IN ('node', 'way', 'relation')", name=op.f("ck_places_osm_type")
         ),
         sa.CheckConstraint("source IN ('sheet', 'osm')", name=op.f("ck_places_source")),
         sa.CheckConstraint(
+            "tags <@ ARRAY['history', 'architecture', 'art', 'museums', 'science', "
+            "'religion', 'music', 'nature', 'parks', 'views', 'beaches', 'sport', "
+            "'adventure', 'family', 'kids', 'nightlife', 'shopping', 'markets', "
+            "'local_food', 'street_food', 'relaxation', 'animals', 'playground', "
+            "'water', 'cycling', 'wellness']::varchar[]",
+            name=op.f("ck_places_tags"),
+        ),
+        sa.CheckConstraint(
             "(osm_type IS NULL) = (osm_id IS NULL)", name=op.f("ck_places_osm_ref")
+        ),
+        sa.CheckConstraint(
+            "NOT hours_verified OR (opening_hours IS NOT NULL AND hours_source_url "
+            "IS NOT NULL AND hours_checked_at IS NOT NULL)",
+            name=op.f("ck_places_hours_provenance"),
         ),
         sa.CheckConstraint("lat BETWEEN -90 AND 90", name=op.f("ck_places_lat")),
         sa.CheckConstraint("lon BETWEEN -180 AND 180", name=op.f("ck_places_lon")),
         sa.CheckConstraint("stairs BETWEEN 0 AND 1", name=op.f("ck_places_stairs")),
         sa.CheckConstraint(
-            "typical_visit_min >= 0 AND segment_km >= 0 "
-            "AND transfer_min >= 0 AND queue_min >= 0",
+            "typical_visit_min >= 0 AND segment_km >= 0 AND transfer_min >= 0 AND "
+            "queue_min >= 0",
             name=op.f("ck_places_non_negative"),
         ),
         sa.ForeignKeyConstraint(
@@ -114,12 +161,15 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_places")),
         sa.UniqueConstraint("osm_type", "osm_id", name=op.f("uq_places_osm_type")),
+        sa.UniqueConstraint("source", "source_key", name=op.f("uq_places_source")),
     )
     op.create_index(op.f("ix_places_category"), "places", ["category"], unique=False)
     op.create_index(op.f("ix_places_city_slug"), "places", ["city_slug"], unique=False)
     op.create_table(
         "transit_fares",
-        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column(
+            "id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False
+        ),
         sa.Column("city_slug", sa.String(length=64), nullable=False),
         sa.Column("ticket_type", sa.String(length=32), nullable=False),
         sa.Column("person_category", sa.String(length=16), nullable=False),
@@ -130,6 +180,13 @@ def upgrade() -> None:
             "verified", sa.Boolean(), server_default=sa.text("false"), nullable=False
         ),
         sa.Column("checked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "currency ~ '^[A-Z]{3}$'", name=op.f("ck_transit_fares_currency")
+        ),
+        sa.CheckConstraint(
+            "NOT verified OR (source_url IS NOT NULL AND checked_at IS NOT NULL)",
+            name=op.f("ck_transit_fares_provenance"),
+        ),
         sa.CheckConstraint("amount >= 0", name=op.f("ck_transit_fares_amount")),
         sa.ForeignKeyConstraint(
             ["city_slug"],
@@ -149,9 +206,15 @@ def upgrade() -> None:
     )
     op.create_table(
         "place_prices",
-        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column(
+            "id", sa.Uuid(), server_default=sa.text("gen_random_uuid()"), nullable=False
+        ),
         sa.Column("place_id", sa.Uuid(), nullable=False),
         sa.Column("ticket_category", sa.String(length=16), nullable=False),
+        sa.Column("unit", sa.String(length=8), server_default="person", nullable=False),
+        sa.Column("age_min", sa.SmallInteger(), nullable=True),
+        sa.Column("age_max", sa.SmallInteger(), nullable=True),
+        sa.Column("family_size", sa.SmallInteger(), nullable=True),
         sa.Column("amount", sa.Numeric(precision=10, scale=2), nullable=False),
         sa.Column("currency", sa.String(length=3), nullable=False),
         sa.Column("source_url", sa.Text(), nullable=True),
@@ -160,10 +223,27 @@ def upgrade() -> None:
         ),
         sa.Column("checked_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint(
+            "currency ~ '^[A-Z]{3}$'", name=op.f("ck_place_prices_currency")
+        ),
+        sa.CheckConstraint(
             "ticket_category IN ('adult', 'child', 'senior', 'student', 'family')",
             name=op.f("ck_place_prices_ticket_category"),
         ),
+        sa.CheckConstraint(
+            "unit IN ('person', 'night', 'group')", name=op.f("ck_place_prices_unit")
+        ),
+        sa.CheckConstraint(
+            "NOT verified OR (source_url IS NOT NULL AND checked_at IS NOT NULL)",
+            name=op.f("ck_place_prices_provenance"),
+        ),
+        sa.CheckConstraint(
+            "age_min >= 0 AND age_max >= 0 AND age_min <= age_max",
+            name=op.f("ck_place_prices_age_range"),
+        ),
         sa.CheckConstraint("amount >= 0", name=op.f("ck_place_prices_amount")),
+        sa.CheckConstraint(
+            "family_size >= 2", name=op.f("ck_place_prices_family_size")
+        ),
         sa.ForeignKeyConstraint(
             ["place_id"],
             ["places.id"],

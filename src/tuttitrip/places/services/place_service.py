@@ -5,69 +5,54 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.places import db
-from tuttitrip.places.models import Place
-from tuttitrip.places.schemas import (
-    OpeningHours,
-    PlaceCategory,
-    PlaceHours,
-    PlacePriceRead,
-    PlaceRead,
-)
+from tuttitrip.places.schemas import CityRead, PlaceCategory, PlaceRead
 
 
 class PlaceNotFoundError(Exception):
     """The place does not exist."""
 
 
-def to_read(place: Place) -> PlaceRead:
-    """Map a place row (with loaded prices) to its DTO.
+async def list_cities(session: AsyncSession) -> list[CityRead]:
+    """List the covered cities.
 
     Args:
-        place: The ORM row; ``prices`` must be loaded.
+        session: Open session.
 
     Returns:
-        The DTO. Hours are marked unverified unless a source confirmed them.
+        Cities ordered by name.
     """
-    hours = PlaceHours(
-        opening_hours=(
-            OpeningHours.model_validate(place.opening_hours)
-            if place.opening_hours is not None
-            else None
-        ),
-        source_url=place.hours_source_url,
-        verified=place.hours_verified,
-        checked_at=place.hours_checked_at,
-    )
-    return PlaceRead.model_validate(
-        {
-            **{
-                name: getattr(place, name)
-                for name in PlaceRead.model_fields
-                if name not in {"hours", "prices"}
-            },
-            "hours": hours,
-            "prices": [PlacePriceRead.model_validate(p) for p in place.prices],
-        }
-    )
+    cities = await db.select_cities(session)
+    return [CityRead.model_validate(city) for city in cities]
 
 
 async def list_places(
-    session: AsyncSession, city_slug: str, category: PlaceCategory | None
+    session: AsyncSession,
+    city_slug: str,
+    category: PlaceCategory | None,
+    *,
+    limit: int,
+    offset: int,
 ) -> list[PlaceRead]:
-    """List the catalog places of a city.
+    """List one page of the catalog places of a city.
 
     Args:
         session: Open session.
         city_slug: City slug.
         category: Restrict to one category, or None.
+        limit: Page size.
+        offset: Rows to skip.
 
     Returns:
         The places ordered by name; empty for an unknown city.
     """
     places = await db.select_places(
-        session, city_slug, category.value if category else None
+        session,
+        city_slug,
+        category.value if category else None,
+        limit=limit,
+        offset=offset,
     )
-    return [to_read(place) for place in places]
+    return [PlaceRead.model_validate(place) for place in places]
 
 
 async def get_place(session: AsyncSession, place_id: UUID) -> PlaceRead:
@@ -86,4 +71,4 @@ async def get_place(session: AsyncSession, place_id: UUID) -> PlaceRead:
     place = await db.select_place(session, place_id)
     if place is None:
         raise PlaceNotFoundError(str(place_id))
-    return to_read(place)
+    return PlaceRead.model_validate(place)

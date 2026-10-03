@@ -7,27 +7,48 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from tuttitrip.places.models import Place
+from tuttitrip.places.models import City, Place
+
+
+async def select_cities(session: AsyncSession) -> Sequence[City]:
+    """List the covered cities.
+
+    Args:
+        session: Open session.
+
+    Returns:
+        Cities ordered by name.
+    """
+    return (await session.scalars(select(City).order_by(City.name))).all()
 
 
 async def select_places(
-    session: AsyncSession, city_slug: str, category: str | None
+    session: AsyncSession,
+    city_slug: str,
+    category: str | None,
+    *,
+    limit: int,
+    offset: int,
 ) -> Sequence[Place]:
-    """List the places of one city.
+    """List one page of the places of one city.
 
     Args:
         session: Open session.
         city_slug: City slug.
         category: Restrict to one category, or None for all.
+        limit: Page size.
+        offset: Rows to skip.
 
     Returns:
-        Places with their prices, ordered by name.
+        Places with their prices, ordered by name (then id, for stable pages).
     """
     query = (
         select(Place)
         .where(Place.city_slug == city_slug)
         .options(selectinload(Place.prices))
         .order_by(Place.name, Place.id)
+        .limit(limit)
+        .offset(offset)
     )
     if category is not None:
         query = query.where(Place.category == category)

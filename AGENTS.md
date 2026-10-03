@@ -446,6 +446,23 @@ Wydania:
   `feat` podnosi wersję minor, pozostałe typy patch, pierwsze wydanie to
   `v0.1.0`. Nie prowadzimy pliku CHANGELOG.md.
 
+## Places catalog conventions
+
+- Every price and every opening-hours entry has a source and a `verified`
+  mark; the database refuses `verified` without `source_url` and `checked_at`
+  (and, for hours, without `opening_hours`).
+- Free admission is a `place_prices` row with `amount` 0 and `verified` true.
+  No row means the price is unknown (unverified, the delta in E6).
+- Concessions: `age_min`/`age_max` on the price row; when null the defaults
+  are child up to 17, senior from 65, family 2+2 (`family_size` overrides).
+- `unit` says what the price is for: `person`, `night` (lodging, E6 multiplies
+  by the nights) or `group`.
+- `indoor` and `wheelchair` are null when unknown. Tags, diet tags, amenities
+  and cuisine are the StrEnums in `places/schemas.py` (`PlaceTag`, `DietTag`,
+  `Cuisine`, `Amenity`), mirrored by CHECK constraints; add a value in both
+  the enum and a migration.
+- Money is `Decimal` in the code and a string in the API (`"35.00"`).
+
 ## Git flow
 
 - `main` is production; `develop` is integration. Both change only through
