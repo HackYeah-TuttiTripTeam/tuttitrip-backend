@@ -1,33 +1,28 @@
 """Expense endpoints (nested under a trip)."""
 
-from uuid import UUID
-
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 
 from tuttitrip.expenses.schemas import ExpenseRead
 from tuttitrip.expenses.services import expense_service
-from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
-from tuttitrip.trips.services.trip_service import TripNotFoundError
+from tuttitrip.shared.permissions.api import requires
+from tuttitrip.shared.permissions.registry import Access, Feature
+from tuttitrip.trips.api import TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/expenses", tags=["expenses"])
 
 
-@router.get("")
+@router.get("", dependencies=[requires(Feature.EXPENSES_CORE, Access.READ)])
 async def list_expenses(
-    trip_id: UUID, user: CurrentUser, session: SessionDep
+    membership: TripMember, session: SessionDep
 ) -> list[ExpenseRead]:
-    """List expenses of one of the caller's trips.
+    """List expenses of a trip the caller belongs to.
 
     Args:
-        trip_id: Trip id.
-        user: The authenticated organizer.
+        membership: The caller's membership of ``{trip_id}``.
         session: Database session.
 
     Returns:
         The trip's expenses.
     """
-    try:
-        return await expense_service.list_expenses(session, trip_id, user.sub)
-    except TripNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Trip not found") from exc
+    return await expense_service.list_expenses(session, membership)

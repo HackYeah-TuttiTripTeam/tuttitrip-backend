@@ -6,13 +6,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tuttitrip.trips.models import Trip
+from tuttitrip.trips.models import Trip, TripMember
+from tuttitrip.trips.schemas import TripRole
 
 
 async def insert_trip(
     session: AsyncSession, *, owner_sub: str, name: str, destination: str | None
 ) -> Trip:
-    """Insert a trip and flush it to get server defaults.
+    """Insert a trip with its owner as host, and flush to get server defaults.
 
     Args:
         session: Open session (caller commits).
@@ -26,41 +27,48 @@ async def insert_trip(
     trip = Trip(owner_sub=owner_sub, name=name, destination=destination)
     session.add(trip)
     await session.flush()
+    session.add(TripMember(trip_id=trip.id, user_sub=owner_sub, role=TripRole.HOST))
+    await session.flush()
     await session.refresh(trip)
     return trip
 
 
-async def select_trips_by_owner(
-    session: AsyncSession, owner_sub: str
-) -> Sequence[Trip]:
-    """List an organizer's trips, newest first.
+async def select_trips_of_member(
+    session: AsyncSession, sub: str
+) -> Sequence[tuple[Trip, TripRole]]:
+    """Trips the user belongs to, newest first, with the user's role.
 
     Args:
         session: Open session.
-        owner_sub: Auth0 subject of the organizer.
+        sub: Auth0 subject.
 
     Returns:
-        The organizer's trips.
+        ``(trip, role)`` pairs.
     """
-    result = await session.scalars(
-        select(Trip).where(Trip.owner_sub == owner_sub).order_by(Trip.created_at.desc())
+    result = await session.execute(
+        select(Trip, TripMember.role)
+        .join(TripMember, TripMember.trip_id == Trip.id)
+        .where(TripMember.user_sub == sub)
+        .order_by(Trip.created_at.desc())
     )
-    return result.all()
+    return [(trip, role) for trip, role in result.tuples().all()]
 
 
-async def select_owned_trip(
-    session: AsyncSession, trip_id: UUID, owner_sub: str
-) -> Trip | None:
-    """Fetch one trip if it belongs to the organizer.
+async def select_member_role(
+    session: AsyncSession, trip_id: UUID, sub: str
+) -> TripRole | None:
+    """The user's role on a trip.
 
     Args:
         session: Open session.
         trip_id: Trip id.
-        owner_sub: Auth0 subject of the organizer.
+        sub: Auth0 subject.
 
     Returns:
-        The trip, or None if missing or owned by someone else.
+        The role, or None if the trip is missing or the user is not on it.
     """
     return await session.scalar(
-        select(Trip).where(Trip.id == trip_id, Trip.owner_sub == owner_sub)
+        select(TripMember.role).where(
+            TripMember.trip_id == trip_id, TripMember.user_sub == sub
+        )
     )

@@ -1,25 +1,25 @@
-"""HTTP side of auth: ``CurrentUser``/``AdminUser`` dependencies and ``GET /me``."""
+"""HTTP side of authentication: the ``CurrentUser`` dependency.
+
+Authorization (``requires``, ``GET /me``) lives in ``shared.permissions``.
+"""
 
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from tuttitrip.shared.auth.schemas import AuthenticatedUser, MeResponse
+from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.auth.services.token_verifier import (
     InvalidTokenError,
     TokenVerifier,
 )
 from tuttitrip.shared.config.settings import get_settings
 
-router = APIRouter(tags=["auth"])
-
 _bearer = HTTPBearer(auto_error=False)
 
 _NO_BEARER_DETAIL = "Missing bearer token"
 _BAD_BEARER_DETAIL = "Invalid token"
-_NOT_ADMIN_DETAIL = "Administrator role required"
 
 
 class UnauthorizedError(HTTPException):
@@ -71,39 +71,3 @@ def get_current_user(
 
 
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
-
-
-def require_admin(user: CurrentUser) -> AuthenticatedUser:
-    """Allow only administrators (``admin`` in the Auth0 roles claim).
-
-    Args:
-        user: The authenticated caller.
-
-    Returns:
-        The caller, when they are an administrator.
-    """
-    if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=_NOT_ADMIN_DETAIL)
-    return user
-
-
-AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
-
-
-@router.get("/me")
-def read_me(user: CurrentUser) -> MeResponse:
-    """Return the identity behind the access token.
-
-    Args:
-        user: The authenticated caller.
-
-    Returns:
-        The caller's subject, scopes, permissions and roles.
-    """
-    return MeResponse(
-        sub=user.sub,
-        scopes=user.scopes,
-        permissions=user.permissions,
-        roles=user.roles,
-        is_admin=user.is_admin,
-    )

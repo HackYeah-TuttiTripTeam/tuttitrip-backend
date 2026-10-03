@@ -1,8 +1,8 @@
 """Job endpoints and the ``JobQueueDep`` dependency.
 
 * ``GET /jobs/{id}`` and ``POST /jobs/{id}/cancel``: the caller's own jobs.
-* ``POST /jobs/ping`` and ``GET /jobs/ping/{id}``: unauthenticated echo
-  through the worker, used by the post-deploy smoke test.
+* ``POST /jobs/ping`` and ``GET /jobs/ping/{id}``: public echo through the
+  worker, used by the post-deploy smoke test (``public()``).
 """
 
 import secrets
@@ -21,6 +21,8 @@ from tuttitrip.shared.jobs.services.job_queue import (
     JobQueue,
     JobQueueUnavailableError,
 )
+from tuttitrip.shared.permissions.api import public, requires
+from tuttitrip.shared.permissions.registry import Access, Feature
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -56,7 +58,7 @@ async def _load(queue: JobQueue, workflow_id: str) -> JobState:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, _UNAVAILABLE) from exc
 
 
-@router.post("/ping", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/ping", status_code=status.HTTP_202_ACCEPTED, dependencies=[public()])
 async def ping(queue: JobQueueDep) -> JobAccepted:
     """Enqueue an echo workflow (no auth, no LLM) for smoke tests.
 
@@ -76,7 +78,7 @@ async def ping(queue: JobQueueDep) -> JobAccepted:
     return JobAccepted(workflow_id=workflow_id)
 
 
-@router.get("/ping/{workflow_id}")
+@router.get("/ping/{workflow_id}", dependencies=[public()])
 async def ping_status(workflow_id: str, queue: JobQueueDep) -> JobState:
     """State of a ping job (only ping jobs are visible here).
 
@@ -93,7 +95,7 @@ async def ping_status(workflow_id: str, queue: JobQueueDep) -> JobState:
     return job
 
 
-@router.get("/{workflow_id}")
+@router.get("/{workflow_id}", dependencies=[requires(Feature.JOBS, Access.READ)])
 async def get_job(workflow_id: str, user: CurrentUser, queue: JobQueueDep) -> JobState:
     """Status, result, error and progress of one of the caller's jobs.
 
@@ -111,7 +113,9 @@ async def get_job(workflow_id: str, user: CurrentUser, queue: JobQueueDep) -> Jo
     return job
 
 
-@router.post("/{workflow_id}/cancel")
+@router.post(
+    "/{workflow_id}/cancel", dependencies=[requires(Feature.JOBS, Access.WRITE)]
+)
 async def cancel_job(
     workflow_id: str, user: CurrentUser, queue: JobQueueDep
 ) -> JobState:

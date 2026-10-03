@@ -18,6 +18,8 @@ tests in `tests/architecture/` will fail if you get them wrong.
    - `services/__init__.py` (docstring) + at least one `services/<name>_service.py`.
    - `api.py`: `router = APIRouter(prefix="/<path>", tags=["<name>"])`;
      endpoints call services; map domain exceptions to `HTTPException`.
+     Every endpoint gets `dependencies=[requires(Feature.X, Access.READ|WRITE)]`
+     (or `public()`, which needs an entry in the test's allow-list).
    - Persists data? `models.py` (models on `tuttitrip.shared.db.base.Base`,
      cross-domain FKs as strings like `ForeignKey("trips.id")`) **and** `db.py`
      (queries for these tables only). Then run the `new-migration` skill.
@@ -27,7 +29,11 @@ tests in `tests/architecture/` will fail if you get them wrong.
    `tuttitrip.<other>.schemas`. Auth: `from tuttitrip.shared.auth.api import CurrentUser`;
    DB session: `from tuttitrip.shared.db.api import SessionDep`.
 4. Register the router: import it in `src/tuttitrip/main.py` and add it to `ROUTERS`.
-5. Tests: `tests/domains/test_<name>.py` (logic unit tests; API via
+5. Register the feature nodes with the `new-permission` skill: a group
+   `Feature.<NAME>` plus leaves (`<name>.core` for the domain's own data).
+   Routes under `/trips/{trip_id}/...` also depend on `TripMember` /
+   `TripCoHost` / `TripHost` from `tuttitrip.trips.api`.
+6. Tests: `tests/domains/test_<name>.py` (logic unit tests; API via
    `TestClient(create_app())`; agents via `agent.override(model=TestModel(...))`).
-6. Google docstrings with `Args:`/`Returns:` everywhere public.
-7. Run: `uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest`.
+7. Google docstrings with `Args:`/`Returns:` everywhere public.
+8. Run: `uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest`.
