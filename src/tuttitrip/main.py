@@ -19,6 +19,7 @@ from tuttitrip.places.api import router as places_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
+from tuttitrip.planning.plans.api import router as plans_router
 from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.config.settings import Settings, get_settings
@@ -43,6 +44,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     interview_router,
     planning_router,
     fairness_router,
+    plans_router,
     linter_router,
     accommodation_router,
     expenses_router,
