@@ -102,7 +102,15 @@ async def list_trips(user: CurrentUser, session: SessionDep) -> list[TripRead]:
 async def create_trip(
     data: TripCreate, user: CurrentUser, session: SessionDep
 ) -> TripRead:
-    """Create a trip; the caller becomes its host.
+    """Create a trip in one request; the caller becomes its host.
+
+    Takes the same fields as the PATCH body (`name` is required); dates and
+    each budget range must come in pairs. The trip, its host and the host's
+    profile are created in one transaction.
+
+    A broken rule answers 422 with `loc` `["body", field]` and a stable code in
+    `type`: `trip.dates_order`, `trip.budget_order`, `trip.day_window_order`,
+    `trip.pair_required`, `trip.null_not_allowed`. Read the code, not `msg`.
 
     Args:
         data: Trip payload.
@@ -143,6 +151,10 @@ async def update_trip(
     data: TripUpdate, membership: TripCoHost, session: SessionDep
 ) -> TripRead:
     """Change trip details (co-host or host); only sent fields change.
+
+    A broken rule answers 422 with `loc` `["body", field]` and a stable code in
+    `type`: `trip.dates_order`, `trip.budget_order`, `trip.day_window_order`,
+    `trip.pair_required`, `trip.null_not_allowed`. Read the code, not `msg`.
 
     Args:
         data: Fields to change.

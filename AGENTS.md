@@ -172,6 +172,14 @@ How:
 - Validation errors (422) never echo request values: `shared/errors/api.py`
   strips `input` and `ctx` from every item. This protects secrets in headers
   and bodies and large pasted texts; do not add a handler that returns them.
+- Because `ctx` is stripped, a stable error code travels in the error `type`
+  (kept by the handler), never in `ctx`. Trip rules from `check_trip` use
+  `trip.<code>` with `loc` `["body", field]`: `trip.dates_order`,
+  `trip.budget_order`, `trip.day_window_order`, `trip.pair_required`,
+  `trip.null_not_allowed`. Clients map errors by `type`, never by `msg`. New
+  rule = new code in `trips/schemas.py` (`TripErrorCode`), documented in
+  the endpoint docstrings (OpenAPI) and tested. `POST /trips` takes the same
+  fields as `PATCH` and validates them with `check_trip(complete=True)`.
 
 ## Settings and secrets
 

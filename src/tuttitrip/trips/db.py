@@ -1,6 +1,7 @@
 """Trip queries on PostgreSQL."""
 
 from collections.abc import Sequence
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, select, update
@@ -11,20 +12,19 @@ from tuttitrip.trips.schemas import TripRole
 
 
 async def insert_trip(
-    session: AsyncSession, *, owner_sub: str, name: str, destination: str | None
+    session: AsyncSession, *, owner_sub: str, fields: dict[str, Any]
 ) -> Trip:
     """Insert a trip with its owner as host, and flush to get server defaults.
 
     Args:
         session: Open session (caller commits).
         owner_sub: Auth0 subject of the organizer.
-        name: Trip name.
-        destination: Optional destination.
+        fields: The trip columns from the payload (``name`` and any detail sent).
 
     Returns:
         The persisted trip.
     """
-    trip = Trip(owner_sub=owner_sub, name=name, destination=destination)
+    trip = Trip(owner_sub=owner_sub, **fields)
     session.add(trip)
     await session.flush()
     session.add(TripMember(trip_id=trip.id, user_sub=owner_sub, role=TripRole.HOST))

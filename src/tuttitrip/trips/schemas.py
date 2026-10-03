@@ -3,7 +3,7 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import StrEnum, unique
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Self, override
 from uuid import UUID
 
 from pydantic import (
@@ -50,13 +50,6 @@ class TripRole(StrEnum):
         return self.rank >= required.rank
 
 
-class TripCreate(BaseModel):
-    """Payload for creating a trip."""
-
-    name: str = Field(min_length=1, max_length=200)
-    destination: str | None = Field(default=None, max_length=200)
-
-
 SLUG = r"^[a-z0-9-]+$"  # same rule as city slugs: lowercase, no diacritics, "-"
 FLEX = (
     "Flex of E6 in percent (0-50), the solver divides it by 100: "
@@ -73,20 +66,27 @@ _REQUIRED_WHEN_SENT = (
     "budget_flex_pct",
     "fairness_alpha",
 )
-# (lower, upper) pairs: both set or both empty (E6: B_od <= B_do).
+# (lower, upper, order error code) pairs: both set or both empty (E6: B_od <= B_do).
 _PAIRS = (
-    ("start_date", "end_date"),
-    ("budget_total_min", "budget_total_max"),
-    ("budget_day_min", "budget_day_max"),
+    ("start_date", "end_date", "trip.dates_order"),
+    ("budget_total_min", "budget_total_max", "trip.budget_order"),
+    ("budget_day_min", "budget_day_max", "trip.budget_order"),
 )
-
-
+TripErrorCode = Literal[
+    "trip.null_not_allowed",
+    "trip.pair_required",
+    "trip.dates_order",
+    "trip.budget_order",
+    "trip.day_window_order",
+]
 _TEMPLATE = "{message}"  # pydantic fills it from the context
 
 
-def _error(field: str, message: str) -> InitErrorDetails:
+def _error(field: str, code: TripErrorCode, message: str) -> InitErrorDetails:
+    # The code goes in the error `type`: the global 422 handler strips `ctx`
+    # and `input`, but keeps `type`, so this is where a client can read it.
     return InitErrorDetails(
-        type=PydanticCustomError("value_error", _TEMPLATE, {"message": message}),
+        type=PydanticCustomError(code, _TEMPLATE, {"message": message}),
         loc=(field,),
         input=None,
     )
@@ -95,7 +95,8 @@ def _error(field: str, message: str) -> InitErrorDetails:
 def check_trip(trip: TripUpdate, *, complete: bool) -> None:
     """Check the cross-field rules of trip details.
 
-    Every error carries the offending field as ``loc``, in one shape.
+    Every error carries the offending field as ``loc`` and a stable code as
+    ``type`` (``trip.<code>``, see ``TripErrorCode``), in one shape.
 
     Args:
         trip: The payload (``complete=False``) or the merged trip state.
@@ -106,19 +107,31 @@ def check_trip(trip: TripUpdate, *, complete: bool) -> None:
         ValidationError: One error per broken rule, ``loc`` is ``(field,)``.
     """
     errors = [
-        _error(field, f"{field} cannot be null")
+        _error(field, "trip.null_not_allowed", f"{field} cannot be null")
         for field in _REQUIRED_WHEN_SENT
         if field in trip.model_fields_set and getattr(trip, field) is None
     ]
-    for lower, upper in _PAIRS:
+    for lower, upper, order_code in _PAIRS:
         lo, hi = getattr(trip, lower), getattr(trip, upper)
         if complete and (lo is None) != (hi is None):
             missing = lower if lo is None else upper
-            errors.append(_error(missing, f"{missing} is required with its pair"))
+            errors.append(
+                _error(
+                    missing,
+                    "trip.pair_required",
+                    f"{missing} is required with its pair",
+                )
+            )
         elif lo is not None and hi is not None and hi < lo:
-            errors.append(_error(upper, f"{upper} must not be before {lower}"))
+            errors.append(
+                _error(upper, order_code, f"{upper} must not be before {lower}")
+            )
     if trip.day_start and trip.day_end and trip.day_end <= trip.day_start:
-        errors.append(_error("day_end", "day_end must be after day_start"))
+        errors.append(
+            _error(
+                "day_end", "trip.day_window_order", "day_end must be after day_start"
+            )
+        )
     if errors:
         title = "TripUpdate"
         raise ValidationError.from_exception_data(title, errors)
@@ -129,6 +142,10 @@ class TripUpdate(BaseModel):
 
     The service checks the merged state with ``check_trip(complete=True)``, so
     a lone ``end_date`` is compared with the stored ``start_date``.
+
+    Rule violations answer 422 with `loc` `["body", field]` and a stable code
+    in `type` (`trip.dates_order`, `trip.pair_required`, `trip.budget_order`,
+    `trip.day_window_order`, `trip.null_not_allowed`).
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -151,6 +168,23 @@ class TripUpdate(BaseModel):
     @model_validator(mode="after")
     def _check(self) -> Self:
         check_trip(self, complete=False)
+        return self
+
+
+class TripCreate(TripUpdate):
+    """POST payload: a whole trip in one request.
+
+    Same fields as ``TripUpdate`` but ``name`` is required and the result must
+    pass ``check_trip(complete=True)``, so dates and budget ranges come in
+    pairs. Only ``name`` and ``destination`` are enough.
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+
+    @override
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        check_trip(self, complete=True)
         return self
 
 

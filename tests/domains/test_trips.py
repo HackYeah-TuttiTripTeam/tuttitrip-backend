@@ -254,3 +254,137 @@ def test_outsider_gets_404(
     name = {"get": "get_trip", "patch": "update_trip", "delete": "delete_trip"}
     response = detail_client.request(method, path(name[method], trip_id=TRIP), json={})
     assert response.status_code == 404
+
+
+FULL: dict[str, object] = {
+    "name": "Gdańsk",
+    "destination": "Gdańsk",
+    "start_date": "2026-11-01",
+    "end_date": "2026-11-03",
+    "day_start": "08:30:00",
+    "day_end": "20:00:00",
+    "city_slug": "gdansk",
+    "currency": "PLN",
+    "budget_total_min": "1000",
+    "budget_total_max": "1500.50",
+    "budget_day_min": "100",
+    "budget_day_max": "300",
+    "budget_flex_pct": 20,
+    "fairness_alpha": 2,
+}
+
+
+def _post_client(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncMock
+) -> tuple[TestClient, AsyncMock, AsyncMock]:
+    insert = AsyncMock(return_value=_trip())
+    host = AsyncMock()
+    monkeypatch.setattr(trip_service.db, "insert_trip", insert)
+    monkeypatch.setattr(profile_service, "create_host_profile", host)
+    app = create_app()
+    authorize(app, BOB)
+    app.dependency_overrides[get_session] = lambda: session
+    return TestClient(app), insert, host
+
+
+def test_post_creates_a_full_trip_in_one_request(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncMock
+) -> None:
+    client, insert, host = _post_client(monkeypatch, session)
+    response = client.post(path("create_trip"), json=FULL)
+    assert response.status_code == 201
+    fields = insert.call_args.kwargs["fields"]
+    assert fields["start_date"] == date(2026, 11, 1)
+    assert fields["day_start"] == time(8, 30)
+    assert fields["budget_total_max"] == Decimal("1500.50")
+    assert fields["budget_flex_pct"] == 20
+    assert fields["city_slug"] == "gdansk"
+    assert set(fields) == set(FULL)
+    host.assert_awaited_once()  # host profile in the same transaction
+    session.commit.assert_awaited_once()
+
+
+def test_post_with_only_name_and_destination_still_works(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncMock
+) -> None:
+    client, insert, _ = _post_client(monkeypatch, session)
+    body = {"name": "X", "destination": "Y"}
+    assert client.post(path("create_trip"), json=body).status_code == 201
+    assert insert.call_args.kwargs["fields"] == body
+    assert client.post(path("create_trip"), json={"name": "X"}).status_code == 201
+
+
+@pytest.mark.parametrize(
+    ("extra", "field", "code"),
+    [
+        (
+            {"start_date": "2026-11-05", "end_date": "2026-11-04"},
+            "end_date",
+            "dates_order",
+        ),
+        (
+            {"budget_total_min": "20", "budget_total_max": "10"},
+            "budget_total_max",
+            "budget_order",
+        ),
+        (
+            {"budget_day_min": "20", "budget_day_max": "10"},
+            "budget_day_max",
+            "budget_order",
+        ),
+        (
+            {"day_start": "19:00:00", "day_end": "09:00:00"},
+            "day_end",
+            "day_window_order",
+        ),
+        ({"start_date": "2026-11-05"}, "end_date", "pair_required"),
+        ({"end_date": "2026-11-05"}, "start_date", "pair_required"),
+        ({"budget_total_min": "5"}, "budget_total_max", "pair_required"),
+        ({"budget_day_max": "5"}, "budget_day_min", "pair_required"),
+        ({"day_start": None}, "day_start", "null_not_allowed"),
+    ],
+)
+def test_post_errors_have_the_field_and_a_stable_code(
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncMock,
+    extra: dict[str, object],
+    field: str,
+    code: str,
+) -> None:
+    client, insert, host = _post_client(monkeypatch, session)
+    response = client.post(path("create_trip"), json={"name": "X", **extra})
+    assert response.status_code == 422
+    (error,) = response.json()["detail"]
+    assert error["loc"] == ["body", field]
+    assert error["type"] == f"trip.{code}"  # survives the handler that strips ctx
+    assert set(error) == {"type", "loc", "msg"}
+    insert.assert_not_awaited()
+    host.assert_not_awaited()
+    session.commit.assert_not_awaited()
+
+
+def test_post_reports_all_broken_rules_at_once(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncMock
+) -> None:
+    client, _, _ = _post_client(monkeypatch, session)
+    body = {"name": "X", "start_date": "2026-11-05", "end_date": "2026-11-04"}
+    body |= {"day_start": "19:00:00", "day_end": "09:00:00"}
+    response = client.post(path("create_trip"), json=body)
+    types = {e["type"] for e in response.json()["detail"]}
+    assert types == {"trip.dates_order", "trip.day_window_order"}
+
+
+def test_patch_errors_carry_the_same_codes(
+    detail_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _as(monkeypatch, TripRole.HOST)
+    cases = [
+        ({"end_date": "2026-10-31"}, "trip.dates_order"),  # vs the stored start
+        ({"start_date": None}, "trip.pair_required"),  # stored end remains
+        ({"budget_total_min": "20", "budget_total_max": "10"}, "trip.budget_order"),
+        ({"day_start": None}, "trip.null_not_allowed"),
+    ]
+    for body, code in cases:
+        response = detail_client.patch(path("update_trip", trip_id=TRIP), json=body)
+        assert response.status_code == 422
+        assert response.json()["detail"][0]["type"] == code

@@ -54,13 +54,13 @@ async def create_trip(
     Args:
         session: Open session.
         owner_sub: Auth0 subject of the organizer.
-        data: Validated payload.
+        data: Validated payload (already checked with ``check_trip``).
 
     Returns:
         The created trip.
     """
     trip = await db.insert_trip(
-        session, owner_sub=owner_sub, name=data.name, destination=data.destination
+        session, owner_sub=owner_sub, fields=data.model_dump(exclude_unset=True)
     )
     await profile_service.create_host_profile(session, trip.id, owner_sub)
     await session.commit()
