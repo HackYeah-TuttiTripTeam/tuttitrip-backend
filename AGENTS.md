@@ -28,9 +28,9 @@ docker compose up --build                 # db + migrate + api in containers
 uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -m "not integration and not e2e"
 
 # Local only, before the PR is marked ready (CI does not run them; part of the smoke step).
-# Exit code 5 means "no such tests yet": today every test is a unit test (mocked services, SQL
+# Exit code 5 means "no such tests yet" (fine): today every test is a unit test (mocked services, SQL
 # rendered without a DB), so the set is empty.
-uv run pytest -m "integration or e2e"
+uv run pytest -m integration
 ```
 
 Test markers (registered in `pyproject.toml`, strict): `integration` for a test that needs a real
@@ -521,7 +521,7 @@ innym w drogę i żeby każda funkcja przeszła ten sam proces. Dotyczą też lu
    w podsumowaniu joba jedną linię "Preview disabled (PREVIEW_DEPLOYS=false); add label `preview` to deploy".
    CI sprawdza tylko lint, typy, testy jednostkowe i architektury (`pytest -m "not integration and not e2e"`).
    Testy z markerami `integration` i `e2e` nie chodzą na CI, więc przed oznaczeniem PR jako gotowego
-   uruchom lokalnie `uv run pytest` (cały zestaw, albo osobno `uv run pytest -m "integration or e2e"`)
+   uruchom lokalnie `uv run pytest` (cały zestaw, albo osobno `uv run pytest -m integration`)
    i wpisz wynik w komentarzu ze smoke testem.
    Przejdź scenariusz z kryteriów akceptacji issue:
    - lokalnie: lokalny stos (`docker compose`, albo `uv run` na lokalnym PostgreSQL; README), Swagger pod
@@ -579,7 +579,7 @@ Zgłoszenia (issues):
 
   ### Definition of Done
   - [ ] CI zielone (lint, typy, testy jednostkowe, testy architektury)
-  - [ ] Lokalnie przeszły testy integracyjne i smoke test (`uv run pytest -m "integration or e2e"`)
+  - [ ] Lokalnie przeszły testy integracyjne i smoke test (`uv run pytest -m integration`)
   - [ ] PR zmergowany do `develop` i sprawdzony na wdrożeniu develop
 
   ### Obszar

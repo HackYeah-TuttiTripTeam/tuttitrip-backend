@@ -90,7 +90,7 @@ docker compose up --build
 
 ```bash
 uv run pytest -m "not integration and not e2e"  # testy jednostkowe i architektury, to samo robi CI
-uv run pytest -m "integration or e2e"            # lokalnie przed PR (CI ich nie uruchamia; dziś brak takich testów)
+uv run pytest -m integration            # lokalnie przed PR; dziś brak takich testów, więc kod wyjścia 5 ("nic nie wybrano") to nie błąd
 uv run pytest                                    # wszystko
 uv run ruff check .           # lint (uv run ruff check --fix . poprawia, co się da)
 uv run ruff format .          # formatowanie
