@@ -531,7 +531,7 @@ def test_a_switched_off_demo_answers_disabled_and_touches_nothing(
     spy = ResetSpy(monkeypatch)
     response = _reset(TestClient(create_app()))
     assert response.status_code == 200
-    assert response.json() == {"status": "disabled", "trips": 0}
+    assert response.json() == {"status": "disabled"}
     assert spy.subs == []
     assert stub.requests == []
 
@@ -563,8 +563,27 @@ def test_the_gateway_never_forwards_internal_paths() -> None:
 def test_the_deploy_gives_api_and_worker_the_same_generated_secret() -> None:
     deploy = (ROOT / "deploy/deploy.sh").read_text()
     assert "WORKER_DB_PASSWORD DEMO_RESET_SECRET; do" in deploy
-    line = "printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\\n' \"$DEMO_RESET_SECRET\""
+    line = "printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\\n' \"$demo_reset_secret\""
     assert deploy.count(line) == 2  # the API env file and the worker env file
+
+
+@pytest.mark.parametrize("secret", ["short", "x" * 23])
+def test_a_short_reset_secret_fails_at_startup(secret: str) -> None:
+    with pytest.raises(ValueError, match="at least 24"):
+        _demo(reset_secret=secret)
+
+
+def test_an_empty_or_long_reset_secret_is_accepted() -> None:
+    assert not _demo(reset_secret="").reset_secret.get_secret_value()
+    assert _demo(reset_secret="x" * 24)
+
+
+def test_the_deploy_derives_the_secret_per_environment() -> None:
+    deploy = (ROOT / "deploy/deploy.sh").read_text()
+    assert '\'%s:%s\' "$DEMO_RESET_SECRET" "$env" | sha256sum' in deploy
+    assert (
+        '=%s\\n\' "$DEMO_RESET_SECRET"' not in deploy
+    )  # the raw secret is never written
 
 
 def test_the_secret_comparison_is_exact_and_empty_never_matches() -> None:

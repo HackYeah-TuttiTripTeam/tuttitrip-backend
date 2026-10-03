@@ -471,11 +471,11 @@ adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login
 - Endpoint wewnętrzny: `public()` (na liście `PUBLIC_ENDPOINTS` jako `reset_demo`), poza
   OpenAPI, chroniony sekretem `Authorization: Bearer $TUTTITRIP_DEMO__RESET_SECRET`; zły,
   brakujący i nieustawiony sekret to to samo `404`. Gdy demo jest wyłączone (pusty
-  `TOKEN_SHA256`), odpowiada `{"status": "disabled"}` i niczego nie rusza. Gateway
+  `TOKEN_SHA256`), odpowiada dokładnie `{"status": "disabled"}` i niczego nie rusza. Gateway
   (`deploy/gateway/nginx.conf`) zwraca `404` dla `/api/v1/internal/`, a worker woła
   kontener API bezpośrednio w sieci Docker (`http://tuttitrip-api[-<env>]:8000`).
   `deploy.sh` generuje sekret raz (`DEMO_RESET_SECRET` w `~/tuttitrip/deploy.env`) i
-  zapisuje go do obu plików env (API i workera); wpis w `app.env` ma pierwszeństwo.
+  zapisuje do obu plików env (API i workera) jako `sha256("<sekret>:<env>")`, osobny dla każdego środowiska; wpis w `app.env` ma pierwszeństwo. Sekret ma co najmniej 24 znaki (walidator). Działający worker czyta env przy tworzeniu kontenera, więc po pierwszym wdrożeniu backendu trzeba go odtworzyć.
 - Wszyscy jurorzy dzielą jedno konto: zmiany jednego widzą inni do następnego resetu.
 
 ## Design system

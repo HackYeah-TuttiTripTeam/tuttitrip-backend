@@ -162,7 +162,9 @@ def _bearer(request: Request) -> str:
     return value if scheme.lower() == "bearer" else ""
 
 
-@internal_router.post("/reset", include_in_schema=False)
+@internal_router.post(
+    "/reset", include_in_schema=False, response_model_exclude_unset=True
+)
 async def reset_demo(
     request: Request,
     response: Response,

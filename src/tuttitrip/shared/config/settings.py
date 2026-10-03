@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "TUTTITRIP_"
 ENV_NESTED_DELIMITER = "__"
+MIN_RESET_SECRET_CHARS = 24
 
 
 class DatabaseSettings(BaseModel):
@@ -111,6 +112,15 @@ class DemoSettings(BaseModel):
         value = value.strip().lower()
         if value and not re.fullmatch(r"[0-9a-f]{64}", value):
             msg = "must be a 64-character hex SHA-256 digest (or empty)"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("reset_secret")
+    @classmethod
+    def _secret_is_empty_or_long(cls, value: SecretStr) -> SecretStr:
+        secret = value.get_secret_value()
+        if secret and len(secret) < MIN_RESET_SECRET_CHARS:
+            msg = f"must be empty or at least {MIN_RESET_SECRET_CHARS} characters"
             raise ValueError(msg)
         return value
 

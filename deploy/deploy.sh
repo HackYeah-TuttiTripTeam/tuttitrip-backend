@@ -97,6 +97,9 @@ tt_log "built $image"
 # Env files shared with the worker repo (deploy/CONVENTIONS.md), mode 600.
 envfile="$TT_STATE_DIR/envs/$env.env"
 workerenv="$TT_STATE_DIR/envs/$env.worker.env"
+# Per-environment secret: a preview container running branch code never holds
+# the secret of main (or any other env).
+demo_reset_secret=$(printf '%s:%s' "$DEMO_RESET_SECRET" "$env" | sha256sum | cut -d' ' -f1)
 db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$database"; }
 {
   printf 'TUTTITRIP_ENVIRONMENT=%s\n' "$env"
@@ -104,7 +107,7 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'TUTTITRIP_DATABASE__USER=tuttitrip\nTUTTITRIP_DATABASE__PASSWORD=%s\n' "$POSTGRES_PASSWORD"
   printf 'TUTTITRIP_DATABASE__NAME=%s\n' "$database"
   printf 'TUTTITRIP_DBOS__APPLICATION_VERSION=%s\n' "$env"
-  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$DEMO_RESET_SECRET"
+  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$demo_reset_secret"
   for var in TUTTITRIP_AUTH0__DOMAIN TUTTITRIP_AUTH0__AUDIENCE TUTTITRIP_CORS_ORIGINS \
     TUTTITRIP_CORS_ORIGIN_REGEX; do
     if [ -n "${!var:-}" ]; then printf '%s=%s\n' "$var" "${!var}"; fi
@@ -121,7 +124,7 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'DBOS_SYSTEM_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
   printf 'TUTTITRIP_WORKER_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
   printf 'DBOS__APPVERSION=%s\n' "$env"
-  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$DEMO_RESET_SECRET"
+  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$demo_reset_secret"
   if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
 } >"$workerenv"
 

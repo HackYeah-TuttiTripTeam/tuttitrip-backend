@@ -94,8 +94,13 @@ The backend never executes workflows. The worker never runs DDL and talks to
 Postgres only, with one exception: the daily demo reset (`reset_demo_account`,
 04:00 Europe/Warsaw) POSTs `/api/v1/internal/demo/reset` to the API container
 on the `tuttitrip` network (`tuttitrip-api[-<env>]:8000`), with the bearer
-secret `TUTTITRIP_DEMO__RESET_SECRET` that the deploy generates into both env
-files. The reset logic stays in the backend; the gateway answers 404 for
+secret `TUTTITRIP_DEMO__RESET_SECRET` that the deploy writes into both env
+files (derived per environment: `sha256("<generated>:<env>")`, at least 24
+characters). The worker gets it only after a backend deploy of that env wrote
+`envs/<env>.worker.env`, and env files are read when a container is created, so
+an already running worker must be recreated (a worker deploy, or remove the
+container and redeploy the backend) to pick it up; until then it skips the reset
+(a worker outside `local` fails the scheduled run loudly). The reset logic stays in the backend; the gateway answers 404 for
 `/api/v1/internal/`, so the endpoint is not public.
 
 ### Database access
