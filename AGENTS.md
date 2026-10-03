@@ -253,12 +253,16 @@ Wydania:
   until the org upgrades. Then apply it with the API call in the README.
 - Branch from `develop`: `feature/<short-name>`, `fix/<short-name>`,
   `chore/<short-name>`. PR into `develop`; release = PR `develop` -> `main`.
-- Delete the feature branch after merging its PR (GitHub's merge button
-  offers it); its preview deployment is removed with it. Automatic deletion
-  of head branches is off: without branch protection it would also delete
-  `develop` when a release PR (`develop` -> `main`) is merged. If `develop`
-  disappears anyway, recreate it at the release PR's head commit; deploy
-  cleanup refuses to run while `main` or `develop` is missing.
+- After a merge the `Delete merged branch` workflow
+  (`.github/workflows/delete-merged-branch.yml`, logic in the org `.github`
+  repo) deletes the head branch and starts `cleanup.yml`, which removes its
+  preview deployment. It never deletes `main` or `develop` (nor forks, PRs
+  closed without a merge or branches that are the base of another open PR),
+  so release PRs go straight from `develop`. GitHub's "Automatically delete
+  head branches" stays off: without branch protection it would also delete
+  `develop` when a release PR is merged. If `develop` disappears anyway,
+  recreate it at the release PR's head commit; deploy cleanup refuses to run
+  while `main` or `develop` is missing.
 - No AI attribution in commits, PRs or docs (no `Co-Authored-By` trailers
   for assistants, no "generated with" lines).
 
