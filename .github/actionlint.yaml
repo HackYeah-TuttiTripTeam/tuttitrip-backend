@@ -1,0 +1,3 @@
+self-hosted-runner:
+  # Org runners (LXD VMs) and the deploy runner on dellpromaxgb10.
+  labels: [hackathon, tuttitrip-deploy]

@@ -1,0 +1,58 @@
+# Local development: PostgreSQL + one-off migrations + the API.
+#   docker compose up --build        # everything, API on http://localhost:8000
+#   docker compose up -d db          # only Postgres (run uvicorn on the host)
+# Settings come from .env (optional) and are overridden below where the
+# container network differs from the host.
+name: tuttitrip
+
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    TUTTITRIP_DATABASE__HOST: db
+    TUTTITRIP_DATABASE__PORT: "5432"
+    TUTTITRIP_DATABASE__USER: tuttitrip
+    TUTTITRIP_DATABASE__PASSWORD: tuttitrip
+    TUTTITRIP_DATABASE__NAME: tuttitrip
+
+services:
+  db:
+    # Same image as the deployed database: PostgreSQL 18 + pgvector.
+    image: pgvector/pgvector:0.8.7-pg18-trixie
+    environment:
+      POSTGRES_USER: tuttitrip
+      POSTGRES_PASSWORD: tuttitrip
+      POSTGRES_DB: tuttitrip
+    ports:
+      # Same variable the app uses, so a busy 5432 is fixed in one place.
+      - "127.0.0.1:${TUTTITRIP_DATABASE__PORT:-5432}:5432"
+    volumes:
+      # Postgres 18+ images keep PGDATA under /var/lib/postgresql/18/docker.
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tuttitrip -d tuttitrip"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Migrations run once, before the API starts (never inside the API process).
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    <<: *app
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

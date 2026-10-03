@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: checks
+    runs-on: [self-hosted, hackathon]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked
+      - name: Ruff lint
+        run: uv run ruff check --output-format=github .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Types (ty)
+        run: uv run ty check
+      - name: Tests
+        run: uv run pytest
+
+  deploy:
+    name: deploy
+    needs: checks
+    if: github.event_name == 'push'
+    # Runner installed on the deploy host itself (dellpromaxgb10).
+    runs-on: [self-hosted, tuttitrip-deploy]
+    timeout-minutes: 20
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_TUNNEL_ID: ${{ vars.CLOUDFLARE_TUNNEL_ID }}
+      CLOUDFLARE_ZONE_ID: ${{ vars.CLOUDFLARE_ZONE_ID }}
+      TUTTITRIP_AUTH0__DOMAIN: ${{ vars.AUTH0_DOMAIN }}
+      TUTTITRIP_AUTH0__AUDIENCE: ${{ vars.AUTH0_AUDIENCE }}
+      TUTTITRIP_CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
+      TUTTITRIP_CORS_ORIGIN_REGEX: ${{ vars.CORS_ORIGIN_REGEX }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Deploy and clean up stale branches
+        run: deploy/deploy.sh "${GITHUB_REF_NAME}" "${GITHUB_SHA}"
+      - name: Public health check
+        run: |
+          . deploy/lib.sh
+          url="https://$(tt_hostname "$(tt_env "${GITHUB_REF_NAME}")")/health"
+          for _ in $(seq 30); do
+            if curl -fsS "$url"; then echo; echo "OK: $url"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::$url did not become healthy"; exit 1

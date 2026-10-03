@@ -1,0 +1,171 @@
+# AGENTS.md
+
+Canonical instructions for anyone (human or agent) changing this repository.
+`CLAUDE.md` imports this file. The user-facing docs are in `README.md` (Polish).
+
+## What this is
+
+TuttiTrip (working name WARTO) is the backend of a group/family trip planner
+built at HackYeah 2026. FastAPI + Pydantic + Pydantic AI on Python 3.14, async
+SQLAlchemy 2 on PostgreSQL, Auth0 for login. The web client consumes the
+OpenAPI schema (`/openapi.json`) through a generated TypeScript client.
+
+The product rule that shapes the code: deterministic logic (fairness solver,
+plan linter, pricing, settlement) never depends on FastAPI, Pydantic AI or the
+database. LLM agents only draft; pure code decides. Tests enforce this.
+
+## Commands
+
+```bash
+uv sync                                   # install (incl. dev group)
+cp .env.example .env                      # local settings
+docker compose up -d db                   # Postgres only
+uv run alembic upgrade head               # migrate
+uv run uvicorn tuttitrip.main:app --reload
+docker compose up --build                 # db + migrate + api in containers
+
+# Must all pass before every commit (CI runs the same):
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
+```
+
+## Layout: vertical slices
+
+```text
+src/tuttitrip/
+  main.py              composition root: create_app(), ROUTERS, lifespan
+  shared/              shared kernel, imports no feature domain
+    config/            Settings (pydantic-settings)
+    db/                Base, async engine/sessions, SessionDep (db/api.py)
+    auth/              Auth0 JWT verification, CurrentUser, GET /me
+    health/            GET /health (DB), GET /health/live
+  trips/               reference slice: api -> services -> db -> models
+  profiles/            people on a trip (weights, age groups)
+  interview/           AI interview agent (AG-UI endpoint goes here)
+  planning/            planner agent; subdomains fairness/ and linter/
+  accommodation/       requirements contract (met/unmet/unconfirmed)
+  expenses/            expenses; subdomain settlement/
+migrations/            Alembic (async); versions/ holds revisions
+deploy/                host deployment scripts (bash), gateway config
+tests/architecture/    structure + dependency rules (pytest-archon)
+```
+
+### Files in a domain or subdomain
+
+| File / package | Required | Contents |
+| --- | --- | --- |
+| `__init__.py` | yes | Docstring only. **No imports** (test-enforced). |
+| `api.py` | yes | `router = APIRouter(...)`; the only place for `fastapi`. |
+| `schemas.py` | yes | Pydantic DTOs. Pure: no fastapi/sqlalchemy/pydantic_ai. |
+| `services/` | yes | `__init__.py` + one module per service; orchestration, agents. |
+| `models.py` | if it persists | SQLAlchemy ORM models on `shared.db.base.Base`. |
+| `db.py` | iff `models.py` | Queries for this domain's tables only. |
+| `logic/` | optional | Pure logic (solver, rules, math). See below. |
+| `<subdomain>/` | optional | Same layout, nested. |
+
+Anything else in a domain directory fails `test_domain_contains_only_known_files`.
+Create a subdomain when a part has its own API, schemas and logic. Keep it in
+the parent when it shares everything else with it.
+
+`shared/<sub>/` is lighter: only `__init__.py` is required. The `db.py` iff
+`models.py` rule still applies, and `fastapi` is still only allowed in `api.py`.
+
+### Dependency rules (tests/architecture)
+
+1. `shared` never imports a feature domain (transitive).
+2. A feature domain may import another domain **only** through its `services`
+   or `schemas` (direct imports checked; that domain's own services may use
+   their own db). Subdomains belong to their top-level domain.
+3. Only `api.py` modules (and `tuttitrip.main`) import `fastapi`/`starlette`.
+4. Only `services` import `pydantic_ai`.
+5. Only `models.py`, `db.py`, `services` and `shared.db` import `sqlalchemy`.
+6. **Pure modules** = every module in a `logic/` package plus every
+   `schemas.py`. They must not reach `fastapi`, `starlette`, `pydantic_ai`,
+   `sqlalchemy`, `asyncpg` or `httpx`, even transitively. `logic` also must not
+   reach `api`, `db`, `models`, `services`, `shared.db/config/auth` or `main`.
+7. Every router in an `api.py` is registered in `tuttitrip.main.ROUTERS`.
+
+pytest-archon notes (checked in its source): `should_not_import` is transitive
+by default, `only_direct_imports=True` limits it, imports in functions and
+`TYPE_CHECKING` blocks count, parent `__init__.py` execution is not modelled
+(hence import-free `__init__.py`), and a rule matching nothing fails.
+`tests/architecture/test_archon_semantics.py` pins this behaviour.
+
+Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
+
+## Conventions
+
+- Ruff `select = ["ALL"]` with preview. Google docstrings on every public
+  module, class and function, `Args:` when there are parameters and
+  `Returns:`/`Yields:` when something comes back. Ignores live in
+  `pyproject.toml` with a reason. Fix code instead of suppressing; if you
+  must suppress, use a single-line `# ruff: ignore[rule-name]` with a reason.
+- ty runs in strict mode (`all = "error"`). Only `models.py` relaxes
+  `unsound-assignment` (SQLAlchemy `Mapped[...]` idiom).
+- Tests never call real LLMs (`models.ALLOW_MODEL_REQUESTS = False` in
+  `tests/conftest.py`); use `agent.override(model=TestModel(...))`.
+- Domain tests go in `tests/domains/`, shared infrastructure in `tests/shared/`.
+- Services raise domain exceptions; `api.py` maps them to HTTP errors.
+
+## Settings and secrets
+
+- All settings live in `shared/config/settings.py`: prefix `TUTTITRIP_`,
+  nested delimiter `__` (e.g. `TUTTITRIP_DATABASE__HOST`).
+- `.env.example` must list exactly the Settings fields, with comments
+  (`tests/test_settings.py`). Adding a field means adding the line there.
+- CORS: `TUTTITRIP_CORS_ORIGINS` (exact, default `http://localhost:5173`) plus
+  `TUTTITRIP_CORS_ORIGIN_REGEX` (default: `tuttitrip.gburek.app` and
+  `tuttitrip-develop.gburek.app`). Deploys can widen the regex through the
+  `CORS_ORIGIN_REGEX` repo variable (Workers previews of `tuttitrip-frontend`).
+- Auth0: tenant `dev-yahwm2zlut2gqdry.us.auth0.com`, API audience
+  `https://tuttitrip-api.gburek.app`, SPA application "TuttiTrip Web". The API
+  validates RS256 access tokens (JWKS, issuer, audience, exp).
+- Provider API keys (e.g. `OPENAI_API_KEY`) are read by Pydantic AI under
+  their own names and are not Settings fields.
+- Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions
+  secrets/variables; host-only secrets live in `~/tuttitrip/*.env` on the host.
+
+## Database and migrations
+
+- PostgreSQL 18 with pgvector 0.8.7 (`pgvector/pgvector:0.8.7-pg18-trixie`,
+  same image locally and on the host); the `vector` extension is enabled by a
+  migration.
+- Async SQLAlchemy 2 + asyncpg; sessions via `SessionDep`; services commit.
+- `uv run alembic revision --autogenerate -m "..."` (models are discovered
+  automatically), review the file, then `uv run alembic upgrade head`.
+- The app never migrates on startup. A one-off `alembic upgrade head` runs
+  before the new container starts (compose `migrate` service, `deploy/deploy.sh`).
+
+## Git flow
+
+- `main` is production; `develop` is integration. Both are protected
+  (PR + green `checks`, no force-push, no deletion).
+- Branch from `develop`: `feature/<short-name>`, `fix/<short-name>`,
+  `chore/<short-name>`. PR into `develop`; release = PR `develop` -> `main`.
+- Head branches are deleted automatically after merge.
+- No AI attribution in commits, PRs or docs (no `Co-Authored-By` trailers
+  for assistants, no "generated with" lines).
+
+## Deployment
+
+`/openapi.json` and `/docs` are public on every deployment (the frontend
+generates its client from them). Every push runs CI (`checks` on the org runners `[self-hosted, hackathon]`),
+then `deploy` on the runner installed on the host (`[self-hosted, tuttitrip-deploy]`).
+
+| Branch | URL | Database |
+| --- | --- | --- |
+| `main` | https://tuttitrip-api.gburek.app | `tuttitrip_main` (kept) |
+| `develop` | https://tuttitrip-api-develop.gburek.app | `tuttitrip_develop` (kept) |
+| any other | https://tuttitrip-api-<slug>.gburek.app | `tuttitrip_br_<slug>` (dropped with the branch) |
+
+Slug: lowercase, every run of non-alphanumerics becomes `-`, trimmed, label
+capped at 63 chars (`feature/cos tam` -> `tuttitrip-api-feature-cos-tam`).
+Naming lives in `deploy/lib.sh` and is tested in `tests/test_deploy_naming.py`.
+
+On the host, everything is namespaced: Docker network `tuttitrip`, containers
+`tuttitrip-postgres` (pgvector image, volume `tuttitrip-postgres-data`), `tuttitrip-gateway` (nginx on `172.17.0.1:18080`, routes
+by Host header) and `tuttitrip-api[-<slug>]`, label `tuttitrip.managed=true`.
+The shared Cloudflare tunnel is remotely managed: deploy inserts our hostname
+before the wildcard rule via the API (backups in `~/tuttitrip/backups/`).
+Cleanup (every deploy + on branch deletion) removes containers, images,
+feature databases and ingress for branches that no longer exist. Never touch
+host resources outside this namespace.
