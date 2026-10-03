@@ -1,8 +1,12 @@
 """Linter DTOs."""
 
+from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
+from typing import Annotated
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 class PlanItem(BaseModel):
@@ -30,3 +34,38 @@ class LintReport(BaseModel):
     """All violations found in a plan."""
 
     violations: list[Violation]
+
+
+MAX_DOCUMENT_CHARS = 20_000
+
+
+class DocumentKind(StrEnum):
+    """What a pasted text is: a plan from another tool or a lodging offer."""
+
+    PLAN = "plan"
+    OFFER = "offer"
+
+
+class DocumentCreate(BaseModel):
+    """Text pasted by the host (stored as typed, deleted with the trip)."""
+
+    kind: DocumentKind
+    text: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, min_length=1, max_length=MAX_DOCUMENT_CHARS
+        ),
+    ]
+
+
+class DocumentRead(BaseModel):
+    """A stored pasted text; the worker reads it by ``id``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    trip_id: UUID
+    kind: DocumentKind
+    text: str
+    created_by: str
+    created_at: datetime

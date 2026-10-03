@@ -2,13 +2,17 @@
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
+from dbos import WorkflowStatus
 from fastapi.testclient import TestClient
 
 from tests.shared.fakes import FakeJobQueue, authorize
@@ -26,7 +30,11 @@ from tuttitrip.shared.jobs.contracts import (
 )
 from tuttitrip.shared.jobs.models import WorkerHeartbeat
 from tuttitrip.shared.jobs.services import worker_liveness
-from tuttitrip.shared.jobs.services.job_queue import TIMEOUT_SECONDS, workflow_id_for
+from tuttitrip.shared.jobs.services.job_queue import (
+    TIMEOUT_SECONDS,
+    job_state,
+    workflow_id_for,
+)
 from tuttitrip.shared.jobs.services.worker_liveness import (
     WorkerUnavailableError,
     get_worker_liveness,
@@ -209,3 +217,90 @@ def test_local_provider_goes_to_the_local_llm_queue(
 
 def test_every_workflow_has_a_timeout() -> None:
     assert set(TIMEOUT_SECONDS) == set(Workflow)
+
+
+# --- mirrored workflows ----------------------------------------------------
+
+
+def test_mirror_has_the_same_workflows_as_the_worker() -> None:
+    assert {w.value for w in Workflow} >= {
+        "parse_pasted_plan",
+        "extract_offer_evidence",
+        "fetch_place_candidates",
+        "write_justifications",
+    }
+    for workflow in Workflow:
+        assert workflow in contracts.WORKFLOWS
+
+
+def test_pasted_text_travels_by_id_not_in_the_payload() -> None:
+    assert "text" not in contracts.ParsePastedPlanInput.model_fields
+    assert "document_id" in contracts.ExtractOfferEvidenceInput.model_fields
+
+
+def test_fetch_place_candidates_needs_exactly_one_city() -> None:
+    contracts.FetchPlaceCandidatesInput(city_query="Gdańsk")
+    contracts.FetchPlaceCandidatesInput(city_slug="gdansk")
+    with pytest.raises(ValueError, match="exactly one"):
+        contracts.FetchPlaceCandidatesInput()
+    with pytest.raises(ValueError, match="exactly one"):
+        contracts.FetchPlaceCandidatesInput(city_query="a", city_slug="a")
+
+
+def test_offer_requirements_must_be_unique_known_keys() -> None:
+    trip, document = uuid.uuid4(), uuid.uuid4()
+    with pytest.raises(ValueError, match="unique"):
+        contracts.ExtractOfferEvidenceInput(
+            trip_id=trip, document_id=document, requirement_keys=["a", "a"]
+        )
+    with pytest.raises(ValueError, match="requirement_keys"):
+        contracts.ExtractOfferEvidenceInput(
+            trip_id=trip,
+            document_id=document,
+            requirement_keys=["a"],
+            requirements=[contracts.RequirementLabel(key="b", label="B")],
+        )
+
+
+@pytest.mark.parametrize(
+    ("name", "slug"),
+    [
+        ("Gdańsk", "gdansk"),
+        ("Gdańsk, Polska", "gdansk-polska"),
+        ("Łódź", "lodz"),
+        ("  Kraków  --  Stare Miasto ", "krakow-stare-miasto"),
+        ("São Paulo", "sao-paulo"),
+    ],
+)
+def test_city_slug_follows_the_worker_rule(name: str, slug: str) -> None:
+    assert contracts.city_slug(name) == slug
+    assert re.fullmatch(contracts.SLUG_PATTERN, slug)
+
+
+class _WorkerError(Exception):
+    """Stands in for DBOS's ``PortableWorkflowError`` (message and ``code``)."""
+
+    def __init__(self, message: str, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@pytest.mark.parametrize(
+    ("code", "message"),
+    [
+        ("not_implemented", "Jeszcze niedostępne"),
+        ("invalid_payload", "invalid ParsePastedPlanInput"),
+    ],
+)
+def test_worker_error_codes_reach_the_job_state(code: str, message: str) -> None:
+    status = SimpleNamespace(
+        workflow_id="w1",
+        name="parse_pasted_plan",
+        status="ERROR",
+        authenticated_user="auth0|alice",
+        output=None,
+        error=_WorkerError("invalid ParsePastedPlanInput", code),
+    )
+    state = job_state(cast("WorkflowStatus", status), None)
+    assert state.error_code == code
+    assert state.error == message

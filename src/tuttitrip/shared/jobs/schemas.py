@@ -20,6 +20,10 @@ class JobState(BaseModel):
     ``status`` is DBOS's: ENQUEUED, DELAYED, PENDING, SUCCESS, ERROR,
     CANCELLED or MAX_RECOVERY_ATTEMPTS_EXCEEDED. Contract-version rejections
     by the worker show up as ERROR with the worker's message in ``error``.
+    ``error_code`` is the worker's machine code (``invalid_payload``,
+    ``unsupported_contract_version`` or ``not_implemented``); a job that fails
+    with ``not_implemented`` is not retried and ``error`` says it is not
+    available yet.
     """
 
     workflow_id: str
@@ -28,6 +32,7 @@ class JobState(BaseModel):
     owner: str | None = None
     output: dict[str, Any] | None = None
     error: str | None = None
+    error_code: str | None = None
     progress: Progress | None = None
 
 
