@@ -52,36 +52,35 @@ async def select_version(session: AsyncSession, trip_id: UUID) -> int:
 
 
 async def replace_requirements(
-    session: AsyncSession,
-    trip_id: UUID,
-    rows: Sequence[AccommodationRequirement],
-    *,
-    bump: bool,
-) -> int:
-    """Replace all requirements of a trip, bumping the version when asked.
+    session: AsyncSession, trip_id: UUID, rows: Sequence[AccommodationRequirement]
+) -> None:
+    """Replace all requirements of a trip.
 
     Args:
         session: Open session (caller commits).
         trip_id: Trip id.
         rows: New requirements (``trip_id`` already set).
-        bump: Increment the version (a real change).
-
-    Returns:
-        The version after the call.
     """
-    if bump:
-        await session.execute(
-            delete(AccommodationRequirement).where(
-                AccommodationRequirement.trip_id == trip_id
-            )
+    await session.execute(
+        delete(AccommodationRequirement).where(
+            AccommodationRequirement.trip_id == trip_id
         )
-        session.add_all(rows)
-        upsert = insert(RequirementsVersion).values(trip_id=trip_id, version=1)
-        await session.execute(
-            upsert.on_conflict_do_update(
-                index_elements=[RequirementsVersion.trip_id],
-                set_={"version": RequirementsVersion.version + 1},
-            )
+    )
+    session.add_all(rows)
+    await session.flush()
+
+
+async def bump_version(session: AsyncSession, trip_id: UUID) -> None:
+    """Increment the requirements version (creating it at 1).
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+    """
+    upsert = insert(RequirementsVersion).values(trip_id=trip_id, version=1)
+    await session.execute(
+        upsert.on_conflict_do_update(
+            index_elements=[RequirementsVersion.trip_id],
+            set_={"version": RequirementsVersion.version + 1},
         )
-        await session.flush()
-    return await select_version(session, trip_id)
+    )

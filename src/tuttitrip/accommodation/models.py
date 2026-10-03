@@ -3,11 +3,9 @@
 import uuid
 
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     CheckConstraint,
     ForeignKey,
-    SmallInteger,
     String,
     UniqueConstraint,
     text,
@@ -31,7 +29,6 @@ class AccommodationRequirement(Base):
             "(kind = 'distance') = (max_distance_m IS NOT NULL)", name="distance"
         ),
         CheckConstraint("max_distance_m > 0", name="max_distance_positive"),
-        CheckConstraint("0 < ALL(nights)", name="nights_positive"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -41,10 +38,6 @@ class AccommodationRequirement(Base):
     kind: Mapped[RequirementKind] = mapped_column(String(16))
     key: Mapped[str] = mapped_column(String(64))
     hard: Mapped[bool] = mapped_column(Boolean)
-    # 1-based nights; empty means every night.
-    nights: Mapped[list[int]] = mapped_column(
-        ARRAY(SmallInteger), server_default=text("'{}'")
-    )
     max_distance_m: Mapped[int | None] = mapped_column()
 
 
