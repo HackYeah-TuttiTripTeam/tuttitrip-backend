@@ -37,6 +37,7 @@ Domeny **aktywne**: `nocleg` tylko gdy są noclegi. Pula jest renormalizowana do
 
 ### E0. Ograniczenia twarde (nigdy nie łagodzone)
 weto · „must" · godziny otwarcia i okno dnia · budżet `c(P) ≤ B_max` · dzienny dystans `≤ 1,5·Dᵢ` dla każdego · miejsce odrzucone, gdy `schodyₚ·wrażliwośćᵢ ≥ 0,9` albo odcinek `> 1,5·sᵢ`.
+Ograniczenia „schody” i „wózek” z preferencji osoby dają `wrażliwośćᵢ = 1` (liczone przy odczycie, `effective_stairs_sensitivity`), a „wózek” solver czyta wprost jako twarde wykluczenie miejsc ze `schodyₚ > 0` (decyzja dla #45).
 
 ### E1. Użyteczność miejsca (bez kosztu)
 ```

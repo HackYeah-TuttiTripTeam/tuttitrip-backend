@@ -1,5 +1,6 @@
 """Read the place catalog."""
 
+from collections.abc import Collection
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,3 +73,19 @@ async def get_place(session: AsyncSession, place_id: UUID) -> PlaceRead:
     if place is None:
         raise PlaceNotFoundError(str(place_id))
     return PlaceRead.model_validate(place)
+
+
+async def get_places(
+    session: AsyncSession, place_ids: Collection[UUID]
+) -> dict[UUID, PlaceRead]:
+    """Fetch several places with one query.
+
+    Args:
+        session: Open session.
+        place_ids: Place ids.
+
+    Returns:
+        The existing places by id; unknown ids are absent.
+    """
+    places = await db.select_places_by_ids(session, set(place_ids))
+    return {place.id: PlaceRead.model_validate(place) for place in places}

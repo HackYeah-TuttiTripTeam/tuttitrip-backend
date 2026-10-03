@@ -1,6 +1,6 @@
 """Place catalog queries on PostgreSQL."""
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
@@ -68,3 +68,23 @@ async def select_place(session: AsyncSession, place_id: UUID) -> Place | None:
     return await session.scalar(
         select(Place).where(Place.id == place_id).options(selectinload(Place.prices))
     )
+
+
+async def select_places_by_ids(
+    session: AsyncSession, place_ids: Collection[UUID]
+) -> Sequence[Place]:
+    """Fetch several places with one query.
+
+    Args:
+        session: Open session.
+        place_ids: Place ids.
+
+    Returns:
+        The places that exist (unknown ids are simply missing).
+    """
+    if not place_ids:
+        return ()
+    query = (
+        select(Place).where(Place.id.in_(place_ids)).options(selectinload(Place.prices))
+    )
+    return (await session.scalars(query)).all()

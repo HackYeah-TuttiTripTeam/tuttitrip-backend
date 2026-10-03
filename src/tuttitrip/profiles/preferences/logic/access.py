@@ -1,24 +1,28 @@
-"""How the access constraints move the stairs sensitivity of a profile."""
+"""The stairs sensitivity the solver uses, computed from the constraints."""
+
+from tuttitrip.profiles.preferences.schemas import Constraints
 
 BLOCKED = 1.0
 
 
-def stairs_sensitivity(*, blocked: bool, current: float, age_default: float) -> float:
-    """Stairs sensitivity after the "stairs" or "wheelchair" constraint changed.
+def effective_stairs_sensitivity(
+    constraints: Constraints, profile_sensitivity: float
+) -> float:
+    """Stairs sensitivity after the access constraints.
 
-    A set constraint makes every place with stairs unusable (the spec rejects a
-    place at ``stairs * sensitivity >= 0.9``). Clearing it gives back the age
-    default, but only when the value is still the one the constraint set, so a
-    sensitivity the host tuned by hand survives.
+    Stairs or a wheelchair make every place with stairs unusable (the spec
+    rejects a place at ``stairs * sensitivity >= 0.9``). Nothing is written to
+    the profile, so a later age change or a hand-tuned value still applies once
+    the constraint is cleared. The solver (#45) reads ``wheelchair`` directly as
+    a hard exclusion of any place with ``stairs > 0``.
 
     Args:
-        blocked: Whether stairs or wheelchair is set.
-        current: The profile's sensitivity now.
-        age_default: The default of the profile's age group.
+        constraints: The person's access constraints.
+        profile_sensitivity: ``stairs_sensitivity`` of the profile.
 
     Returns:
-        The sensitivity to store.
+        1.0 when stairs or wheelchair is set, else the profile's value.
     """
-    if blocked:
+    if constraints.stairs or constraints.wheelchair:
         return BLOCKED
-    return age_default if current == BLOCKED else current
+    return profile_sensitivity

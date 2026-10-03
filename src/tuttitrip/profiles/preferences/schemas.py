@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tuttitrip.places.schemas import Cuisine, DietTag, PlaceTag
 
@@ -112,7 +112,12 @@ class MinTag(BaseModel):
     """
 
     domain: MinTagDomain
-    tag: str
+    tag: str = Field(
+        description=(
+            "Two taxonomies: a Cuisine code (e.g. indian) for domain food, "
+            "a PlaceTag code (e.g. museums) for domain attractions."
+        )
+    )
 
     @model_validator(mode="after")
     def _tag_belongs_to_domain(self) -> Self:
@@ -127,25 +132,58 @@ class _PreferenceFields(BaseModel):
     interests: dict[PlaceTag, Interest] = Field(
         default_factory=dict, description="Interest profile I_i: tag to strength 0..1."
     )
-    constraints: Constraints = Field(default_factory=Constraints)
     diet: Diet = Field(default_factory=Diet)
     example_places: list[ExamplePlace] = Field(default_factory=list, max_length=50)
     min_tags: list[MinTag] = Field(default_factory=list, max_length=30)
 
 
 class PreferencesWrite(_PreferenceFields):
-    """The whole preferences of one person (PUT replaces them)."""
+    """The whole preferences of one person (PUT replaces them).
 
+    ``example_places`` with a ``place_id`` are the person's thumb ratings
+    (``like`` is "want", ``dislike`` is "dont_want" with reason "other") and are
+    stored there, not here. Sending fewer never removes a rating; use the
+    ratings endpoint for that.
+    """
+
+    constraints: Constraints = Field(default_factory=Constraints)
     importance_pool: ImportancePool | None = Field(
         default=None, description="Omitted: the default for the person's age group."
     )
 
+    @model_validator(mode="after")
+    def _no_duplicates(self) -> Self:
+        pairs = [(t.domain, t.tag) for t in self.min_tags]
+        if len(pairs) != len(set(pairs)):
+            msg = "Each (domain, tag) minimum may appear only once"
+            raise ValueError(msg)
+        ids = [e.place_id for e in self.example_places if e.place_id is not None]
+        if len(ids) != len(set(ids)):
+            msg = "Each place_id may appear only once in example_places"
+            raise ValueError(msg)
+        return self
+
 
 class PreferencesRead(_PreferenceFields):
-    """Preferences of one person."""
+    """Preferences of one person.
+
+    Health data is private: ``constraints`` and ``effective_stairs_sensitivity``
+    are null for plain members looking at someone else's preferences.
+    """
+
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
 
     profile_id: UUID
     importance_pool: ImportancePool
+    constraints: Constraints | None = Field(
+        description="Only for the person and co-hosts and above; else null."
+    )
+    effective_stairs_sensitivity: float | None = Field(
+        description=(
+            "Stairs sensitivity for the solver: 1.0 with stairs or wheelchair, "
+            "else the profile's. Same visibility as constraints."
+        )
+    )
     filled: bool = Field(
         description="False while nobody has saved them: the pool is the age default."
     )
