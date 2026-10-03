@@ -33,6 +33,21 @@ async def insert_trip(
     return trip
 
 
+async def insert_member(
+    session: AsyncSession, trip_id: UUID, sub: str, role: TripRole
+) -> None:
+    """Add a user to a trip with a role and flush.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+        sub: Auth0 subject.
+        role: The role to give.
+    """
+    session.add(TripMember(trip_id=trip_id, user_sub=sub, role=role))
+    await session.flush()
+
+
 async def select_trips_of_member(
     session: AsyncSession, sub: str
 ) -> Sequence[tuple[Trip, TripRole]]:

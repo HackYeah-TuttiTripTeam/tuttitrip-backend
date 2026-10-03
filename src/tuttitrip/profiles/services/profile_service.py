@@ -74,7 +74,7 @@ async def _check_account(session: AsyncSession, trip_id: UUID, sub: str) -> None
     except trip_service.TripNotFoundError as exc:
         msg = "The account is not a member of this trip"
         raise ProfileAccountError(msg) from exc
-    if await db.user_has_profile(session, trip_id, sub):
+    if await db.select_account_profile_id(session, trip_id, sub) is not None:
         msg = "The account already has a profile on this trip"
         raise ProfileAccountError(msg)
 
@@ -202,16 +202,52 @@ async def create_host_profile(session: AsyncSession, trip_id: UUID, sub: str) ->
         trip_id: The just created trip.
         sub: Auth0 subject of the host.
     """
-    await db.insert_profile(
+    await create_account_profile(session, trip_id, sub, HOST_NAME)
+
+
+async def create_account_profile(
+    session: AsyncSession, trip_id: UUID, sub: str, display_name: str
+) -> UUID:
+    """Create an adult profile (age defaults) linked to an account; caller commits.
+
+    Used for the host of a new trip and for people who join by invitation.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+        sub: Auth0 subject of the person.
+        display_name: Name on the profile.
+
+    Returns:
+        The new profile's id.
+    """
+    profile = await db.insert_profile(
         session,
         Profile(
             trip_id=trip_id,
-            display_name=HOST_NAME,
+            display_name=display_name,
             age=HOST_AGE,
             user_sub=sub,
             **asdict(DEFAULTS[age_group_for(HOST_AGE)]),
         ),
     )
+    return profile.id
+
+
+async def find_account_profile(
+    session: AsyncSession, trip_id: UUID, sub: str
+) -> UUID | None:
+    """The id of the profile linked to an account on a trip.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+        sub: Auth0 subject.
+
+    Returns:
+        The profile id, or None when the account has no profile there.
+    """
+    return await db.select_account_profile_id(session, trip_id, sub)
 
 
 async def _get(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> Profile:

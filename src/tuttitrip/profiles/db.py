@@ -45,8 +45,10 @@ async def select_profile(
     )
 
 
-async def user_has_profile(session: AsyncSession, trip_id: UUID, sub: str) -> bool:
-    """Whether an account is already linked to a profile of the trip.
+async def select_account_profile_id(
+    session: AsyncSession, trip_id: UUID, sub: str
+) -> UUID | None:
+    """The id of the profile an account has on a trip.
 
     Args:
         session: Open session.
@@ -54,12 +56,11 @@ async def user_has_profile(session: AsyncSession, trip_id: UUID, sub: str) -> bo
         sub: Auth0 subject.
 
     Returns:
-        True when a profile on the trip carries this ``user_sub``.
+        The profile id, or None.
     """
-    found = await session.scalar(
+    return await session.scalar(
         select(Profile.id).where(Profile.trip_id == trip_id, Profile.user_sub == sub)
     )
-    return found is not None
 
 
 async def insert_profile(session: AsyncSession, profile: Profile) -> Profile:

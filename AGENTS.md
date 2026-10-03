@@ -299,7 +299,18 @@ from tuttitrip.shared.permissions.registry import Access, Feature
   `last_used_at` zapisujemy dopiero po sprawdzeniu zakresu, co najwyżej raz na minutę.
   Zakres zapisany jest jako nazwa członka `TokenScope` w VARCHAR bez CHECK, więc nowy zakres
   nie wymaga migracji; nowa trasa tokenowa trafia na listę w teście architektury.
-  Zaproszenia (#40) mają własny model, nie tę tabelę.
+- Zaproszenia (`trips/invitations`, tabela `trip_invitations`, nie `access_tokens`): dołącza zalogowana
+  osoba, więc trasy dołączania mają `requires(Feature.TRIPS_INVITATIONS, ...)`, nie `token_access`. Te same
+  zasady tokenu (32 bajty, tylko SHA-256, 404 bez rozróżnienia: nieznany, wygasły, odwołany, wyczerpany;
+  `Cache-Control: no-store`). Token nigdy w ścieżce ani query (test pilnuje parametrów `token`): link to
+  `https://<front>/join#t=<token>`, a front wysyła token w ciele `POST /invitations/preview` (nazwa podróży)
+  i `POST /invitations/accept` (ciało: `token`, opcjonalnie `display_name`). Tworzenie, lista i odwołanie
+  (`POST/GET /trips/{trip_id}/invitations`, `DELETE .../{invitation_id}`): co-host i host, TTL domyślnie 7 dni
+  (max 30), `max_uses` domyślnie 10 (1 do 100), najwyżej 20 działających zaproszeń na wyjazd (limit miękki, bez blokady: równoległe tworzenie może go lekko przekroczyć).
+  Dołączenie w jednej transakcji: `UPDATE ... SET uses = uses + 1 WHERE uses < max_uses AND ...`, potem wiersz
+  `trip_members` (member) i profil dorosłego z kontem (`profile_service.create_account_profile`, imię z
+  żądania albo "Uczestnik"). Ponowne przyjęcie przez członka daje 200 (`already_member: true`) bez nowego
+  profilu i bez zużycia limitu. Osoba usunięta wcześniej (profil zostaje bez konta, #121) dostaje nowy profil.
   TODO: okresowo usuwać wygasłe i odwołane tokeny (dziś zostają w tabeli).
 - Gdy decyzja zależy od uprawnienia w środku logiki, `api.py` wstrzykuje
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
