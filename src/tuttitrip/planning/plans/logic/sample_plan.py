@@ -4,6 +4,18 @@ Pure and deterministic, so the contract can be consumed before the solver
 (HackYeah-TuttiTripTeam/tuttitrip-backend#50) exists. Identical input gives
 an identical ``plan_hash``. Holds fixtures only; metrics and hashing live in
 ``metrics.py`` and ``hashing.py``.
+
+Variant selection rule (also in the ``x-stub`` endpoint descriptions): the
+variant is ``group``, ``solo`` or ``approval`` (in that order) by
+``sha256(str(trip_id).encode())[0] % 3``, the first byte of the digest. One trip
+always gets the same plan and different trips show different states.
+``group`` and ``approval`` have a stop with an unverified price (inflated by
+delta) and a free stop (``0.00`` with a price source); ``solo`` covers only
+two days, so it has neither. All variants have a stop with unverified hours and
+no hours source, transfers with and without a cost, and a night at the lodging
+base. ``approval`` is the over-budget variant (``needs_approval`` with
+``kappa``, ``P_strict`` within ``B_do``, gain of at least 8 points); the
+OpenAPI examples are built from the same fixtures.
 """
 
 import datetime as dt
@@ -44,6 +56,8 @@ from tuttitrip.planning.plans.schemas import (
 
 DELTA = Decimal("0.15")  # inflation of an unverified price (E6)
 CENT = Decimal("0.01")
+GAIN_POINTS = 8.0  # E6: the approval threshold for a strong preference
+STRICT_COST = "1048.40"  # P_strict <= B_do (1100); kappa = (1198 - 1048.40) / 8
 CREATED_AT = dt.datetime(2026, 10, 3, 12, 0, tzinfo=dt.UTC)
 VERIFIED_AT = dt.datetime(2026, 9, 20, 9, 0, tzinfo=dt.UTC)
 _NS = UUID("6f1f4a3e-5b0a-4a53-9a43-2c7d8e0f1a11")
@@ -75,6 +89,9 @@ class _Stop(NamedTuple):
     transfer_min: int
     base: str
     verified: bool = True
+    hours_verified: bool = True
+    mode: TransferMode = TransferMode.WALK
+    transfer_cost: str | None = None  # None: no data
 
 
 _PEOPLE = (
@@ -88,16 +105,42 @@ _SOLO = _Person("Ty", 82.1, 82.1, 0.0, 0.0, (85, 72, 78, 60, 85), 2)
 _DAYS = (
     (
         _Stop("Muzeum Gdańska", PlaceKind.ATTRACTION, "10:00", "12:00", 0, "25"),
-        _Stop("Restauracja indyjska", PlaceKind.FOOD, "13:00", "14:30", 15, "60"),
+        _Stop(
+            "Restauracja indyjska",
+            PlaceKind.FOOD,
+            "13:00",
+            "14:30",
+            15,
+            "60",
+            mode=TransferMode.TRANSIT,
+            transfer_cost="4.60",
+        ),
     ),
     (
         _Stop("Hevelianum", PlaceKind.ATTRACTION, "10:00", "13:00", 0, "45"),
-        _Stop("Bar mleczny", PlaceKind.FOOD, "13:30", "14:30", 15, "30"),
+        _Stop(
+            "Bar mleczny",
+            PlaceKind.FOOD,
+            "13:30",
+            "14:30",
+            15,
+            "30",
+            hours_verified=False,
+        ),
         _Stop("Kawiarnia w ogrodzie", PlaceKind.FOOD, "16:00", "17:00", 20, "35"),
     ),
     (
         _Stop("Park Oliwski", PlaceKind.ATTRACTION, "10:00", "12:00", 0, "0"),
-        _Stop("Planszówki", PlaceKind.ATTRACTION, "14:00", "16:00", 20, "20"),
+        _Stop(
+            "Planszówki",
+            PlaceKind.ATTRACTION,
+            "14:00",
+            "16:00",
+            20,
+            "20",
+            mode=TransferMode.CAR,
+            transfer_cost="12.00",
+        ),
         _Stop("Pizzeria", PlaceKind.FOOD, "18:00", "19:30", 15, "50", verified=False),
     ),
 )
@@ -108,6 +151,19 @@ _BUDGETS = {
     Scenario.SOLO: (2, 1, "130", "500", "800", "900"),
     Scenario.APPROVAL: (3, 2, "108", "900", "1100", "1300"),
 }
+
+
+def variant_for(trip_id: UUID) -> Scenario:
+    """Pick the variant of a trip (the rule in the module docstring).
+
+    Args:
+        trip_id: The trip the plan belongs to.
+
+    Returns:
+        ``sha256(str(trip_id).encode())[0] % 3`` in the order group, solo, approval.
+    """
+    variants = list(Scenario)
+    return variants[hashlib.sha256(str(trip_id).encode()).digest()[0] % len(variants)]
 
 
 def _id(trip_id: UUID, *parts: object) -> UUID:
@@ -165,7 +221,9 @@ def _stop(trip_id: UUID, number: int, position: int, spec: _Stop) -> PlanStop:
         start=dt.time.fromisoformat(spec.start),
         end=dt.time.fromisoformat(spec.end),
         transfer=StopTransfer(
-            minutes=spec.transfer_min, mode=TransferMode.WALK, cost=None
+            minutes=spec.transfer_min,
+            mode=spec.mode,
+            cost=_cents(Decimal(spec.transfer_cost)) if spec.transfer_cost else None,
         )
         if position
         else None,
@@ -175,9 +233,11 @@ def _stop(trip_id: UUID, number: int, position: int, spec: _Stop) -> PlanStop:
         price_verified=verified,
         price_source_url=f"https://tickets.invalid/{position}" if verified else None,
         price_verified_at=stamp,
-        hours_verified=True,
-        hours_source_url=f"https://hours.invalid/{position}",
-        hours_verified_at=VERIFIED_AT,
+        hours_verified=spec.hours_verified,
+        hours_source_url=f"https://hours.invalid/{position}"
+        if spec.hours_verified
+        else None,
+        hours_verified_at=VERIFIED_AT if spec.hours_verified else None,
     )
 
 
@@ -186,6 +246,8 @@ def _budget(trip_id: UUID, scenario: Scenario, cost: Decimal) -> PlanBudget:
     approval = scenario is Scenario.APPROVAL
     over = max(Decimal(0), cost - Decimal(b_to))
     tomek = _id(trip_id, "profile", "Tomek")
+    # E6: P_strict stays within B_do; the gain is at least the 8-point threshold
+    strict_cost = Decimal(STRICT_COST)
     if cost < Decimal(b_from):
         zone = BudgetZone.BELOW_B_FROM
     elif cost <= Decimal(b_to):
@@ -201,11 +263,13 @@ def _budget(trip_id: UUID, scenario: Scenario, cost: Decimal) -> PlanBudget:
         zone=zone,
         over_budget=over,
         needs_approval=approval,
-        kappa=Decimal("18.70") if approval else None,
+        kappa=_cents((cost - strict_cost) / Decimal(str(GAIN_POINTS)))
+        if approval
+        else None,
         gain_profile_id=tomek if approval else None,
-        gain_points=5.0 if approval else None,
+        gain_points=GAIN_POINTS if approval else None,
         strict_plan_id=_id(trip_id, "plan", "strict") if approval else None,
-        strict_cost=_cents(cost - Decimal("18.7") * 5) if approval else None,
+        strict_cost=strict_cost if approval else None,
         approval_status=ApprovalStatus.PENDING
         if approval
         else ApprovalStatus.NOT_NEEDED,
@@ -215,7 +279,7 @@ def _budget(trip_id: UUID, scenario: Scenario, cost: Decimal) -> PlanBudget:
 def sample_plan(
     trip_id: UUID,
     params: PlanCreate | None = None,
-    scenario: Scenario = Scenario.GROUP,
+    scenario: Scenario | None = None,
 ) -> PlanRead:
     """Build the fixed plan for a trip.
 
@@ -223,12 +287,14 @@ def sample_plan(
         trip_id: The trip the plan belongs to.
         params: Requested knobs; echoed back. Defaults apply when None.
         scenario: ``group`` (section 7 demo of four), ``solo`` (n = 1) or
-            ``approval`` (over ``B_do``, needs approval).
+            ``approval`` (over ``B_do``, needs approval). None selects it
+            from the trip with ``variant_for``.
 
     Returns:
         The plan; the same arguments always give the same value.
     """
     params = params or PlanCreate()
+    scenario = scenario or variant_for(trip_id)
     day_count, nights, lodging_cost, *_ = _BUDGETS[scenario]
     people = (_SOLO,) if scenario is Scenario.SOLO else _PEOPLE
     days = [

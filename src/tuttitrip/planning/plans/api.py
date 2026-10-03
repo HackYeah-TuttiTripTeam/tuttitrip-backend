@@ -13,7 +13,13 @@ router = APIRouter(prefix="/trips/{trip_id}/plans", tags=["planning"])
 STUB = {"x-stub": True}
 STUB_NOTE = (
     "STUB: until backend#50 the content is a fixed sample (section 7 of "
-    "`docs/algorytm.md`); the shape is final."
+    "`docs/algorytm.md`); the shape is final. The variant is chosen from the "
+    "trip: `sha256(str(trip_id).encode())[0] % 3` (first byte of the digest) "
+    "gives `group`, `solo` or `approval` "
+    "(`needs_approval` with `kappa`), so one trip always returns the same "
+    "plan and `plan_hash`. `group` and `approval` include an unverified "
+    "price and a free stop; `solo` (two days) has neither; all variants have a "
+    "stop without an hours source and transfers with and without a cost."
 )
 NOT_FOUND = {404: {"description": "Trip not found, or the caller is not on it."}}
 

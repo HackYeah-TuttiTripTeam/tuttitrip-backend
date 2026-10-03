@@ -14,12 +14,20 @@ from tests.shared.paths import path
 from tuttitrip.main import create_app
 from tuttitrip.planning.plans.logic.hashing import compute_plan_hash
 from tuttitrip.planning.plans.logic.metrics import jain_index
-from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
+from tuttitrip.planning.plans.logic.sample_plan import (
+    Scenario,
+    sample_plan,
+    variant_for,
+)
 from tuttitrip.planning.plans.schemas import (
+    BudgetZone,
     PlanBudget,
+    PlanCreate,
     PlanDomainScore,
     PlanRead,
+    PlanStop,
 )
+from tuttitrip.planning.plans.services import plan_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.permissions.logic.resolution import Grant
@@ -29,7 +37,9 @@ from tuttitrip.trips.services import trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
 BOB = AuthenticatedUser(sub="auth0|bob")
-TRIP = uuid.uuid4()
+TRIP = uuid.UUID("00000000-0000-4000-8000-000000000000")  # variant: group
+TRIP_SOLO = uuid.UUID("00000000-0000-4000-8000-00000000000c")
+TRIP_APPROVAL = uuid.UUID("00000000-0000-4000-8000-000000000001")
 
 
 def _client(grants: tuple[Grant, ...] | None = None) -> TestClient:
@@ -230,3 +240,106 @@ def test_post_without_write_permission_is_403(monkeypatch: pytest.MonkeyPatch) -
         assert response.status_code == 403
         assert response.json()["detail"] == "Missing permission planning.plans:WRITE"
         assert client.get(path("get_latest_plan", trip_id=TRIP)).status_code == 200
+
+
+def _stops(plan: PlanRead) -> list[PlanStop]:
+    return [i for d in plan.days for i in d.items]
+
+
+def test_variant_is_chosen_from_the_trip() -> None:
+    assert variant_for(TRIP) is Scenario.GROUP
+    assert variant_for(TRIP_SOLO) is Scenario.SOLO
+    assert variant_for(TRIP_APPROVAL) is Scenario.APPROVAL
+    assert sample_plan(TRIP_SOLO).fairness.group_size == 1
+    assert sample_plan(TRIP_APPROVAL).budget.needs_approval
+
+
+def test_same_trip_gives_the_same_plan_hash() -> None:
+    for trip in (TRIP, TRIP_SOLO, TRIP_APPROVAL):
+        first, second = sample_plan(trip), sample_plan(trip, PlanCreate())
+        assert first.plan_hash == second.plan_hash
+        assert first.input_hash == second.input_hash
+    hashes = {sample_plan(t).plan_hash for t in (TRIP, TRIP_SOLO, TRIP_APPROVAL)}
+    assert len(hashes) == 3
+
+
+@pytest.mark.parametrize("trip", [TRIP, TRIP_SOLO, TRIP_APPROVAL])
+def test_every_variant_passes_the_schema_validators(trip: uuid.UUID) -> None:
+    plan = sample_plan(trip)
+    assert PlanRead.model_validate_json(plan.model_dump_json()) == plan
+    budget = plan.budget
+    assert (budget.kappa is not None) == budget.needs_approval
+    assert budget.needs_approval == (budget.over_budget > 0)
+    assert (budget.zone is BudgetZone.IN_MARGIN) == (budget.cost > budget.b_to)
+    assert budget.over_budget == max(Decimal(0), budget.cost - budget.b_to)
+    assert budget.cost <= budget.b_max
+    assert all(len(p.domains) == 5 for p in plan.fairness.per_person)
+    assert plan.lodging is not None
+    assert plan.lodging.nights >= 1
+
+
+def test_default_variant_shows_the_uncertain_states() -> None:
+    stops = _stops(sample_plan(TRIP))
+    assert any(not i.price_verified and i.price_source_url is None for i in stops)
+    assert any(not i.hours_verified and i.hours_source_url is None for i in stops)
+    assert any(
+        i.price_inflated == Decimal("0.00") and i.price_source_url for i in stops
+    )
+    costs = [i.transfer.cost for i in stops if i.transfer]
+    assert None in costs
+    assert any(c is not None for c in costs)
+
+
+def test_every_variant_has_a_stop_without_hours_source() -> None:
+    for trip in (TRIP, TRIP_SOLO, TRIP_APPROVAL):
+        assert any(i.hours_source_url is None for i in _stops(sample_plan(trip)))
+
+
+def test_approval_variant_is_the_openapi_example() -> None:
+    example = plan_service.openapi_examples()["needs_approval"]["value"]
+    assert isinstance(example, dict)
+    assert example["budget"]["needs_approval"] is True
+    assert example["budget"]["kappa"] == "18.70"
+
+
+def test_selection_rule_is_documented_in_the_endpoints() -> None:
+    paths = create_app().openapi()["paths"]
+    for route, method in (
+        ("/api/v1/trips/{trip_id}/plans", "post"),
+        ("/api/v1/trips/{trip_id}/plans/latest", "get"),
+    ):
+        assert (
+            "sha256(str(trip_id).encode())[0] % 3"
+            in paths[route][method]["description"]
+        )
+
+
+def test_approval_budget_follows_e6() -> None:
+    budget = sample_plan(TRIP_APPROVAL).budget
+    assert budget.strict_cost is not None
+    assert budget.gain_points is not None
+    assert budget.strict_cost <= budget.b_to
+    assert budget.gain_points >= 8
+    assert budget.kappa == (
+        (budget.cost - budget.strict_cost) / Decimal(str(budget.gain_points))
+    ).quantize(Decimal("0.01"))
+    assert budget.zone is BudgetZone.IN_MARGIN
+
+
+def test_approval_variant_over_http(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    membership = TripMembership(
+        trip_id=TRIP_APPROVAL, sub=BOB.sub, role=TripRole.MEMBER
+    )
+    monkeypatch.setattr(
+        trip_service, "get_membership", AsyncMock(return_value=membership)
+    )
+    created = client.post(path("create_plan", trip_id=TRIP_APPROVAL))
+    latest = client.get(path("get_latest_plan", trip_id=TRIP_APPROVAL))
+    assert created.status_code == 201
+    assert latest.status_code == 200
+    body = latest.json()
+    assert body["budget"]["needs_approval"] is True
+    assert body["budget"]["kappa"] is not None
+    assert body["plan_hash"] == created.json()["plan_hash"]
