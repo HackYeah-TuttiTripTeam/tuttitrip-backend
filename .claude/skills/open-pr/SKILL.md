@@ -51,9 +51,11 @@ description: Create a correctly named branch, run local checks and open a pull r
 5. Wait for `checks`, `contracts-check` (and `deploy` for the preview) to go
    green: `gh pr checks --watch`.
 6. Merge into `develop` with "Squash and merge" (the PR title becomes the
-   commit) and delete the feature branch: `gh pr merge --squash --delete-branch`.
+   commit): `gh pr merge --squash`. The `Delete merged branch` workflow then
+   deletes the feature branch and starts `cleanup.yml` for its preview.
    Merge a release PR `develop` -> `main` with "Create a merge commit"
-   (`gh pr merge --merge`) and never pass `--delete-branch` for it.
+   (`gh pr merge --merge`) straight from `develop` and never pass
+   `--delete-branch` for it; the workflow never deletes `main` or `develop`.
    Release notes need no extra work: the `Release notes` workflow labels the PR
    `type:*` from its title, adds it to the draft release on merge into
    `develop` and publishes the draft with a tag when the release PR lands on
