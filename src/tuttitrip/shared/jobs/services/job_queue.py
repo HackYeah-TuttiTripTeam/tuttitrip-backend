@@ -8,7 +8,12 @@ import hashlib
 import json
 from typing import Protocol
 
-from dbos import DBOSClient, EnqueueOptions, WorkflowSerializationFormat
+from dbos import (
+    DBOSClient,
+    EnqueueOptions,
+    WorkflowSerializationFormat,
+    WorkflowStatus,
+)
 from dbos import error as dbos_error
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -16,6 +21,7 @@ from tuttitrip.shared.jobs.contracts import (
     PROGRESS_EVENT,
     WORKFLOWS,
     ContractPayload,
+    ErrorCode,
     Progress,
     Queue,
     Workflow,
@@ -27,9 +33,48 @@ TIMEOUT_SECONDS: dict[Workflow, float] = {
     Workflow.GENERATE_TRIP_PLAN: 900.0,
     Workflow.EMBED_TEXTS: 300.0,
     Workflow.PING: 60.0,
+    Workflow.PARSE_PASTED_PLAN: 600.0,
+    Workflow.EXTRACT_OFFER_EVIDENCE: 600.0,
+    Workflow.FETCH_PLACE_CANDIDATES: 900.0,
+    Workflow.WRITE_JUSTIFICATIONS: 600.0,
 }
 
+NOT_IMPLEMENTED_MESSAGE = "Jeszcze niedostępne"
+
 _UNAVAILABLE = (SQLAlchemyError, dbos_error.DBOSException, OSError)
+
+
+def job_state(status: WorkflowStatus, progress: object) -> JobState:
+    """Translate a DBOS status into the API's ``JobState``.
+
+    The worker's ``ContractError`` code (``PortableWorkflowError.code``) goes to
+    ``error_code``; ``not_implemented`` is reported as "not available yet".
+
+    Args:
+        status: DBOS workflow status.
+        progress: Latest ``progress`` event value, if any.
+
+    Returns:
+        The state.
+    """
+    error = status.error
+    code = getattr(error, "code", None)
+    if error is None:
+        text = None
+    elif code == ErrorCode.NOT_IMPLEMENTED:
+        text = NOT_IMPLEMENTED_MESSAGE
+    else:
+        text = str(error)
+    return JobState(
+        workflow_id=status.workflow_id,
+        workflow_name=status.name,
+        status=status.status,
+        owner=status.authenticated_user,
+        output=status.output if isinstance(status.output, dict) else None,
+        error=text,
+        error_code=str(code) if code is not None else None,
+        progress=Progress.model_validate(progress) if progress else None,
+    )
 
 
 class JobNotFoundError(Exception):
@@ -155,15 +200,7 @@ class DbosJobQueue:
             raise JobNotFoundError(workflow_id) from exc
         except _UNAVAILABLE as exc:
             raise JobQueueUnavailableError(str(exc)) from exc
-        return JobState(
-            workflow_id=status.workflow_id,
-            workflow_name=status.name,
-            status=status.status,
-            owner=status.authenticated_user,
-            output=status.output if isinstance(status.output, dict) else None,
-            error=str(status.error) if status.error is not None else None,
-            progress=Progress.model_validate(progress) if progress else None,
-        )
+        return job_state(status, progress)
 
     async def cancel(self, workflow_id: str) -> None:
         """Cancel a workflow (no-op once it has finished).

@@ -132,6 +132,9 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   `tests/conftest.py`); use `agent.override(model=TestModel(...))`.
 - Domain tests go in `tests/domains/`, shared infrastructure in `tests/shared/`.
 - Services raise domain exceptions; `api.py` maps them to HTTP errors.
+- Validation errors (422) never echo request values: `shared/errors/api.py`
+  strips `input` and `ctx` from every item. This protects secrets in headers
+  and bodies and large pasted texts; do not add a handler that returns them.
 
 ## Settings and secrets
 

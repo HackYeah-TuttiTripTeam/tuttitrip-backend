@@ -24,6 +24,7 @@ from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
+from tuttitrip.shared.errors.api import register_error_handlers
 from tuttitrip.shared.health.api import router as health_router
 from tuttitrip.shared.jobs.api import router as jobs_router
 from tuttitrip.shared.permissions.api import document_permissions
@@ -99,6 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
     api = APIRouter(prefix=API_PREFIX)
+    register_error_handlers(app)
     for router in ROUTERS:
         api.include_router(router)
     app.include_router(api)

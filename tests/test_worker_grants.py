@@ -49,3 +49,30 @@ def test_worker_has_no_access_to_permissions() -> None:
         assert f"public.{table}" not in sql
     assert "ALL TABLES" not in sql.upper()
     assert "DEFAULT PRIVILEGES" not in sql.upper()
+
+
+def _granted(privilege: str) -> set[str]:
+    sql = "\n".join(
+        line for line in GRANTS.read_text().splitlines() if not line.startswith("--")
+    )
+    found: set[str] = set()
+    for match in re.finditer(rf"GRANT {privilege}\s+ON (.+?)\s+TO", sql, re.DOTALL):
+        found |= set(re.findall(r"public\.([a-z_]+)", match.group(1)))
+    return found
+
+
+def test_worker_reads_pasted_texts_and_the_catalog() -> None:
+    assert {
+        "pasted_documents",
+        "places",
+        "cities",
+        "place_prices",
+        "transit_fares",
+    } <= _granted("SELECT")
+
+
+def test_catalog_import_may_insert_and_update_but_never_delete() -> None:
+    assert _granted("INSERT, UPDATE") == {"places", "cities", "place_prices"}
+    assert not {"places", "cities", "pasted_documents"} & _granted(
+        "SELECT, INSERT, UPDATE, DELETE"
+    )
