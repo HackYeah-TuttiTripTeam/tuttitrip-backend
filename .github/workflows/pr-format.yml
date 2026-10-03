@@ -1,0 +1,16 @@
+name: PR format
+
+# Sprawdza tytuł i opis PR (prefiks typu, sekcje z szablonu, powiązane issue).
+# Logika i zasady są wspólne dla całej organizacji, w repozytorium
+# HackYeah-TuttiTripTeam/.github (workflow pr-format.yml, CONTRIBUTING.md).
+# Działa na runnerze GitHuba (ubuntu-latest) i nie pobiera kodu z PR.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  check:
+    uses: HackYeah-TuttiTripTeam/.github/.github/workflows/pr-format.yml@main
