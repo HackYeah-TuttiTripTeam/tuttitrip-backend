@@ -105,12 +105,27 @@ def test_only_api_modules_import_fastapi() -> None:
     )
 
 
+AGUI_API = rf"^{PACKAGE}\.interview\.api$"
+
+
 def test_only_services_import_pydantic_ai() -> None:
+    # Exception (issue backend#56): the interview `api.py` hands the request to
+    # `AGUIAdapter.dispatch_request`; see the next test for how narrow it is.
     (
         archrule("agents live in services", use_regex=True)
         .match(rf"^{PACKAGE}(\.|$)")
-        .exclude(r"\.services(\.|$)")
+        .exclude(r"\.services(\.|$)", AGUI_API)
         .should_not_import(r"^pydantic_ai(\.|$)")
+        .check(PACKAGE, only_direct_imports=True)
+    )
+
+
+def test_interview_api_imports_only_the_agui_adapter() -> None:
+    (
+        archrule("interview api: AG-UI adapter only", use_regex=True)
+        .match(AGUI_API)
+        .should_not_import(r"^pydantic_ai(\.|$)")
+        .may_import(r"^pydantic_ai\.ui\.ag_ui$")
         .check(PACKAGE, only_direct_imports=True)
     )
 

@@ -15,6 +15,7 @@ dependencies = [
     "pgvector>=0.5.0",
     "pydantic>=2.13.5",
     "pydantic-ai>=2.54.0",
+    "pydantic-ai-slim[ag-ui]==2.54.0",
     "pydantic-settings>=2.15.0",
     "pyjwt[crypto]>=2.15.1",
     "sqlalchemy[asyncio]>=2.1.3",
