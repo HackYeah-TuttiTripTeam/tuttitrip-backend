@@ -44,6 +44,7 @@ src/tuttitrip/
   profiles/            people on a trip (weights, age groups)
   interview/           AI interview agent (AG-UI endpoint goes here)
   planning/            planner agent; subdomains fairness/ and linter/
+                       algorithm spec (canonical for planning/**/logic): docs/algorytm.md
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
