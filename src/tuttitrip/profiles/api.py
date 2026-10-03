@@ -151,4 +151,6 @@ async def delete_profile(
         await profile_service.delete_profile(session, membership, profile_id)
     except ProfileNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND) from exc
+    except ProfileAccountError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)

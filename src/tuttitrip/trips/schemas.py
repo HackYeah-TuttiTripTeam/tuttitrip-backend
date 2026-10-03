@@ -200,3 +200,18 @@ class TripMembership(BaseModel):
     trip_id: UUID
     sub: str
     role: TripRole
+
+
+class MemberRead(BaseModel):
+    """A person on the trip who has an account, with their trip role."""
+
+    profile_id: UUID = Field(description="Use it in the member routes.")
+    display_name: str
+    role: TripRole
+    is_me: bool = Field(description="Whether this member is the caller.")
+
+
+class MemberRoleUpdate(BaseModel):
+    """Payload for changing a member's role (the host role cannot be given)."""
+
+    role: Literal[TripRole.MEMBER, TripRole.CO_HOST]
