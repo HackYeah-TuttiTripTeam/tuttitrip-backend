@@ -4,7 +4,7 @@ The UNIQUE (trip_id, kind, key) index serves trip_id lookups. The user role's
 ``accommodation`` grant is already seeded by the permissions migration.
 
 Revision ID: 7b4fe93c3762
-Revises: a42b7c1d9e03
+Revises: 213f4a329ce3
 Create Date: 2026-10-03 21:04:02.260252
 """
 
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "7b4fe93c3762"
-down_revision: str | None = "a42b7c1d9e03"
+down_revision: str | None = "213f4a329ce3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
