@@ -153,7 +153,7 @@ cf_dns_ensure "$host"
 # Bounded, logged to a file, and never fails the deploy.
 if grep -qE '^TUTTITRIP_DEMO__TOKEN_SHA256=.' "$envfile"; then
   demolog="$TT_STATE_DIR/demo-seed-$env.log"
-  if timeout 120 docker exec "$container" python -m tuttitrip.demo.services.seed_command >"$demolog" 2>&1; then
+  if timeout -k 5 120 docker exec "$container" python -m tuttitrip.demo.services.seed_command >"$demolog" 2>&1; then
     tt_log "demo account data reset"
   else
     tt_log "WARNING: demo account reset failed (see $demolog)"; tail -n 5 "$demolog" >&2 || true

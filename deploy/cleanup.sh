@@ -50,7 +50,8 @@ for env in "${envs[@]}"; do
   if [ "$(docker inspect -f '{{index .Config.Labels "tuttitrip.managed"}}' "$worker" 2>/dev/null || true)" = true ]; then
     docker rm -f "$worker" >/dev/null
   fi
-  rm -f "$TT_STATE_DIR/envs/$env.env" "$TT_STATE_DIR/envs/$env.worker.env"
+  rm -f "$TT_STATE_DIR/envs/$env.env" "$TT_STATE_DIR/envs/$env.worker.env" \
+    "$TT_STATE_DIR/demo-seed-$env.log"
   # Only our API images; tuttitrip-worker images are cleaned by the worker repo.
   docker image ls tuttitrip-api --filter label=tuttitrip.managed=true --filter "label=tuttitrip.env=$env" \
     --format '{{.Repository}}:{{.Tag}}' | xargs -r docker rmi >/dev/null 2>&1 || true

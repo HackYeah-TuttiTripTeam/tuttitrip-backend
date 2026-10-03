@@ -424,7 +424,10 @@ adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login
   (a gdy go brak, adres gniazda) i nadpisuje `X-Forwarded-For` jedną wartością. Uvicorn
   ufa `X-Forwarded-*` tylko od adresów z `FORWARDED_ALLOW_IPS`; `deploy.sh` ustawia tam
   podsieć sieci Docker `tuttitrip` (nie `*`). Trasa używa więc `request.client.host`,
-  a nagłówek dopisany przez klienta nie zmienia jego budżetu. Lokalnie bez gatewaya
+  a nagłówek dopisany przez klienta nie zmienia jego budżetu. Znane i przyjęte ograniczenie:
+  gateway nasłuchuje na adresie mostu docker0, więc kontener z domyślnego mostka mógłby
+  ustawić własny `CF-Connecting-IP` i ominąć limit na IP; publiczna ścieżka idzie przez
+  Cloudflare, który nadpisuje ten nagłówek na brzegu. Lokalnie bez gatewaya
   uvicorn ufa tylko 127.0.0.1.
 - `refresh_token` wraca tylko przy `TUTTITRIP_DEMO__OFFLINE_ACCESS=true` (aplikacja
   Auth0 musi mieć włączone refresh tokeny); domyślnie wyłączone, access token żyje
