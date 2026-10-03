@@ -11,7 +11,7 @@ Rules (deploy/CONVENTIONS.md, "Integracja z workerem"):
 
 import json
 from enum import StrEnum
-from typing import NamedTuple
+from typing import Literal, NamedTuple
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -24,15 +24,20 @@ PROGRESS_EVENT = "progress"
 class Queue(StrEnum):
     """DBOS queues served by the worker."""
 
-    PLANNING = "planning"
-    SYSTEM = "system"
+    DEFAULT = "default"
+    LOCAL_LLM = "local_llm"
+    OPENROUTER = "openrouter"
 
 
 class Workflow(StrEnum):
     """Registered DBOS workflow names in the worker."""
 
     GENERATE_TRIP_PLAN = "generate_trip_plan"
+    EMBED_TEXTS = "embed_texts"
     PING = "ping"
+
+
+ProviderName = Literal["openrouter", "local"]
 
 
 class ContractPayload(BaseModel):
@@ -46,6 +51,7 @@ class GenerateTripPlanInput(ContractPayload):
 
     trip_id: UUID
     request: str = Field(min_length=1, max_length=4000)
+    provider: ProviderName = "openrouter"
 
 
 class GenerateTripPlanOutput(ContractPayload):
@@ -54,6 +60,22 @@ class GenerateTripPlanOutput(ContractPayload):
     destination: str
     days: int
     highlights: list[str]
+
+
+class EmbedTextsInput(ContractPayload):
+    """Input of ``embed_texts``: embed short texts of one source row."""
+
+    source_kind: str = Field(min_length=1, max_length=50)
+    source_id: str = Field(min_length=1, max_length=200)
+    texts: list[str] = Field(min_length=1, max_length=64)
+
+
+class EmbedTextsOutput(ContractPayload):
+    """Output of ``embed_texts`` (vectors are in the ``embeddings`` table)."""
+
+    model: str
+    dimensions: int
+    stored: int
 
 
 class PingInput(ContractPayload):
@@ -85,13 +107,30 @@ class WorkflowSpec(NamedTuple):
 
 
 WORKFLOWS: dict[Workflow, WorkflowSpec] = {
+    # Default queue; enqueue on queue_for(provider) (openrouter or local_llm).
     Workflow.GENERATE_TRIP_PLAN: WorkflowSpec(
-        Queue.PLANNING, GenerateTripPlanInput, GenerateTripPlanOutput
+        Queue.OPENROUTER, GenerateTripPlanInput, GenerateTripPlanOutput
     ),
-    Workflow.PING: WorkflowSpec(Queue.SYSTEM, PingInput, PingOutput),
+    Workflow.EMBED_TEXTS: WorkflowSpec(
+        Queue.DEFAULT, EmbedTextsInput, EmbedTextsOutput
+    ),
+    Workflow.PING: WorkflowSpec(Queue.DEFAULT, PingInput, PingOutput),
 }
 
 EVENTS: dict[str, type[BaseModel]] = {PROGRESS_EVENT: Progress}
+
+
+def queue_for(provider: ProviderName) -> Queue:
+    """Queue an LLM job must be enqueued on, given its provider.
+
+    Args:
+        provider: Model backend chosen for the job.
+
+    Returns:
+        ``local_llm`` for the local GPU model, ``openrouter`` otherwise.
+    """
+    return Queue.LOCAL_LLM if provider == "local" else Queue.OPENROUTER
+
 
 type JSON = dict[str, JSON] | list[JSON] | str | int | float | bool | None
 

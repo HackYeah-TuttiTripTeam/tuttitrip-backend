@@ -25,8 +25,10 @@ non-`[a-z0-9]` characters becomes `-`, trimmed, at most 49 characters
 
 Docker labels on every container we run: `tuttitrip.managed=true`,
 `tuttitrip.env=<env>`, `tuttitrip.role=api|worker|postgres|gateway`.
-Worker containers: `--network tuttitrip --restart unless-stopped`, no
-published ports, no tunnel ingress.
+Worker containers: `--network tuttitrip --restart unless-stopped
+--stop-timeout 40`, plus `docker network connect ollama_net` when that network
+exists (local Ollama embeddings at `http://ollama:11434`); no published ports,
+no tunnel ingress.
 
 ## Shared infrastructure (owned by the backend deploy)
 
@@ -112,8 +114,9 @@ config: DBOSConfig = {
 }
 DBOS(config=config)
 DBOS.launch()
-DBOS.register_queue("planning")  # dbos>=3.2: after launch, no Queue(...)
-DBOS.register_queue("system")
+DBOS.register_queue("default")  # dbos>=3.2: after launch, no Queue(...)
+DBOS.register_queue("local_llm")
+DBOS.register_queue("openrouter")
 ```
 
 Two DBOS behaviours drive this design (verified in dbos 3.2.0 source and
@@ -165,8 +168,9 @@ with a local round trip):
 
 | Workflow | Queue | Input | Output | Timeout (backend) |
 | --- | --- | --- | --- | --- |
-| `generate_trip_plan` | `planning` | `{contract_version, trip_id, request}` | `{contract_version, destination, days, highlights}` | 900 s |
-| `ping` | `system` | `{contract_version, message}` | `{contract_version, message, worker_app_version}` | 60 s |
+| `generate_trip_plan` | `openrouter`, or `local_llm` when `provider="local"` | `{contract_version, trip_id, request, provider}` | `{contract_version, destination, days, highlights}` | 900 s |
+| `embed_texts` | `default` | `{contract_version, source_kind, source_id, texts[1..64]}` | `{contract_version, model, dimensions, stored}` | 300 s |
+| `ping` | `default` | `{contract_version, message}` | `{contract_version, message, worker_app_version}` | 60 s |
 
 Event `progress`: `{"stage": str, "percent": 0..100}`. Small results are the
 workflow output. Large or persistent results go to `job_results`
