@@ -1,0 +1,20 @@
+name: Release notes
+
+# Release Drafter: etykiety type:* z tytułu PR, szkic następnego wydania po
+# każdym merge'u do develop, publikacja z tagiem po merge'u develop -> main.
+# Logika i konfiguracja są wspólne, w repozytorium HackYeah-TuttiTripTeam/.github
+# (workflow release-notes.yml, .github/release-drafter.yml).
+# Działa na runnerze GitHuba (ubuntu-latest) i nie pobiera kodu.
+on:
+  push:
+    branches: [develop, main]
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-notes:
+    uses: HackYeah-TuttiTripTeam/.github/.github/workflows/release-notes.yml@main
