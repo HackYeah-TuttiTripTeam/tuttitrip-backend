@@ -15,8 +15,14 @@ from tuttitrip.main import create_app
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
+from tuttitrip.shared.pagination.schemas import Page, PageParams, SortDir
 from tuttitrip.trips.models import Trip
-from tuttitrip.trips.schemas import TripMembership, TripRead, TripRole
+from tuttitrip.trips.schemas import (
+    TripMembership,
+    TripRead,
+    TripRole,
+    TripSort,
+)
 from tuttitrip.trips.services import trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError, TripRoleError
 
@@ -413,3 +419,69 @@ def test_openapi_lists_the_trip_error_codes() -> None:
         content = schema["paths"][route][method]["responses"]["422"]["content"]
         ref = content["application/json"]["schema"]["$ref"]
         assert ref.endswith("/TripValidationErrors")
+
+
+@pytest.fixture
+def list_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, AsyncMock]:
+    listing = AsyncMock(return_value=Page[TripRead].of([], 0, PageParams()))
+    monkeypatch.setattr(trip_service, "list_trips", listing)
+    app = create_app()
+    authorize(app, BOB)
+    app.dependency_overrides[get_session] = lambda: None
+    return TestClient(app), listing
+
+
+def test_list_defaults_and_reads_the_filters(
+    list_client: tuple[TestClient, AsyncMock],
+) -> None:
+    client, listing = list_client
+    response = client.get(
+        path("list_trips"),
+        params=[
+            ("role", "host"),
+            ("role", "member"),
+            ("q", "kra"),
+            ("start_from", "2026-11-01"),
+            ("sort", "start_date"),
+        ],
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [],
+        "total": 0,
+        "page": 1,
+        "size": 20,
+        "pages": 0,
+    }
+    query = listing.await_args_list[0].args[2]
+    assert (query.page, query.size, query.sort, query.dir) == (
+        1,
+        20,
+        TripSort.START_DATE,
+        SortDir.DESC,
+    )
+    assert query.role == [TripRole.HOST, TripRole.MEMBER]
+    assert (query.q, query.start_from) == ("kra", date(2026, 11, 1))
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"sort": "owner_sub"},
+        {"dir": "sideways"},
+        {"size": 101},
+        {"page": 0},
+        {"role": "boss"},
+        {"kind": "holiday"},
+        {"city": "Kraków"},
+        {"q": ""},
+        {"start_from": "2026-12-01", "start_to": "2026-11-01"},
+        {"unknown": "1"},
+    ],
+)
+def test_list_rejects_bad_params(
+    list_client: tuple[TestClient, AsyncMock], params: dict[str, object]
+) -> None:
+    client, listing = list_client
+    assert client.get(path("list_trips"), params=params).status_code == 422  # ty: ignore[invalid-argument-type]
+    listing.assert_not_awaited()
