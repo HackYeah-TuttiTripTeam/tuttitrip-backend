@@ -258,3 +258,45 @@ def test_feature_codes_are_not_spelled_out_elsewhere() -> None:
         if isinstance(node, ast.Constant) and node.value in codes
     ]
     assert offenders == []
+
+
+SECRET_PARAMS = {
+    "token",
+    "access_token",
+    "invitation_token",
+}  # ids like token_id are fine
+INVITATION_JOIN_ENDPOINTS = {"preview_invitation", "accept_invitation"}
+
+
+def routes_with_a_secret_in_the_url(app: FastAPI) -> list[str]:
+    """Routes whose path or query parameters are named like a token."""
+    problems: list[str] = []
+    for route in api_routes(app):
+        if not isinstance(route.original_route, APIRoute):
+            continue
+        dependant = route.original_route.dependant
+        names = [p.name for p in (*dependant.path_params, *dependant.query_params)]
+        if any(name in SECRET_PARAMS for name in names):
+            problems.append(route.path or "")
+    return problems
+
+
+def test_no_route_takes_a_token_in_the_path_or_query() -> None:
+    assert routes_with_a_secret_in_the_url(APP) == []
+
+
+def test_the_secret_in_url_check_catches_a_token_parameter() -> None:
+    app = FastAPI()
+    app.get("/a/{token}", dependencies=[public()])(lambda token: token)
+    app.get("/b", dependencies=[public()])(lambda token="": token)
+    assert routes_with_a_secret_in_the_url(app) == ["/a/{token}", "/b"]
+
+
+def test_joining_by_invitation_needs_an_account_not_a_token() -> None:
+    joins = [r for r in API_ROUTES if r.name in INVITATION_JOIN_ENDPOINTS]
+    assert {r.name for r in joins} == INVITATION_JOIN_ENDPOINTS
+    for route in joins:
+        (marker,) = route_markers(route)
+        assert isinstance(marker, PermissionRequirement)
+        assert marker.feature is Feature.TRIPS_INVITATIONS
+        assert "{trip_id}" not in (route.path or "")

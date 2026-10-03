@@ -62,6 +62,24 @@ async def user_has_profile(session: AsyncSession, trip_id: UUID, sub: str) -> bo
     return found is not None
 
 
+async def select_account_profile_id(
+    session: AsyncSession, trip_id: UUID, sub: str
+) -> UUID | None:
+    """The id of the profile an account has on a trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        sub: Auth0 subject.
+
+    Returns:
+        The profile id, or None.
+    """
+    return await session.scalar(
+        select(Profile.id).where(Profile.trip_id == trip_id, Profile.user_sub == sub)
+    )
+
+
 async def insert_profile(session: AsyncSession, profile: Profile) -> Profile:
     """Insert a profile and flush.
 

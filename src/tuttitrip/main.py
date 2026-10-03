@@ -31,6 +31,7 @@ from tuttitrip.shared.jobs.api import router as jobs_router
 from tuttitrip.shared.permissions.api import document_permissions
 from tuttitrip.shared.permissions.api import router as permissions_router
 from tuttitrip.trips.api import router as trips_router
+from tuttitrip.trips.invitations.api import router as invitations_router
 
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
@@ -42,6 +43,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     permissions_router,
     jobs_router,
     trips_router,
+    invitations_router,
     profiles_router,
     feedback_router,
     interview_router,
