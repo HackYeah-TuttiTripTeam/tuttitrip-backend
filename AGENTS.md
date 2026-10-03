@@ -185,7 +185,12 @@ through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
   until the org upgrades. Then apply it with the API call in the README.
 - Branch from `develop`: `feature/<short-name>`, `fix/<short-name>`,
   `chore/<short-name>`. PR into `develop`; release = PR `develop` -> `main`.
-- Head branches are deleted automatically after merge.
+- Delete the feature branch after merging its PR (GitHub's merge button
+  offers it); its preview deployment is removed with it. Automatic deletion
+  of head branches is off: without branch protection it would also delete
+  `develop` when a release PR (`develop` -> `main`) is merged. If `develop`
+  disappears anyway, recreate it at the release PR's head commit; deploy
+  cleanup refuses to run while `main` or `develop` is missing.
 - No AI attribution in commits, PRs or docs (no `Co-Authored-By` trailers
   for assistants, no "generated with" lines).
 
