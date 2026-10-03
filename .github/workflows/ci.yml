@@ -1,20 +1,27 @@
 name: CI
 
-# One run per commit: every branch is built on push (the branch deployment
-# needs the push event anyway), so there is no pull_request trigger.
+# One run per commit: checks run on push only. The only pull_request trigger is
+# the `labeled` event, which does nothing but deploy a preview (label `preview`).
 #   lint, tests    parallel, on the org runners; a newer push to the same branch
 #                  cancels them (never on main/develop).
 #   contracts-check  8 s of curl + diff, so it runs on a GitHub-hosted runner
 #                  instead of waiting in the queue for a hackathon runner.
-#   deploy         main/develop wait for lint + tests; any other branch deploys
-#                  its preview at once (it does not wait for the queue). Deploys
-#                  are never cancelled mid-way, they run one after another per branch.
+#   deploy         main/develop wait for lint + tests; a branch preview (when
+#                  enabled, see below) deploys at once, not waiting for the queue.
+#                  Deploys are never cancelled mid-way, they run one after another per branch.
+#
+# Branch previews (the deployments of branches other than main/develop) are off
+# unless the org variable PREVIEW_DEPLOYS is 'true' or the PR carries the label
+# `preview`. Adding that label starts a run that only deploys the preview.
 on:
   push:
     branches: ["**"]
+  pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
+  pull-requests: read
 
 # uv keeps its package cache in ~/.cache/uv, which stays on the self-hosted
 # runners between runs, so the GitHub cache upload/download step is off.
@@ -22,6 +29,7 @@ permissions:
 jobs:
   lint:
     name: lint
+    if: github.event_name == 'push'
     runs-on: [self-hosted, hackathon]
     timeout-minutes: 10
     concurrency:
@@ -43,6 +51,7 @@ jobs:
 
   tests:
     name: tests
+    if: github.event_name == 'push'
     runs-on: [self-hosted, hackathon]
     timeout-minutes: 15
     concurrency:
@@ -59,6 +68,7 @@ jobs:
         run: uv run pytest
 
   contracts-check:
+    if: github.event_name == 'push'
     name: contracts-check
     # GitHub-hosted: this repository is private, so the run draws on the org's
     # included minutes (about one billed minute per push).
@@ -78,17 +88,53 @@ jobs:
       - name: Compare contracts/jobs.schema.json with tuttitrip-worker
         run: deploy/check-contract.sh
 
-  # Branch previews: no `needs`, so the deployment is not held back by the queue.
+  # Decides whether this branch gets a preview. Runs on the deploy host, so it
+  # does not take a slot from the hackathon runners.
+  preview-gate:
+    name: preview-gate
+    if: >-
+      (github.event_name == 'push' && github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'preview' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, tuttitrip-deploy]
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PREVIEW_DEPLOYS: ${{ vars.PREVIEW_DEPLOYS }}
+      EVENT: ${{ github.event_name }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - id: gate
+        run: |
+          enabled=false
+          if [ "$PREVIEW_DEPLOYS" = true ] || [ "$EVENT" = pull_request ]; then
+            enabled=true
+          elif curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" |
+              jq -e 'any(.[]; .state == "open" and any(.labels[]; .name == "preview"))' >/dev/null; then
+            enabled=true
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          if [ "$enabled" != true ]; then
+            echo "Preview disabled (PREVIEW_DEPLOYS=false); add label \`preview\` to deploy" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Branch previews: no dependency on lint/tests, so the queue does not hold them back.
   deploy-preview:
     name: deploy
-    if: github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main'
+    needs: preview-gate
+    if: needs.preview-gate.outputs.enabled == 'true'
     # Runner installed on the deploy host itself (dellpromaxgb10).
     runs-on: [self-hosted, tuttitrip-deploy]
     timeout-minutes: 20
     concurrency:
-      group: deploy-${{ github.ref }}
+      group: deploy-${{ github.head_ref || github.ref_name }}
       cancel-in-progress: false
     env: &deploy-env
+      BRANCH: ${{ github.head_ref || github.ref_name }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_TUNNEL_ID: ${{ vars.CLOUDFLARE_TUNNEL_ID }}
@@ -99,12 +145,14 @@ jobs:
       TUTTITRIP_CORS_ORIGIN_REGEX: ${{ vars.CORS_ORIGIN_REGEX }}
     steps: &deploy-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
       - name: Deploy and clean up stale branches
-        run: deploy/deploy.sh "${GITHUB_REF_NAME}" "${GITHUB_SHA}"
+        run: deploy/deploy.sh "$BRANCH" "$SHA"
       - name: Public health check
         run: |
           . deploy/lib.sh
-          url="https://$(tt_hostname "$(tt_env "${GITHUB_REF_NAME}")")/api/v1/health"
+          url="https://$(tt_hostname "$(tt_env "$BRANCH")")/api/v1/health"
           for _ in $(seq 30); do
             if curl -fsS "$url"; then echo; echo "OK: $url"; exit 0; fi
             sleep 5
@@ -116,11 +164,11 @@ jobs:
   deploy:
     name: deploy
     needs: [lint, tests]
-    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
     runs-on: [self-hosted, tuttitrip-deploy]
     timeout-minutes: 20
     concurrency:
-      group: deploy-${{ github.ref }}
+      group: deploy-${{ github.head_ref || github.ref_name }}
       cancel-in-progress: false
     env: *deploy-env
     steps: *deploy-steps
