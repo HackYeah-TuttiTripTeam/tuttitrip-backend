@@ -45,14 +45,14 @@ class Trip(Base):
     day_start: Mapped[time] = mapped_column(Time, server_default=text("'09:00'"))
     day_end: Mapped[time] = mapped_column(Time, server_default=text("'19:00'"))
     # Plain text, no FK: the cities table comes with another issue.
-    city_slug: Mapped[str | None] = mapped_column(String(100))
+    city_slug: Mapped[str | None] = mapped_column(String(64))
     currency: Mapped[str | None] = mapped_column(String(3))
     budget_total_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     budget_total_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     budget_day_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     budget_day_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
-    # `flex` of E6 in percent: B_max = B_do * (1 + flex).
-    budget_flex_pct: Mapped[int] = mapped_column(server_default=text("0"))
+    # `flex` of E6 in percent, solver divides by 100: B_max = B_do * (1 + flex).
+    budget_flex_pct: Mapped[int] = mapped_column(server_default=text("10"))
     # Group goal alpha of E5.
     fairness_alpha: Mapped[float] = mapped_column(Float, server_default=text("1"))
 

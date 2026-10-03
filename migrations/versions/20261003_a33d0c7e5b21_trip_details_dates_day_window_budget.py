@@ -45,7 +45,7 @@ def upgrade() -> None:
             "day_end", sa.Time(), server_default=sa.text("'19:00'"), nullable=False
         ),
     )
-    op.add_column("trips", sa.Column("city_slug", sa.String(length=100), nullable=True))
+    op.add_column("trips", sa.Column("city_slug", sa.String(length=64), nullable=True))
     op.add_column("trips", sa.Column("currency", sa.String(length=3), nullable=True))
     for name in (
         "budget_total_min",
@@ -57,7 +57,10 @@ def upgrade() -> None:
     op.add_column(
         "trips",
         sa.Column(
-            "budget_flex_pct", sa.Integer(), server_default=sa.text("0"), nullable=False
+            "budget_flex_pct",
+            sa.Integer(),
+            server_default=sa.text("10"),
+            nullable=False,
         ),
     )
     op.add_column(
@@ -73,7 +76,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Drop the CHECK constraints and the trip detail columns."""
     for name, _ in CHECKS:
-        op.drop_constraint(f"ck_trips_{name}", "trips", type_="check")
+        op.drop_constraint(name, "trips", type_="check")
     for column in (
         "fairness_alpha",
         "budget_flex_pct",

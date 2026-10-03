@@ -152,7 +152,7 @@ def test_multi_day_trip_is_a_trip_and_undated_one_too() -> None:
     assert TripRead.model_validate({**vars(undated), "my_role": "host"}).kind == "trip"
 
 
-def test_budget_flex_is_stored(
+def test_budget_range_and_flex_are_stored(
     detail_client: TestClient, monkeypatch: pytest.MonkeyPatch, session: AsyncMock
 ) -> None:
     trip = _as(monkeypatch, TripRole.CO_HOST)
@@ -177,6 +177,10 @@ def test_budget_flex_is_stored(
         ({"budget_flex_pct": 51}, "budget_flex_pct"),
         ({"fairness_alpha": 3.5}, "fairness_alpha"),
         ({"currency": "pln"}, "currency"),
+        ({"city_slug": "Gdańsk"}, "city_slug"),
+        ({"start_date": None}, "start_date"),  # stored dates are a pair
+        ({"budget_total_min": "5"}, "budget_total_max"),  # a lone half of a range
+        ({"budget_day_max": "5"}, "budget_day_min"),
         ({"day_start": None}, "day_start"),
     ],
 )
@@ -190,9 +194,20 @@ def test_invalid_patch_is_422_naming_the_field(
     trip = _as(monkeypatch, TripRole.HOST)
     response = detail_client.patch(path("update_trip", trip_id=TRIP), json=body)
     assert response.status_code == 422
-    assert field in response.text
+    assert response.json()["detail"][0]["loc"][-1] == field
     assert trip.end_date == date(2026, 11, 3)
     session.commit.assert_not_awaited()
+
+
+def test_clearing_both_dates_is_allowed(
+    detail_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trip = _as(monkeypatch, TripRole.HOST)
+    body = {"start_date": None, "end_date": None}
+    response = detail_client.patch(path("update_trip", trip_id=TRIP), json=body)
+    assert response.status_code == 200
+    assert trip.start_date is None
+    assert trip.end_date is None
 
 
 def test_patch_can_clear_a_nullable_field(

@@ -10,10 +10,12 @@ from tuttitrip.trips import db
 from tuttitrip.trips.models import Trip
 from tuttitrip.trips.schemas import (
     TripCreate,
+    TripDetails,
     TripMembership,
     TripRead,
     TripRole,
     TripUpdate,
+    check_trip,
 )
 
 
@@ -39,7 +41,8 @@ class TripInvalidError(Exception):
 
 
 def _read(trip: Trip, role: TripRole) -> TripRead:
-    return TripRead.model_validate({**vars(trip), "my_role": role})
+    details = TripDetails.model_validate(trip, from_attributes=True)
+    return TripRead(**details.model_dump(exclude={"kind"}), my_role=role)
 
 
 async def create_trip(
@@ -144,19 +147,17 @@ async def update_trip(
     if trip is None:
         raise TripNotFoundError(str(membership.trip_id))
     changes = data.model_dump(exclude_unset=True)
+    merged = TripUpdate.model_validate(trip, from_attributes=True).model_copy(
+        update=changes
+    )
     try:
-        TripUpdate.model_validate(
-            {k: v for k, v in vars(trip).items() if k in TripUpdate.model_fields}
-            | changes
-        )
+        check_trip(merged, complete=True)
     except ValidationError as exc:
+        errors = exc.errors(
+            include_url=False, include_input=False, include_context=False
+        )
         raise TripInvalidError(
-            [
-                dict(e)
-                for e in exc.errors(
-                    include_url=False, include_input=False, include_context=False
-                )
-            ]
+            [{**e, "loc": ("body", *e["loc"])} for e in errors]
         ) from exc
     for field, value in changes.items():
         setattr(trip, field, value)
