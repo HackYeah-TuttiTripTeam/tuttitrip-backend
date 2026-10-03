@@ -198,6 +198,9 @@ src/tuttitrip/
 └── search/            # embeddingi w pgvector (zapisuje je worker)
 ```
 
+Algorytm planu i miary sprawiedliwości (równania E0 do E6, parametry, testy) jest opisany w
+[docs/algorytm.md](docs/algorytm.md). To kanoniczna specyfikacja dla `planning/**/logic`.
+
 Zasady sprawdzane przez `tests/architecture/` (pytest-archon i testy struktury):
 
 - każda domena ma wymagane pliki, a `db.py` istnieje wtedy i tylko wtedy, gdy jest `models.py`;
