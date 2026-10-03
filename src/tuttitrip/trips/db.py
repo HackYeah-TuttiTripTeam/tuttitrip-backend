@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.trips.models import Trip, TripMember
@@ -72,3 +72,26 @@ async def select_member_role(
             TripMember.trip_id == trip_id, TripMember.user_sub == sub
         )
     )
+
+
+async def select_trip(session: AsyncSession, trip_id: UUID) -> Trip | None:
+    """Load a trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+
+    Returns:
+        The trip, or None.
+    """
+    return await session.get(Trip, trip_id)
+
+
+async def delete_trip(session: AsyncSession, trip_id: UUID) -> None:
+    """Delete a trip in SQL so the database cascades to everything under it.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+    """
+    await session.execute(delete(Trip).where(Trip.id == trip_id))

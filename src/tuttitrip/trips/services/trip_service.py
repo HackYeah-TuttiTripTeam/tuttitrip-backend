@@ -1,13 +1,20 @@
-"""Create and list trips, and check a user's role on a trip (object level)."""
+"""Trips: create, list, read, update, delete, and the object-level role check."""
 
 from itertools import starmap
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.trips import db
 from tuttitrip.trips.models import Trip
-from tuttitrip.trips.schemas import TripCreate, TripMembership, TripRead, TripRole
+from tuttitrip.trips.schemas import (
+    TripCreate,
+    TripMembership,
+    TripRead,
+    TripRole,
+    TripUpdate,
+)
 
 
 class TripNotFoundError(Exception):
@@ -18,14 +25,21 @@ class TripRoleError(Exception):
     """The user is on the trip but their role is too low."""
 
 
+class TripInvalidError(Exception):
+    """The trip would break a rule after the change (carries pydantic errors)."""
+
+    def __init__(self, errors: list[dict[str, object]]) -> None:
+        """Keep the errors for the API to report.
+
+        Args:
+            errors: Pydantic error dicts (``loc``, ``msg``, ``type``).
+        """
+        super().__init__("Invalid trip details")
+        self.errors = errors
+
+
 def _read(trip: Trip, role: TripRole) -> TripRead:
-    return TripRead(
-        id=trip.id,
-        name=trip.name,
-        destination=trip.destination,
-        created_at=trip.created_at,
-        my_role=role,
-    )
+    return TripRead.model_validate({**vars(trip), "my_role": role})
 
 
 async def create_trip(
@@ -85,3 +99,78 @@ async def get_membership(
         msg = f"Trip role '{min_role}' required (you are '{role}')"
         raise TripRoleError(msg)
     return TripMembership(trip_id=trip_id, sub=sub, role=role)
+
+
+async def get_trip(session: AsyncSession, membership: TripMembership) -> TripRead:
+    """Read the trip the caller was checked for.
+
+    Args:
+        session: Open session.
+        membership: Proof from ``TripAccess``.
+
+    Returns:
+        The trip with the caller's role.
+
+    Raises:
+        TripNotFoundError: The trip vanished after the access check.
+    """
+    trip = await db.select_trip(session, membership.trip_id)
+    if trip is None:
+        raise TripNotFoundError(str(membership.trip_id)) from None
+    return _read(trip, membership.role)
+
+
+async def update_trip(
+    session: AsyncSession, membership: TripMembership, data: TripUpdate
+) -> TripRead:
+    """Apply a partial update and commit.
+
+    The merged state is validated again, so a single changed field cannot
+    break a range against a stored one.
+
+    Args:
+        session: Open session.
+        membership: Proof from ``TripAccess`` (co-host or host).
+        data: The fields to change.
+
+    Returns:
+        The updated trip.
+
+    Raises:
+        TripNotFoundError: The trip vanished after the access check.
+        TripInvalidError: The merged trip breaks a range rule.
+    """
+    trip = await db.select_trip(session, membership.trip_id)
+    if trip is None:
+        raise TripNotFoundError(str(membership.trip_id))
+    changes = data.model_dump(exclude_unset=True)
+    try:
+        TripUpdate.model_validate(
+            {k: v for k, v in vars(trip).items() if k in TripUpdate.model_fields}
+            | changes
+        )
+    except ValidationError as exc:
+        raise TripInvalidError(
+            [
+                dict(e)
+                for e in exc.errors(
+                    include_url=False, include_input=False, include_context=False
+                )
+            ]
+        ) from exc
+    for field, value in changes.items():
+        setattr(trip, field, value)
+    await session.commit()
+    await session.refresh(trip)
+    return _read(trip, membership.role)
+
+
+async def delete_trip(session: AsyncSession, membership: TripMembership) -> None:
+    """Delete the trip with everything under it and commit.
+
+    Args:
+        session: Open session.
+        membership: Proof from ``TripAccess`` (host).
+    """
+    await db.delete_trip(session, membership.trip_id)
+    await session.commit()
