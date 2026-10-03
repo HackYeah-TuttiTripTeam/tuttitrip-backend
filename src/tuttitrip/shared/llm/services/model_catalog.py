@@ -4,26 +4,28 @@ Agents pass text ids such as ``tuttitrip:agent`` and the catalog's
 ``ResolveModelId`` capability turns them into models built from settings,
 lazily, so the app and the tests run without keys and no real provider is built
 until a model is actually used. This mirrors the catalog of tuttitrip-worker
-(same ids). Tests swap every id for a ``TestModel``/``FunctionModel`` with
-:meth:`ModelCatalog.override`.
+(same ids). A link whose key is missing is skipped, and a chain with no key
+at all raises ``UserError``. Tests swap every id for a ``TestModel`` or
+``FunctionModel`` with :meth:`ModelCatalog.override`.
 
 | Id | Model |
 | --- | --- |
-| ``tuttitrip:agent`` | Qwen ``agent_model`` (thinking, tools), OpenRouter fallback |
-| ``tuttitrip:chat`` | Qwen ``chat_model``, OpenRouter fallback |
-| ``tuttitrip:decide`` | basal, escalates to the Qwen agent model |
-| ``tuttitrip:decide-laya`` | Laya |
+| ``tuttitrip:agent`` | Qwen ``gb10_agent_model`` (thinking, tools), then OpenRouter |
+| ``tuttitrip:chat`` | Qwen ``gb10_chat_model``, then OpenRouter |
+| ``tuttitrip:decide`` | basal, escalates to the Qwen chat model |
+| ``tuttitrip:decide-laya`` | Laya, escalates to the Qwen chat model |
 | ``tuttitrip:decide-cloud`` | JEV on OpenRouter |
 | ``tuttitrip:openrouter`` | OpenRouter chat model |
 """
 
 import os
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 from enum import StrEnum
 from typing import Any, Final
 
 from pydantic_ai.capabilities import ResolveModelId
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import Model, ModelResolutionContext
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.openai import OpenAIChatModel
@@ -64,14 +66,8 @@ def model_id(key: ModelKey) -> str:
     return f"{MODEL_ID_PREFIX}{key.value}"
 
 
-def _qwen(name: str, settings: LlmSettings) -> OpenAIChatModel:
-    return OpenAIChatModel(
-        name,
-        provider=OpenAIProvider(
-            base_url=settings.gb10_base_url,
-            api_key=settings.gb10_api_key.get_secret_value(),
-        ),
-    )
+def _gb10_key(settings: LlmSettings) -> str | None:
+    return settings.gb10_api_key.get_secret_value() or None
 
 
 def _openrouter_key(settings: LlmSettings) -> str | None:
@@ -82,14 +78,28 @@ def _openrouter_key(settings: LlmSettings) -> str | None:
     )
 
 
-def _openrouter(settings: LlmSettings) -> OpenRouterModel:
-    return OpenRouterModel(
-        settings.openrouter_model,
-        provider=OpenRouterProvider(api_key=_openrouter_key(settings)),
+def _qwen(name: str, settings: LlmSettings) -> Model | None:
+    key = _gb10_key(settings)
+    if key is None:
+        return None
+    return OpenAIChatModel(
+        name,
+        provider=OpenAIProvider(base_url=settings.gb10_base_url, api_key=key),
     )
 
 
-def _decision(name: str, base_url: str, api_key: str | None) -> SystemOneModel:
+def _openrouter(settings: LlmSettings) -> Model | None:
+    key = _openrouter_key(settings)
+    if key is None:
+        return None
+    return OpenRouterModel(
+        settings.openrouter_model, provider=OpenRouterProvider(api_key=key)
+    )
+
+
+def _decision(name: str, base_url: str, api_key: str | None) -> Model | None:
+    if api_key is None:
+        return None
     return SystemOneModel(
         name,
         provider=SystemOneProvider(base_url=base_url, api_key=api_key),
@@ -99,47 +109,62 @@ def _decision(name: str, base_url: str, api_key: str | None) -> SystemOneModel:
     )
 
 
-def _build_agent(settings: LlmSettings) -> Model:
-    return FallbackModel(_qwen(settings.agent_model, settings), _openrouter(settings))
+def _qwen_then_openrouter(model: str, settings: LlmSettings) -> list[Model | None]:
+    return [_qwen(model, settings), _openrouter(settings)]
 
 
-def _build_chat(settings: LlmSettings) -> Model:
-    return FallbackModel(_qwen(settings.chat_model, settings), _openrouter(settings))
+def _links(key: ModelKey, settings: LlmSettings) -> list[Model | None]:
+    gb10 = _gb10_key(settings)
+    match key:
+        case ModelKey.AGENT:
+            return _qwen_then_openrouter(settings.gb10_agent_model, settings)
+        case ModelKey.CHAT:
+            return _qwen_then_openrouter(settings.gb10_chat_model, settings)
+        # A decision model hands off (DecisionHandOff is a ModelAPIError) and the
+        # default fallback_on then escalates to the chat model (no thinking).
+        case ModelKey.DECIDE:
+            return [
+                _decision(settings.basal_model, settings.basal_base_url, gb10),
+                _qwen(settings.gb10_chat_model, settings),
+            ]
+        case ModelKey.DECIDE_LAYA:
+            return [
+                _decision(settings.laya_model, settings.laya_base_url, gb10),
+                _qwen(settings.gb10_chat_model, settings),
+            ]
+        case ModelKey.DECIDE_CLOUD:
+            return [
+                _decision(
+                    settings.jev_model,
+                    settings.openrouter_base_url,
+                    _openrouter_key(settings),
+                )
+            ]
+        case ModelKey.OPENROUTER:
+            return [_openrouter(settings)]
 
 
-def _build_decide(settings: LlmSettings) -> Model:
-    basal = _decision(
-        settings.basal_model,
-        settings.basal_base_url,
-        settings.gb10_api_key.get_secret_value(),
-    )
-    # A decision model hands off (DecisionHandOff is a ModelAPIError), and the
-    # default fallback_on then escalates to the language model.
-    return FallbackModel(basal, _qwen(settings.agent_model, settings))
+def model_links(key: ModelKey, settings: LlmSettings) -> list[Model]:
+    """Build the models of an entry's fallback chain, skipping links without a key.
 
+    Args:
+        key: The catalog entry.
+        settings: LLM settings (endpoints, keys, model names).
 
-def _build_decide_laya(settings: LlmSettings) -> Model:
-    return _decision(
-        settings.laya_model,
-        settings.laya_base_url,
-        settings.gb10_api_key.get_secret_value(),
-    )
+    Returns:
+        The usable links in fallback order (network calls happen only on use).
 
-
-def _build_decide_cloud(settings: LlmSettings) -> Model:
-    return _decision(
-        settings.jev_model, settings.jev_base_url, _openrouter_key(settings)
-    )
-
-
-_BUILDERS: Final[dict[ModelKey, Callable[[LlmSettings], Model]]] = {
-    ModelKey.AGENT: _build_agent,
-    ModelKey.CHAT: _build_chat,
-    ModelKey.DECIDE: _build_decide,
-    ModelKey.DECIDE_LAYA: _build_decide_laya,
-    ModelKey.DECIDE_CLOUD: _build_decide_cloud,
-    ModelKey.OPENROUTER: _openrouter,
-}
+    Raises:
+        UserError: When no link of the chain has its key.
+    """
+    links = [link for link in _links(key, settings) if link is not None]
+    if not links:
+        message = (
+            f"No API key for {model_id(key)}: set TUTTITRIP_LLM__GB10_API_KEY"
+            " or OPENROUTER_API_KEY as the entry needs."
+        )
+        raise UserError(message)
+    return links
 
 
 def build_model(key: ModelKey, settings: LlmSettings) -> Model:
@@ -150,9 +175,10 @@ def build_model(key: ModelKey, settings: LlmSettings) -> Model:
         settings: LLM settings (endpoints, keys, model names).
 
     Returns:
-        A Pydantic AI model; network calls happen only when it is used.
+        The single link, or a ``FallbackModel`` over the links that have a key.
     """
-    return _BUILDERS[key](settings)
+    links = model_links(key, settings)
+    return links[0] if len(links) == 1 else FallbackModel(*links)
 
 
 class ModelCatalog:
@@ -177,19 +203,28 @@ class ModelCatalog:
             self._models[key] = build_model(key, get_settings().llm)
         return self._models[key]
 
-    def resolve(self, _ctx: ModelResolutionContext[Any], model_id: str) -> Model | None:
+    def resolve(
+        self, _ctx: ModelResolutionContext[Any], requested: str
+    ) -> Model | None:
         """``ResolveModelId`` hook: map our ids to models, ignore others.
 
         Args:
             _ctx: Resolution context (unused; models do not depend on deps).
-            model_id: The id the agent run asked for.
+            requested: The id the agent run asked for.
 
         Returns:
             The model, or ``None`` to let Pydantic AI resolve foreign ids.
         """
-        if not model_id.startswith(MODEL_ID_PREFIX):
+        if not requested.startswith(MODEL_ID_PREFIX):
             return None
-        return self.get(ModelKey(model_id.removeprefix(MODEL_ID_PREFIX)))
+        name = requested.removeprefix(MODEL_ID_PREFIX)
+        try:
+            key = ModelKey(name)
+        except ValueError:
+            known = ", ".join(model_id(key) for key in ModelKey)
+            message = f"Unknown model id {requested!r}; known ids: {known}."
+            raise UserError(message) from None
+        return self.get(key)
 
     def capability(self) -> ResolveModelId[Any]:
         """Capability to attach to every agent that uses this catalog.

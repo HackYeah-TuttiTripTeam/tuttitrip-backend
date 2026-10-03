@@ -105,7 +105,7 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'TUTTITRIP_DATABASE__NAME=%s\n' "$database"
   printf 'TUTTITRIP_DBOS__APPLICATION_VERSION=%s\n' "$env"
   for var in TUTTITRIP_AUTH0__DOMAIN TUTTITRIP_AUTH0__AUDIENCE TUTTITRIP_CORS_ORIGINS \
-    TUTTITRIP_CORS_ORIGIN_REGEX TUTTITRIP_LLM__MODEL; do
+    TUTTITRIP_CORS_ORIGIN_REGEX; do
     if [ -n "${!var:-}" ]; then printf '%s=%s\n' "$var" "${!var}"; fi
   done
   if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi

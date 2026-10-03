@@ -6,7 +6,9 @@ environment (on the host: ``set -a; . ~/tuttitrip/app.env; set +a``)::
     uv run python scripts/smoke_llm.py [entry ...]
 
 Entries: agent, chat, decide, decide-laya, decide-cloud, openrouter. Without
-arguments it checks every entry and exits non-zero if any fails.
+arguments it checks every entry. Each link of a fallback chain is called on its
+own and labelled with its model name, because an answer from the whole chain
+would not prove that the first link works. Exits non-zero if any link fails.
 """
 
 import asyncio
@@ -16,8 +18,11 @@ from typing import Literal
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from pydantic_ai.models import Model
+from pydantic_ai.models.system_one import SystemOneModel
 
-from tuttitrip.shared.llm.services.model_catalog import ModelKey, catalog, model_id
+from tuttitrip.shared.config.settings import get_settings
+from tuttitrip.shared.llm.services.model_catalog import ModelKey, model_id, model_links
 
 
 class Reply(BaseModel):
@@ -32,48 +37,45 @@ class Reason(BaseModel):
     reason: Literal["cena", "termin", "miejsce"]
 
 
-def _agent(key: ModelKey) -> Agent[None, BaseModel]:
-    decision = key.value.startswith("decide")
-    if decision:
-        return Agent(
-            model_id(key),
+async def _check(key: ModelKey, link: Model) -> bool:
+    label = f"{model_id(key)} -> {link.model_name}"
+    if isinstance(link, SystemOneModel):
+        agent = Agent(
+            link,
             output_type=Reason,
             instructions="Choose the reason that best matches the message.",
-            capabilities=[catalog.capability()],
         )
-    return Agent(
-        model_id(key),
-        output_type=Reply,
-        instructions="Odpowiedz jednym zdaniem po polsku.",
-        capabilities=[catalog.capability()],
-    )
-
-
-async def _check(key: ModelKey) -> bool:
-    prompt = "Za drogo, nie stać nas na ten wyjazd."
-    if not key.value.startswith("decide"):
+        prompt = "Za drogo, nie stać nas na ten wyjazd."
+    else:
+        agent = Agent(
+            link,
+            output_type=Reply,
+            instructions="Odpowiedz jednym zdaniem po polsku.",
+        )
         prompt = "Napisz zdanie powitalne dla grupy planującej wyjazd w góry."
     started = time.monotonic()
     try:
-        result = await _agent(key).run(prompt)
+        result = await agent.run(prompt)
     except Exception as exc:  # ruff: ignore[blind-except] the smoke test reports every failure
-        print(f"FAIL {key.value}: {type(exc).__name__}: {exc}")
+        print(f"FAIL {label}: {type(exc).__name__}: {exc}")
         return False
-    elapsed = time.monotonic() - started
-    print(f"OK   {key.value} {elapsed:.1f}s {result.output!r}")
+    print(f"OK   {label} {time.monotonic() - started:.1f}s {result.output!r}")
     return True
 
 
 async def main(keys: list[ModelKey]) -> int:
-    """Run the live checks.
+    """Run the live checks, one call per chain link.
 
     Args:
         keys: Catalog entries to check.
 
     Returns:
-        Process exit code: 0 when every entry answered.
+        Process exit code: 0 when every link answered.
     """
-    results = [await _check(key) for key in keys]
+    llm = get_settings().llm
+    results = [
+        await _check(key, link) for key in keys for link in model_links(key, llm)
+    ]
     return 0 if all(results) else 1
 
 

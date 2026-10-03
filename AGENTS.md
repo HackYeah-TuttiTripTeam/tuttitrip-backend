@@ -156,7 +156,8 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   `decide-laya`, `decide-cloud`, `openrouter`) with `catalog.capability()`,
   never `provider:model` strings. The GB10 key is `TUTTITRIP_LLM__GB10_API_KEY`;
   OpenRouter reads `OPENROUTER_API_KEY` when `TUTTITRIP_LLM__OPENROUTER_API_KEY`
-  is empty. Live check outside CI: `uv run python scripts/smoke_llm.py`.
+  is empty. A chain link without its key is skipped; a chain with no key raises
+  `UserError`. Live check outside CI: `uv run python scripts/smoke_llm.py`.
 - Other provider API keys are read by Pydantic AI under their own names and are
   not Settings fields.
 - Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions

@@ -46,8 +46,8 @@ class LlmSettings(BaseModel):
     # GB10 (OpenAI-compatible Qwen endpoint, LiteLLM key).
     gb10_base_url: str = "https://llm.gburek.app/v1"
     gb10_api_key: SecretStr = SecretStr("")
-    agent_model: str = "qwen3.8-27b"
-    chat_model: str = "qwen3.8-27b-chat"
+    gb10_agent_model: str = "qwen3.8-27b"
+    gb10_chat_model: str = "qwen3.8-27b-chat"
     # Decision models (System One API on the same host and key).
     basal_base_url: str = "https://llm.gburek.app/basal/v1"
     basal_model: str = "basal"
@@ -55,8 +55,8 @@ class LlmSettings(BaseModel):
     laya_model: str = "laya"
     # OpenRouter. Empty key = fall back to the standard OPENROUTER_API_KEY.
     openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "google/gemini-3.8-flash"
-    jev_base_url: str = "https://openrouter.ai/api/v1"
     jev_model: str = "typesafe/jev-1.13"
 
 
