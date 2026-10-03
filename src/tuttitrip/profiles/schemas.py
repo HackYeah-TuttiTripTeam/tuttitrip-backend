@@ -122,7 +122,10 @@ class ProfileUpdate(_ComfortOverrides):
 class ProfileRead(_Comfort):
     """A person on a trip."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # Filled by the service on every read, so it is always present in responses.
+    model_config = ConfigDict(
+        from_attributes=True, json_schema_serialization_defaults_required=True
+    )
 
     id: UUID
     trip_id: UUID
@@ -131,6 +134,14 @@ class ProfileRead(_Comfort):
     age_group: AgeGroup
     user_sub: str | None
     weight: float = Field(description="Vote multiplier in the fairness solver.")
+    customized_fields: list[str] = Field(
+        default_factory=list,
+        json_schema_extra={"readOnly": True},
+        description=(
+            "Comfort fields that differ from the defaults of the person's age "
+            "group, in schema order. Read-only, computed on read."
+        ),
+    )
 
 
 class WeightItem(BaseModel):

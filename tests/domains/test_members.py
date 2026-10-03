@@ -395,7 +395,7 @@ def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = AsyncMock()
-    profile = Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub="auth0|kuba")
+    profile = Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub="auth0|kuba", age=30)
     session.scalar.side_effect = [profile, TripRole.MEMBER, profile]
     monkeypatch.setattr(
         profile_service.ProfileRead,

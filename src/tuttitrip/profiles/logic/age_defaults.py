@@ -5,7 +5,8 @@ corrects them per person only in exceptions (see section 2 of docs/algorytm.md
 for what each field means to the solver).
 """
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, fields
 from datetime import time
 
 from tuttitrip.profiles.schemas import AgeGroup
@@ -107,3 +108,27 @@ def age_group_for(age: int) -> AgeGroup:
     if age < SENIOR_FROM:
         return AgeGroup.ADULT
     return AgeGroup.SENIOR
+
+
+def customized_fields(values: ComfortDefaults, group: AgeGroup) -> list[str]:
+    """Comfort fields whose value differs from the defaults of an age group.
+
+    Args:
+        values: A person's current comfort values.
+        group: The age group whose defaults to compare with.
+
+    Returns:
+        Field names in schema order; empty when everything is default.
+        Kilometres compare with ``math.isclose``.
+    """
+    base = DEFAULTS[group]
+    out: list[str] = []
+    for field in fields(ComfortDefaults):
+        mine, default = getattr(values, field.name), getattr(base, field.name)
+        if isinstance(mine, float):
+            same = math.isclose(mine, default)
+        else:
+            same = mine == default
+        if not same:
+            out.append(field.name)
+    return out
