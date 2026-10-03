@@ -7,6 +7,7 @@ import jwt
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 
 ALGORITHMS = ["RS256"]
+DEFAULT_ROLES_CLAIM = "https://tuttitrip.gburek.app/roles"
 
 
 class InvalidTokenError(Exception):
@@ -29,9 +30,11 @@ class TokenVerifier:
         domain: str,
         audience: str,
         key_source: SigningKeySource | None = None,
+        roles_claim: str = DEFAULT_ROLES_CLAIM,
     ) -> None:
         self.issuer = f"https://{domain}/"
         self.audience = audience
+        self.roles_claim = roles_claim
         self.key_source: SigningKeySource = key_source or jwt.PyJWKClient(
             f"https://{domain}/.well-known/jwks.json", cache_keys=True
         )
@@ -58,8 +61,10 @@ class TokenVerifier:
         except jwt.PyJWTError as exc:
             raise InvalidTokenError(str(exc)) from exc
         scope = claims.get("scope", "")
+        roles = claims.get(self.roles_claim, [])
         return AuthenticatedUser(
             sub=str(claims["sub"]),
             scopes=scope.split() if isinstance(scope, str) else [],
             permissions=[str(p) for p in claims.get("permissions", [])],
+            roles=[str(r) for r in roles] if isinstance(roles, list) else [],
         )

@@ -7,11 +7,12 @@ from typing import Any
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jwt.algorithms import get_default_algorithms
 
 from tuttitrip.main import create_app
-from tuttitrip.shared.auth.api import get_token_verifier
+from tuttitrip.shared.auth.api import AdminUser, get_token_verifier
 from tuttitrip.shared.auth.services.token_verifier import (
     InvalidTokenError,
     TokenVerifier,
@@ -20,6 +21,7 @@ from tuttitrip.shared.auth.services.token_verifier import (
 DOMAIN = "tenant.example.auth0.com"
 AUDIENCE = "https://api.example.test"
 KID = "test-key"
+ROLES_CLAIM = "https://tuttitrip.gburek.app/roles"
 
 PRIVATE_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
@@ -114,7 +116,80 @@ def test_me_returns_the_caller(client: TestClient) -> None:
         "sub": "google-oauth2|42",
         "scopes": ["openid", "profile"],
         "permissions": ["read:trips"],
+        "roles": [],
+        "is_admin": False,
     }
+
+
+def test_me_reports_the_admin_role(client: TestClient) -> None:
+    token = make_token(**{ROLES_CLAIM: ["admin"]})
+    response = client.get("/me", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json()["roles"] == ["admin"]
+    assert response.json()["is_admin"] is True
+
+
+@pytest.mark.parametrize(
+    ("claims", "roles"),
+    [
+        ({}, []),
+        ({ROLES_CLAIM: ["admin"]}, ["admin"]),
+        ({ROLES_CLAIM: ["viewer"]}, ["viewer"]),
+        ({ROLES_CLAIM: "admin"}, []),  # not a list: ignored
+        ({"roles": ["admin"]}, []),  # un-namespaced claim: ignored
+    ],
+    ids=["none", "admin", "other-role", "string-claim", "wrong-claim"],
+)
+def test_roles_come_from_the_namespaced_claim(
+    verifier: TokenVerifier,
+    claims: dict[str, object],
+    roles: list[str],
+) -> None:
+    user = verifier.verify(make_token(**claims))
+    assert user.roles == roles
+    assert user.is_admin is (roles == ["admin"])
+
+
+def test_roles_claim_name_is_configurable() -> None:
+    custom = TokenVerifier(
+        DOMAIN, AUDIENCE, key_source=StaticKeySource(), roles_claim="https://x/roles"
+    )
+    assert custom.verify(make_token(**{"https://x/roles": ["admin"]})).is_admin
+    assert not custom.verify(make_token(**{ROLES_CLAIM: ["admin"]})).is_admin
+
+
+@pytest.fixture
+def admin_client(verifier: TokenVerifier) -> Iterator[TestClient]:
+    app = FastAPI()
+
+    @app.get("/admin-only")
+    def admin_only(user: AdminUser) -> dict[str, str]:
+        return {"sub": user.sub}
+
+    app.dependency_overrides[get_token_verifier] = lambda: verifier
+    with TestClient(app) as test_client:
+        yield test_client
+
+
+def test_require_admin_rejects_anonymous(admin_client: TestClient) -> None:
+    assert admin_client.get("/admin-only").status_code == 401
+
+
+def test_require_admin_rejects_non_admins(admin_client: TestClient) -> None:
+    token = make_token()
+    response = admin_client.get(
+        "/admin-only", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 403
+
+
+def test_require_admin_lets_admins_through(admin_client: TestClient) -> None:
+    token = make_token(**{ROLES_CLAIM: ["admin"]})
+    response = admin_client.get(
+        "/admin-only", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"sub": "google-oauth2|42"}
 
 
 def test_trip_endpoints_require_a_token(client: TestClient) -> None:

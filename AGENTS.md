@@ -124,6 +124,12 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
 - Auth0: tenant `dev-yahwm2zlut2gqdry.us.auth0.com`, API audience
   `https://tuttitrip-api.gburek.app`, SPA application "TuttiTrip Web". The API
   validates RS256 access tokens (JWKS, issuer, audience, exp).
+- Admins: the Auth0 post-login Action puts `["admin"]` into the namespaced
+  access-token claim `https://tuttitrip.gburek.app/roles`
+  (`TUTTITRIP_AUTH0__ROLES_CLAIM`) for people on the superadmin allow-list
+  (kept in Auth0 and host env files, never in a repo). `CurrentUser.roles` /
+  `.is_admin` expose it, `AdminUser` (`require_admin`) answers 403 to
+  everyone else, and `GET /me` returns `roles` and `is_admin`.
 - Provider API keys (e.g. `OPENAI_API_KEY`) are read by Pydantic AI under
   their own names and are not Settings fields.
 - Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions
