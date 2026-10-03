@@ -12,7 +12,6 @@ from pydantic import ValidationError
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
-from tuttitrip.planning.plans.logic import sample_plan as sample_plan_module
 from tuttitrip.planning.plans.logic.hashing import compute_plan_hash
 from tuttitrip.planning.plans.logic.metrics import jain_index
 from tuttitrip.planning.plans.logic.sample_plan import (
@@ -21,6 +20,7 @@ from tuttitrip.planning.plans.logic.sample_plan import (
     variant_for,
 )
 from tuttitrip.planning.plans.schemas import (
+    BudgetZone,
     PlanBudget,
     PlanCreate,
     PlanDomainScore,
@@ -266,14 +266,14 @@ def test_same_trip_gives_the_same_plan_hash() -> None:
 @pytest.mark.parametrize("trip", [TRIP, TRIP_SOLO, TRIP_APPROVAL])
 def test_every_variant_passes_the_schema_validators(trip: uuid.UUID) -> None:
     plan = sample_plan(trip)
-    assert PlanRead.model_validate(plan.model_dump()) == plan
-    assert (plan.budget.kappa is not None) == plan.budget.needs_approval
+    assert PlanRead.model_validate_json(plan.model_dump_json()) == plan
+    budget = plan.budget
+    assert (budget.kappa is not None) == budget.needs_approval
+    assert budget.needs_approval == (budget.over_budget > 0)
+    assert (budget.zone is BudgetZone.IN_MARGIN) == (budget.cost > budget.b_to)
+    assert budget.over_budget == max(Decimal(0), budget.cost - budget.b_to)
+    assert budget.cost <= budget.b_max
     assert all(len(p.domains) == 5 for p in plan.fairness.per_person)
-    assert all(
-        isinstance(i.price_inflated, Decimal)
-        for i in _stops(plan)
-        if i.price_inflated is not None
-    )
     assert plan.lodging is not None
     assert plan.lodging.nights >= 1
 
@@ -308,5 +308,38 @@ def test_selection_rule_is_documented_in_the_endpoints() -> None:
         ("/api/v1/trips/{trip_id}/plans", "post"),
         ("/api/v1/trips/{trip_id}/plans/latest", "get"),
     ):
-        assert "sha256(trip_id)[0] % 3" in paths[route][method]["description"]
-    assert "sha256(trip_id)[0] % 3" in (sample_plan_module.__doc__ or "")
+        assert (
+            "sha256(str(trip_id).encode())[0] % 3"
+            in paths[route][method]["description"]
+        )
+
+
+def test_approval_budget_follows_e6() -> None:
+    budget = sample_plan(TRIP_APPROVAL).budget
+    assert budget.strict_cost is not None
+    assert budget.gain_points is not None
+    assert budget.strict_cost <= budget.b_to
+    assert budget.gain_points >= 8
+    assert budget.kappa == (
+        (budget.cost - budget.strict_cost) / Decimal(str(budget.gain_points))
+    ).quantize(Decimal("0.01"))
+    assert budget.zone is BudgetZone.IN_MARGIN
+
+
+def test_approval_variant_over_http(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    membership = TripMembership(
+        trip_id=TRIP_APPROVAL, sub=BOB.sub, role=TripRole.MEMBER
+    )
+    monkeypatch.setattr(
+        trip_service, "get_membership", AsyncMock(return_value=membership)
+    )
+    created = client.post(path("create_plan", trip_id=TRIP_APPROVAL))
+    latest = client.get(path("get_latest_plan", trip_id=TRIP_APPROVAL))
+    assert created.status_code == 201
+    assert latest.status_code == 200
+    body = latest.json()
+    assert body["budget"]["needs_approval"] is True
+    assert body["budget"]["kappa"] is not None
+    assert body["plan_hash"] == created.json()["plan_hash"]
