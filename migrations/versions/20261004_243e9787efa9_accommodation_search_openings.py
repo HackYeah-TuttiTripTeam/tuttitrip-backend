@@ -1,7 +1,7 @@
 """Accommodation search openings.
 
 Revision ID: 243e9787efa9
-Revises: 5b310321f6a9
+Revises: 2aba684f6abc
 Create Date: 2026-10-04 01:14:41.461655
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "243e9787efa9"
-down_revision: str | None = "5b310321f6a9"
+down_revision: str | None = "2aba684f6abc"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
