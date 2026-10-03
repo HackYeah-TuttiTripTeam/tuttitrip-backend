@@ -58,7 +58,7 @@ def test_linter_flags_over_budget_plan() -> None:
 def test_fairness_endpoint() -> None:
     with TestClient(create_app()) as client:
         response = client.post(
-            "/planning/fairness/score",
+            "/api/v1/planning/fairness/score",
             json={"people": [{"utility": 9, "weight": 1}]},
         )
     assert response.status_code == 200

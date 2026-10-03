@@ -14,7 +14,7 @@ kod (solver, linter, reguły cenowe, rozliczenie), a testy architektury pilnują
 żeby ten kod nie importował FastAPI, Pydantic AI ani bazy danych.
 
 Frontend (React) jest w osobnym repozytorium `tuttitrip-frontend` i generuje
-klienta TypeScript z `/openapi.json` tego API.
+klienta TypeScript z `/api/v1/openapi.json` tego API.
 
 ## Stack
 
@@ -71,10 +71,14 @@ Przy innym porcie bazy zmień go też w adresie dla `dbos migrate`.
 uv run uvicorn tuttitrip.main:app --reload
 ```
 
-- http://localhost:8000/docs: dokumentacja Swagger
-- http://localhost:8000/openapi.json: schemat dla generatora klienta TS
-- http://localhost:8000/health: stan aplikacji, bazy i workera (`503`, gdy baza nie odpowiada albo worker ma niezgodną wersję kontraktu)
-- http://localhost:8000/me: dane zalogowanego użytkownika (wymaga tokenu Auth0)
+- http://localhost:8000/api/v1/docs: dokumentacja Swagger
+- http://localhost:8000/api/v1/openapi.json: schemat dla generatora klienta TS
+- http://localhost:8000/api/v1/health: stan aplikacji, bazy i workera (`503`, gdy baza nie odpowiada albo worker ma niezgodną wersję kontraktu)
+- http://localhost:8000/api/v1/me: dane zalogowanego użytkownika (wymaga tokenu Auth0)
+
+Wszystkie endpointy są pod `/api/v1/` (stała `API_PREFIX` w `main.py`,
+pilnuje tego test `tests/architecture/test_routes.py`). Wdrożone frontendy
+wołają API przez własny proxy `/api/*`, czyli z tej samej domeny.
 
 Całość w kontenerach (baza, jednorazowe migracje, API):
 
@@ -115,7 +119,7 @@ stan przez `DBOSClient` (`src/tuttitrip/shared/jobs/`), a sam żadnych workflow�
 nie uruchamia.
 
 - `POST /planning/jobs` zleca wygenerowanie planu i zwraca `workflow_id`.
-  Stan, wynik, błąd i postęp zwraca `GET /jobs/{id}`, a `POST /jobs/{id}/cancel` anuluje zadanie.
+  Stan, wynik, błąd i postęp zwraca `GET /api/v1/jobs/{id}`, a `POST /api/v1/jobs/{id}/cancel` anuluje zadanie.
 - Kontrakt (nazwy workflowów i kolejek, payloady, `CONTRACT_VERSION`) jest
   w repozytorium workera. Tutaj trzymamy jego kopię w `shared/jobs/contracts.py`
   i wygenerowany plik `contracts/jobs.schema.json`. Job CI `contracts-check`
@@ -123,7 +127,7 @@ nie uruchamia.
 - Schemat bazy i migracje należą do backendu. Worker łączy się rolą
   `tuttitrip_worker` bez prawa do DDL i zapisuje tylko tabele wymienione w
   `deploy/worker-grants.sql`.
-- Worker co około 30 s zapisuje heartbeat, a `/health` pokazuje
+- Worker co około 30 s zapisuje heartbeat, a `/api/v1/health` pokazuje
   `worker: ok | stale | missing`. Gdy workera brakuje, endpointy zlecające
   zadania zwracają 503 z czytelnym komunikatem.
 - Po każdym wdrożeniu pipeline zleca workflow `ping` i czeka na jego wynik.
@@ -132,7 +136,7 @@ Lokalnie backend i worker korzystają z tej samej bazy z Docker Compose. Po
 krokach z sekcji „Baza danych i migracje” uruchom workera z jego repozytorium
 z `DBOS_SYSTEM_DATABASE_URL=postgresql://tuttitrip:tuttitrip@localhost:5432/tuttitrip`
 i `DBOS__APPVERSION=local`, a potem sprawdź połączenie:
-`curl -X POST localhost:8000/jobs/ping`. Wszystkie zasady współpracy
+`curl -X POST localhost:8000/api/v1/jobs/ping`. Wszystkie zasady współpracy
 (nazwy, pliki env, wersje, sprzątanie) opisuje
 [deploy/CONVENTIONS.md](deploy/CONVENTIONS.md).
 
@@ -155,8 +159,8 @@ src/tuttitrip/
 ├── shared/            # wspólne komponenty, nie znają domen
 │   ├── config/        # Settings
 │   ├── db/            # Base, silnik, sesje
-│   ├── auth/          # weryfikacja tokenów Auth0, GET /me
-│   ├── health/        # GET /health, GET /health/live
+│   ├── auth/          # weryfikacja tokenów Auth0, GET /api/v1/me
+│   ├── health/        # GET /api/v1/health, GET /api/v1/health/live
 │   └── jobs/          # klient DBOS: zlecanie zadań workerowi, kontrakt
 ├── trips/             # wyjazdy (wzorcowa domena: api -> services -> db)
 ├── profiles/          # uczestnicy wyjazdu (wagi, grupy wiekowe)

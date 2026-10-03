@@ -30,7 +30,7 @@ def test_equal_split_balances() -> None:
 def test_balances_endpoint() -> None:
     with TestClient(create_app()) as client:
         response = client.post(
-            "/expenses/settlement/balances",
+            "/api/v1/expenses/settlement/balances",
             json={
                 "payments": [{"payer": "A", "amount": "10", "participants": ["A", "B"]}]
             },

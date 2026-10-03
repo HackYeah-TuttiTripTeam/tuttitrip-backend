@@ -133,7 +133,7 @@ docker run -d --name "$container" --network "$TT_NETWORK" --restart unless-stopp
 tt_log "started $container"
 
 for i in $(seq 60); do
-  if curl -fsS -H "Host: $host" "http://$TT_GATEWAY_BIND/health" >/dev/null 2>&1; then break; fi
+  if curl -fsS -H "Host: $host" "http://$TT_GATEWAY_BIND/api/v1/health" >/dev/null 2>&1; then break; fi
   [ "$i" = 60 ] && { tt_log "health check failed"; docker logs --tail 50 "$container" >&2; exit 1; }
   sleep 2
 done
@@ -177,10 +177,10 @@ fi
 
 if [ "$(docker inspect -f '{{.State.Running}}' "$worker" 2>/dev/null || true)" = true ]; then
   tt_log "smoke test: ping workflow through the worker"
-  ping_id=$(curl -fsS -X POST -H "Host: $host" "http://$TT_GATEWAY_BIND/jobs/ping" | jq -r .workflow_id)
+  ping_id=$(curl -fsS -X POST -H "Host: $host" "http://$TT_GATEWAY_BIND/api/v1/jobs/ping" | jq -r .workflow_id)
   state=""
   for _ in $(seq 60); do
-    state=$(curl -fsS -H "Host: $host" "http://$TT_GATEWAY_BIND/jobs/ping/$ping_id" | jq -r .status)
+    state=$(curl -fsS -H "Host: $host" "http://$TT_GATEWAY_BIND/api/v1/jobs/ping/$ping_id" | jq -r .status)
     case "$state" in SUCCESS|ERROR|CANCELLED|MAX_RECOVERY_ATTEMPTS_EXCEEDED) break ;; esac
     sleep 3
   done

@@ -8,7 +8,7 @@ Canonical instructions for anyone (human or agent) changing this repository.
 TuttiTrip (working name WARTO) is the backend of a group/family trip planner
 built at HackYeah 2026. FastAPI + Pydantic + Pydantic AI on Python 3.14, async
 SQLAlchemy 2 on PostgreSQL, Auth0 for login. The web client consumes the
-OpenAPI schema (`/openapi.json`) through a generated TypeScript client.
+OpenAPI schema (`/api/v1/openapi.json`) through a generated TypeScript client.
 
 The product rule that shapes the code: deterministic logic (fairness solver,
 plan linter, pricing, settlement) never depends on FastAPI, Pydantic AI or the
@@ -36,8 +36,8 @@ src/tuttitrip/
   shared/              shared kernel, imports no feature domain
     config/            Settings (pydantic-settings)
     db/                Base, async engine/sessions, SessionDep (db/api.py)
-    auth/              Auth0 JWT verification, CurrentUser, GET /me
-    health/            GET /health (DB + worker), GET /health/live
+    auth/              Auth0 JWT verification, CurrentUser, GET /api/v1/me
+    health/            GET /api/v1/health (DB + worker), GET /api/v1/health/live
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
   trips/               reference slice: api -> services -> db -> models
   profiles/            people on a trip (weights, age groups)
@@ -97,6 +97,23 @@ by default, `only_direct_imports=True` limits it, imports in functions and
 
 Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
 
+## API paths
+
+- Every endpoint lives under `/api/v{N}/`, today `/api/v1/` (`API_PREFIX` in
+  `main.py`), including `/api/v1/health`, `/api/v1/me`, `/api/v1/jobs/...`,
+  `/api/v1/openapi.json`, `/api/v1/docs` and `/api/v1/redoc`. Routers in
+  `api.py` keep their own short prefix (`/trips`); `create_app()` adds the
+  version once. `tests/architecture/test_routes.py` fails on any route outside
+  it (allow-list `ALLOWED_UNVERSIONED`, empty on purpose).
+- Route-level tests iterate `fastapi.routing.iter_route_contexts(app.routes)`:
+  FastAPI 0.142 includes routers lazily, so `app.routes` alone does not list them.
+- The deployed frontends call the API same-origin through their Worker proxy
+  (`https://tuttitrip[-develop].gburek.app/api/...`), so a browser never needs CORS
+  there; CORS still matters for local and direct cross-origin use.
+- Rollout (temporary): the routers are also mounted unversioned, hidden from
+  OpenAPI and tagged `legacy-unversioned`, until the frontend proxy is on main.
+  Then remove that block from `create_app()` and the allowance in the test.
+
 ## Conventions
 
 - Ruff `select = ["ALL"]` with preview. Google docstrings on every public
@@ -129,7 +146,7 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   (`TUTTITRIP_AUTH0__ROLES_CLAIM`) for people on the superadmin allow-list
   (kept in Auth0 and host env files, never in a repo). `CurrentUser.roles` /
   `.is_admin` expose it, `AdminUser` (`require_admin`) answers 403 to
-  everyone else, and `GET /me` returns `roles` and `is_admin`.
+  everyone else, and `GET /api/v1/me` returns `roles` and `is_admin`.
 - Provider API keys (e.g. `OPENAI_API_KEY`) are read by Pydantic AI under
   their own names and are not Settings fields.
 - Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions
@@ -162,7 +179,7 @@ through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
 - Enqueue from a feature service: `await queue.enqueue(Workflow.X, XInput(...),
   user=user.sub, key=<domain id>)`, with `queue: JobQueueDep` injected in
   `api.py`. Call `ensure_worker_available(session)` first. Return `JobAccepted`
-  (202), and the client polls `GET /jobs/{id}` (`POST /jobs/{id}/cancel` cancels).
+  (202), and the client polls `GET /api/v1/jobs/{id}` (`POST /api/v1/jobs/{id}/cancel` cancels).
 - Payloads are small (ids and parameters) and travel as portable JSON with a
   deterministic workflow id (idempotent), a timeout and the env's app version.
 - Incompatible contract change: (1) the worker accepts old+new, (2) the backend
@@ -171,7 +188,7 @@ through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
 - The backend owns all DDL: Alembic for app tables, `dbos migrate` for the DBOS
   schema. The worker uses role `tuttitrip_worker` (no DDL). Tables it may write
   are listed in `deploy/worker-grants.sql`.
-- `/health` reports `worker: ok|stale|missing` from `worker_heartbeats` and
+- `/api/v1/health` reports `worker: ok|stale|missing` from `worker_heartbeats` and
   turns `degraded` on an incompatible contract. Enqueue endpoints return 503
   while the worker is missing.
 - Every deploy runs a `ping` job through the worker (smoke test). If the env
@@ -274,8 +291,8 @@ Wydania:
 
 ## Deployment
 
-`/openapi.json` and `/docs` are public on every deployment (the frontend
-generates its client from them). Every push runs CI (`checks` on the org runners `[self-hosted, hackathon]`),
+`/api/v1/openapi.json` and `/api/v1/docs` are public on every deployment (the
+frontend generates its client from them). Every push runs CI (`checks` on the org runners `[self-hosted, hackathon]`),
 then `deploy` on the runner installed on the host (`[self-hosted, tuttitrip-deploy]`).
 
 | Branch | URL | Database |
