@@ -1,7 +1,9 @@
 """Create, edit, delete profiles and set weights."""
 
-from collections.abc import Awaitable
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import asdict
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -21,11 +23,17 @@ from tuttitrip.profiles.schemas import (
     ProfileRead,
     ProfileUpdate,
     WeightsUpdate,
+    comfort_problem,
 )
 from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import trip_service
 
 NULLABLE_FIELDS = frozenset({"nap_start", "user_sub"})
+UNIQUE_ACCOUNT = "uq_profiles_trip_id"
+# The token has no name or age, so the host's own profile starts as a generic
+# adult that they edit themselves.
+HOST_NAME = "Organizator"
+HOST_AGE = 35
 
 
 class ProfileNotFoundError(Exception):
@@ -34,6 +42,10 @@ class ProfileNotFoundError(Exception):
 
 class ProfileForbiddenError(Exception):
     """The caller may not change this profile."""
+
+
+class ProfileComfortError(ValueError):
+    """The comfort fields contradict each other."""
 
 
 class ProfileAccountError(Exception):
@@ -56,26 +68,64 @@ async def _check_account(session: AsyncSession, trip_id: UUID, sub: str) -> None
         raise ProfileAccountError(msg)
 
 
-async def _commit(
-    session: AsyncSession, pending: Awaitable[object] | None = None
-) -> None:
-    """Run ``pending`` (a flush) and commit; map a racing duplicate account link.
+@asynccontextmanager
+async def _account_conflicts(session: AsyncSession) -> AsyncGenerator[None]:
+    """Map a racing duplicate account link (the unique constraint) to a domain error.
 
     Args:
-        session: Open session.
-        pending: An awaitable that flushes, if the caller has one.
+        session: Open session, rolled back on that violation.
+
+    Yields:
+        Nothing; wrap the flush and commit.
 
     Raises:
         ProfileAccountError: When the account got a profile in the meantime.
     """
     try:
-        if pending is not None:
-            await pending
-        await session.commit()
+        yield
     except IntegrityError as exc:
         await session.rollback()
+        if UNIQUE_ACCOUNT not in str(exc.orig):
+            raise
         msg = "The account already has a profile on this trip"
         raise ProfileAccountError(msg) from exc
+
+
+def _consistent_nap(given: dict[str, Any]) -> dict[str, Any]:
+    """Make an explicit "no nap" on one nap field apply to the other too.
+
+    Args:
+        given: Comfort fields the caller set.
+
+    Returns:
+        ``given`` with ``nap_minutes`` 0 after ``nap_start: null`` and the other
+        way round, so a lone "no nap" overrides the age default completely.
+    """
+    out = dict(given)
+    if "nap_start" in out and out["nap_start"] is None:
+        out.setdefault("nap_minutes", 0)
+    if out.get("nap_minutes") == 0:
+        out.setdefault("nap_start", None)
+    return out
+
+
+def _check_comfort(values: dict[str, Any]) -> None:
+    """Raise unless the comfort fields agree with each other.
+
+    Args:
+        values: Final comfort fields of a person.
+
+    Raises:
+        ProfileComfortError: On a contradiction.
+    """
+    problem = comfort_problem(
+        values["segment_km"],
+        values["daily_km"],
+        values["nap_start"],
+        values["nap_minutes"],
+    )
+    if problem is not None:
+        raise ProfileComfortError(problem)
 
 
 async def list_profiles(
@@ -112,21 +162,45 @@ async def create_profile(
     group = age_group_for(data.age)
     comfort = asdict(DEFAULTS[group])
     given = data.model_dump(exclude_unset=True)
-    comfort |= {
-        k: v
-        for k, v in given.items()
-        if k in comfort and (v is not None or k == "nap_start")
-    }
+    comfort |= _consistent_nap(
+        {
+            k: v
+            for k, v in given.items()
+            if k in comfort and (v is not None or k == "nap_start")
+        }
+    )
+    _check_comfort(comfort)
     profile = Profile(
         trip_id=membership.trip_id,
         display_name=data.display_name,
         age=data.age,
-        age_group=group.value,
         user_sub=data.user_sub,
         **comfort,
     )
-    await _commit(session, db.insert_profile(session, profile))
+    async with _account_conflicts(session):
+        await db.insert_profile(session, profile)
+        await session.commit()
     return ProfileRead.model_validate(profile)
+
+
+async def create_host_profile(session: AsyncSession, trip_id: UUID, sub: str) -> None:
+    """Give a new trip's host their own profile (adult defaults); caller commits.
+
+    Args:
+        session: Open session.
+        trip_id: The just created trip.
+        sub: Auth0 subject of the host.
+    """
+    await db.insert_profile(
+        session,
+        Profile(
+            trip_id=trip_id,
+            display_name=HOST_NAME,
+            age=HOST_AGE,
+            user_sub=sub,
+            **asdict(DEFAULTS[age_group_for(HOST_AGE)]),
+        ),
+    )
 
 
 async def _get(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> Profile:
@@ -134,6 +208,24 @@ async def _get(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> Profil
     if profile is None:
         raise ProfileNotFoundError(str(profile_id))
     return profile
+
+
+def _follow_new_group(profile: Profile, new_age: int) -> dict[str, Any]:
+    """Defaults of the new age group for the fields still at the old defaults.
+
+    Args:
+        profile: The person before the change.
+        new_age: Their new age.
+
+    Returns:
+        Fields to reset; empty within one group, and fields the host corrected
+        by hand are left out.
+    """
+    old, new = age_group_for(profile.age), age_group_for(new_age)
+    if old is new:
+        return {}
+    was, now = asdict(DEFAULTS[old]), asdict(DEFAULTS[new])
+    return {k: v for k, v in now.items() if getattr(profile, k) == was[k]}
 
 
 async def update_profile(
@@ -144,8 +236,9 @@ async def update_profile(
 ) -> ProfileRead:
     """Edit a profile: your own, or any when you are a co-host or above.
 
-    When the age moves the person to another age group, comfort fields not
-    in the payload follow the new group's defaults.
+    When the age moves the person to another age group, comfort fields still
+    at the old group's defaults (and not in the payload) follow the new
+    group's defaults; fields the host corrected stay.
 
     Args:
         session: Open session.
@@ -159,6 +252,7 @@ async def update_profile(
     Raises:
         ProfileForbiddenError: Not your profile, or linking an account without
             co-host rights.
+        ProfileComfortError: The result would contradict itself.
     """
     profile = await _get(session, membership.trip_id, profile_id)
     is_staff = membership.role.satisfies(TripRole.CO_HOST)
@@ -176,14 +270,15 @@ async def update_profile(
             raise ProfileForbiddenError(msg)
         if changes["user_sub"] is not None and changes["user_sub"] != profile.user_sub:
             await _check_account(session, membership.trip_id, changes["user_sub"])
+    changes = _consistent_nap(changes)
     if "age" in changes:
-        group = age_group_for(changes["age"])
-        if group.value != profile.age_group:
-            changes = asdict(DEFAULTS[group]) | changes
-        changes["age_group"] = group.value
+        changes = _follow_new_group(profile, changes["age"]) | changes
+    current = {k: getattr(profile, k) for k in asdict(DEFAULTS[AgeGroup.ADULT])}
+    _check_comfort(current | changes)
     for key, value in changes.items():
         setattr(profile, key, value)
-    await _commit(session)
+    async with _account_conflicts(session):
+        await session.commit()
     return ProfileRead.model_validate(profile)
 
 
@@ -224,7 +319,7 @@ async def set_weights(
     if data.preset is not None:
         if data.focus_profile_id is not None and data.focus_profile_id not in profiles:
             raise ProfileNotFoundError(str(data.focus_profile_id))
-        people = [WeightSubject(p.id, AgeGroup(p.age_group)) for p in profiles.values()]
+        people = [WeightSubject(p.id, p.age_group) for p in profiles.values()]
         new = preset_weights(data.preset, people, data.focus_profile_id)
     else:
         new = {item.profile_id: item.weight for item in data.weights or []}

@@ -2,7 +2,7 @@
 
 from datetime import time
 from enum import StrEnum
-from typing import Self
+from typing import Annotated, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -11,13 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class AgeGroup(StrEnum):
     """Age group that drives default constraints (distance, naps, pace)."""
 
+    TODDLER = "toddler"
     CHILD = "child"
     TEEN = "teen"
     ADULT = "adult"
     SENIOR = "senior"
 
 
-class WeightPreset(StrEnum):
+class ProfileWeightPreset(StrEnum):
     """Ready-made weight settings."""
 
     PO_ROWNO = "po_rowno"
@@ -25,55 +26,97 @@ class WeightPreset(StrEnum):
     DZIEN_BABCI = "dzien_babci"
 
 
+SegmentKm = Annotated[float, Field(gt=0, le=50, description="Longest walk in one go.")]
+DailyKm = Annotated[float, Field(gt=0, le=100, description="Daily walking distance.")]
+ActiveMin = Annotated[int, Field(gt=0, le=1440, description="Active minutes per day.")]
+StairsSensitivity = Annotated[float, Field(ge=0, le=1)]
+QueuePatienceMin = Annotated[int, Field(ge=0, le=600)]
+NapMinutes = Annotated[int, Field(ge=0, le=600)]
+Floor = Annotated[
+    int, Field(ge=0, le=100, description="Minimum welfare the person needs.")
+]
+
+
+def comfort_problem(
+    segment_km: float, daily_km: float, nap_start: time | None, nap_minutes: int
+) -> str | None:
+    """Find a contradiction between comfort fields.
+
+    Args:
+        segment_km: Longest walk in one go.
+        daily_km: Daily walking distance.
+        nap_start: When the nap starts, if any.
+        nap_minutes: Nap length.
+
+    Returns:
+        A description of the problem, or None when the fields agree.
+    """
+    if segment_km > daily_km:
+        return "segment_km must not exceed daily_km"
+    if (nap_minutes > 0) != (nap_start is not None):
+        return "nap_start and nap_minutes > 0 must be given together"
+    return None
+
+
 class _Comfort(BaseModel):
-    """Comfort fields shared by create, update and read (section 2 of the spec)."""
+    """Comfort fields of one person (section 2 of the spec)."""
 
-    segment_km: float = Field(gt=0, le=50, description="Longest walk in one go.")
-    daily_km: float = Field(gt=0, le=100, description="Daily walking distance.")
-    active_min: int = Field(gt=0, le=1440, description="Active minutes per day.")
-    stairs_sensitivity: float = Field(ge=0, le=1)
-    queue_patience_min: int = Field(ge=0, le=600)
+    segment_km: SegmentKm
+    daily_km: DailyKm
+    active_min: ActiveMin
+    stairs_sensitivity: StairsSensitivity
+    queue_patience_min: QueuePatienceMin
     nap_start: time | None = None
-    nap_minutes: int = Field(ge=0, le=600)
-    floor: int = Field(ge=0, le=100, description="Minimum welfare the person needs.")
+    nap_minutes: NapMinutes
+    floor: Floor
 
 
-class ProfileCreate(BaseModel):
-    """A new person; every comfort field defaults from the age."""
+class _ComfortOverrides(BaseModel):
+    """Optional comfort fields; omitted ones come from the age group."""
 
-    display_name: str = Field(min_length=1, max_length=100)
-    age: int = Field(ge=0, le=120)
     user_sub: str | None = Field(
         default=None,
         max_length=255,
         description="Auth0 subject of a trip member this profile belongs to.",
     )
-    segment_km: float | None = Field(default=None, gt=0, le=50)
-    daily_km: float | None = Field(default=None, gt=0, le=100)
-    active_min: int | None = Field(default=None, gt=0, le=1440)
-    stairs_sensitivity: float | None = Field(default=None, ge=0, le=1)
-    queue_patience_min: int | None = Field(default=None, ge=0, le=600)
+    segment_km: SegmentKm | None = None
+    daily_km: DailyKm | None = None
+    active_min: ActiveMin | None = None
+    stairs_sensitivity: StairsSensitivity | None = None
+    queue_patience_min: QueuePatienceMin | None = None
     nap_start: time | None = None
-    nap_minutes: int | None = Field(default=None, ge=0, le=600)
-    floor: int | None = Field(default=None, ge=0, le=100)
+    nap_minutes: NapMinutes | None = None
+    floor: Floor | None = None
+
+    @model_validator(mode="after")
+    def _fields_agree(self) -> Self:
+        # Only what the payload fixes itself; the service checks the merged result.
+        if self.segment_km is not None and self.daily_km is not None:
+            problem = comfort_problem(self.segment_km, self.daily_km, None, 0)
+            if problem is not None:
+                raise ValueError(problem)
+        if {"nap_start", "nap_minutes"} <= self.model_fields_set:
+            problem = comfort_problem(1, 1, self.nap_start, self.nap_minutes or 0)
+            if problem is not None:
+                raise ValueError(problem)
+        return self
 
 
-class ProfileUpdate(BaseModel):
-    """Partial update; omitted fields stay (or follow a new age group)."""
+class ProfileCreate(_ComfortOverrides):
+    """A new person; every comfort field defaults from the age."""
+
+    display_name: str = Field(min_length=1, max_length=100)
+    age: int = Field(ge=0, le=120)
+
+
+class ProfileUpdate(_ComfortOverrides):
+    """Partial update; omitted fields stay (or follow a new age group).
+
+    ``user_sub`` is for co-hosts and above.
+    """
 
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     age: int | None = Field(default=None, ge=0, le=120)
-    user_sub: str | None = Field(
-        default=None, max_length=255, description="Co-host and above only."
-    )
-    segment_km: float | None = Field(default=None, gt=0, le=50)
-    daily_km: float | None = Field(default=None, gt=0, le=100)
-    active_min: int | None = Field(default=None, gt=0, le=1440)
-    stairs_sensitivity: float | None = Field(default=None, ge=0, le=1)
-    queue_patience_min: int | None = Field(default=None, ge=0, le=600)
-    nap_start: time | None = None
-    nap_minutes: int | None = Field(default=None, ge=0, le=600)
-    floor: int | None = Field(default=None, ge=0, le=100)
 
 
 class ProfileRead(_Comfort):
@@ -102,13 +145,23 @@ class WeightItem(BaseModel):
 class WeightsUpdate(BaseModel):
     """Set weights by a preset or by hand (exactly one of the two)."""
 
-    preset: WeightPreset | None = None
+    preset: ProfileWeightPreset | None = None
     focus_profile_id: UUID | None = Field(
         default=None, description="The chosen person for preset dzien_babci."
     )
     weights: list[WeightItem] | None = Field(
-        default=None, description="Weights of some people; the rest keep theirs."
+        default=None,
+        min_length=1,
+        description="Weights of some people (each once); the rest keep theirs.",
     )
+
+    @model_validator(mode="after")
+    def _no_duplicate_profiles(self) -> Self:
+        ids = [item.profile_id for item in self.weights or []]
+        if len(ids) != len(set(ids)):
+            msg = "Each profile_id may appear only once in weights"
+            raise ValueError(msg)
+        return self
 
     @model_validator(mode="after")
     def _one_of_preset_or_weights(self) -> Self:

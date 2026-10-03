@@ -17,6 +17,7 @@ from tuttitrip.profiles.schemas import (
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.profiles.services.profile_service import (
     ProfileAccountError,
+    ProfileComfortError,
     ProfileForbiddenError,
     ProfileNotFoundError,
 )
@@ -68,6 +69,8 @@ async def create_profile(
         return await profile_service.create_profile(session, membership, data)
     except ProfileAccountError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ProfileComfortError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @router.put("/weights", dependencies=[requires(Feature.PROFILES_CORE, Access.WRITE)])
@@ -122,6 +125,8 @@ async def update_profile(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except ProfileAccountError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ProfileComfortError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @router.delete(

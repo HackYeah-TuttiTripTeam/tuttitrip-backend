@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.profiles.services import profile_service
 from tuttitrip.trips import db
 from tuttitrip.trips.models import Trip
 from tuttitrip.trips.schemas import (
@@ -48,7 +49,7 @@ def _read(trip: Trip, role: TripRole) -> TripRead:
 async def create_trip(
     session: AsyncSession, owner_sub: str, data: TripCreate
 ) -> TripRead:
-    """Create a trip with the caller as host and commit.
+    """Create a trip with the caller as host (and their profile) and commit.
 
     Args:
         session: Open session.
@@ -61,6 +62,7 @@ async def create_trip(
     trip = await db.insert_trip(
         session, owner_sub=owner_sub, name=data.name, destination=data.destination
     )
+    await profile_service.create_host_profile(session, trip.id, owner_sub)
     await session.commit()
     return _read(trip, TripRole.HOST)
 

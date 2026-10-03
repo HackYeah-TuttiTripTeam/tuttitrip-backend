@@ -10,6 +10,7 @@ from datetime import time
 
 from tuttitrip.profiles.schemas import AgeGroup
 
+CHILD_FROM = 4
 TEEN_FROM = 13
 ADULT_FROM = 18
 SENIOR_FROM = 65
@@ -31,8 +32,19 @@ class ComfortDefaults:
 
 FLOOR = 30
 
-# Starting point for tests: tune with real families before relying on it.
+# Starting point for tests: tune with real families before relying on it. The
+# toddler band (a buggy or a carrier, a long nap) is an assumption too.
 DEFAULTS: dict[AgeGroup, ComfortDefaults] = {
+    AgeGroup.TODDLER: ComfortDefaults(
+        segment_km=0.5,
+        daily_km=2.0,
+        active_min=240,
+        stairs_sensitivity=0.8,
+        queue_patience_min=10,
+        nap_start=time(13, 0),
+        nap_minutes=90,
+        floor=FLOOR,
+    ),
     AgeGroup.CHILD: ComfortDefaults(
         segment_km=1.0,
         daily_km=4.0,
@@ -83,8 +95,11 @@ def age_group_for(age: int) -> AgeGroup:
         age: Age in years.
 
     Returns:
-        ``child`` below 13, ``teen`` below 18, ``adult`` below 65, else ``senior``.
+        ``toddler`` below 4, ``child`` below 13, ``teen`` below 18, ``adult``
+        below 65, else ``senior``.
     """
+    if age < CHILD_FROM:
+        return AgeGroup.TODDLER
     if age < TEEN_FROM:
         return AgeGroup.CHILD
     if age < ADULT_FROM:

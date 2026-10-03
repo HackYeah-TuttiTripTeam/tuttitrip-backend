@@ -5,11 +5,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from tuttitrip.profiles.schemas import AgeGroup, WeightPreset
+from tuttitrip.profiles.schemas import AgeGroup, ProfileWeightPreset
 
 MAX_WEIGHT_RATIO = 3.0
 CHILD_WEIGHT = 2.0
 FOCUS_WEIGHT = 2.0
+YOUNG_GROUPS = frozenset({AgeGroup.TODDLER, AgeGroup.CHILD})
 
 
 class WeightRatioError(ValueError):
@@ -41,7 +42,10 @@ def validate_weights(weights: Sequence[float]) -> None:
         return
     low, high = min(weights), max(weights)
     finite = all(math.isfinite(w) for w in weights)
-    if not finite or low <= 0 or high / low > MAX_WEIGHT_RATIO:
+    # isclose: 0.9 is three times 0.3 even though 0.9 / 0.3 is 3.0000000000000004.
+    limit = MAX_WEIGHT_RATIO * low
+    too_wide = high > limit and not math.isclose(high, limit)
+    if not finite or low <= 0 or too_wide:
         msg = (
             f"Weights must be finite and positive with max/min <= {MAX_WEIGHT_RATIO:g}"
         )
@@ -49,7 +53,7 @@ def validate_weights(weights: Sequence[float]) -> None:
 
 
 def preset_weights(
-    preset: WeightPreset,
+    preset: ProfileWeightPreset,
     people: Sequence[WeightSubject],
     focus: UUID | None = None,
 ) -> dict[UUID, float]:
@@ -70,14 +74,14 @@ def preset_weights(
         FocusProfileRequiredError: ``dzien_babci`` without a chosen person.
     """
     match preset:
-        case WeightPreset.PO_ROWNO:
+        case ProfileWeightPreset.PO_ROWNO:
             return {p.id: 1.0 for p in people}
-        case WeightPreset.POD_DZIECI:
+        case ProfileWeightPreset.POD_DZIECI:
             return {
-                p.id: CHILD_WEIGHT if p.age_group is AgeGroup.CHILD else 1.0
+                p.id: CHILD_WEIGHT if p.age_group in YOUNG_GROUPS else 1.0
                 for p in people
             }
-        case WeightPreset.DZIEN_BABCI:
+        case ProfileWeightPreset.DZIEN_BABCI:
             if focus is None:
                 msg = "Preset dzien_babci needs focus_profile_id"
                 raise FocusProfileRequiredError(msg)
