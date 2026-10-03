@@ -6,8 +6,6 @@ The host never loses the role (no removal, no demotion, no transfer here).
 
 from tuttitrip.trips.schemas import TripRole
 
-ASSIGNABLE_ROLES = frozenset({TripRole.MEMBER, TripRole.CO_HOST})
-
 
 def can_remove(actor: TripRole, target: TripRole) -> bool:
     """Whether ``actor`` may remove a member who has role ``target``.
@@ -29,8 +27,8 @@ def can_remove(actor: TripRole, target: TripRole) -> bool:
 def can_set_role(actor: TripRole, target: TripRole, new: TripRole) -> bool:
     """Whether ``actor`` may change a member from ``target`` to ``new``.
 
-    Only the host changes roles, never the host's own, and only between
-    ``member`` and ``co_host`` (handing over the host role is out of scope).
+    Only the host changes roles, never the host's own, and nobody is made
+    host (handing over the host role is out of scope).
 
     Args:
         actor: The caller's role.
@@ -40,8 +38,4 @@ def can_set_role(actor: TripRole, target: TripRole, new: TripRole) -> bool:
     Returns:
         True when the change is allowed.
     """
-    return (
-        actor is TripRole.HOST
-        and target is not TripRole.HOST
-        and new in ASSIGNABLE_ROLES
-    )
+    return actor is TripRole.HOST and TripRole.HOST not in {target, new}

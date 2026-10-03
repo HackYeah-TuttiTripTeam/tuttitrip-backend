@@ -49,7 +49,13 @@ class ProfileComfortError(ValueError):
 
 
 class ProfileAccountError(Exception):
-    """The account cannot be linked: not on the trip or already has a profile."""
+    """The account link cannot change: it is not allowed, or already taken."""
+
+
+MEMBERSHIP_VIA_MEMBERS = (
+    "This profile belongs to a trip member; change membership with "
+    "DELETE /trips/{trip_id}/members/{profile_id}"
+)
 
 
 async def _check_account(session: AsyncSession, trip_id: UUID, sub: str) -> None:
@@ -304,6 +310,8 @@ async def update_profile(
         if not is_staff:
             msg = "Only a co-host can link an account"
             raise ProfileForbiddenError(msg)
+        if profile.user_sub is not None and changes["user_sub"] != profile.user_sub:
+            raise ProfileAccountError(MEMBERSHIP_VIA_MEMBERS)
         if changes["user_sub"] is not None and changes["user_sub"] != profile.user_sub:
             await _check_account(session, membership.trip_id, changes["user_sub"])
     changes = _consistent_nap(changes)
@@ -327,8 +335,13 @@ async def delete_profile(
         session: Open session.
         membership: The caller's checked (co-host) membership.
         profile_id: Profile to delete.
+
+    Raises:
+        ProfileAccountError: The profile has an account (a trip member).
     """
     profile = await _get(session, membership.trip_id, profile_id)
+    if profile.user_sub is not None:
+        raise ProfileAccountError(MEMBERSHIP_VIA_MEMBERS)
     await db.delete_profile(session, profile)
     await session.commit()
 

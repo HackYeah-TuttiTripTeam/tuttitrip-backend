@@ -48,10 +48,15 @@ async def _target(
         profile = await profile_service.get_profile(session, membership, profile_id)
     except ProfileNotFoundError as exc:
         raise MemberNotFoundError(str(profile_id)) from exc
-    roles = await db.select_member_roles(session, membership.trip_id)
-    if profile.user_sub is None or profile.user_sub not in roles:
+    sub = profile.user_sub
+    role = (
+        None
+        if sub is None
+        else await db.select_member_role(session, membership.trip_id, sub)
+    )
+    if sub is None or role is None:
         raise MemberNotFoundError(str(profile_id))
-    return profile, profile.user_sub, roles[profile.user_sub]
+    return profile, sub, role
 
 
 async def list_members(

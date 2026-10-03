@@ -1,18 +1,22 @@
 """Trip members: the role matrix and the member routes."""
 
+import asyncio
 import uuid
-from collections.abc import Iterator
+from collections.abc import Coroutine, Iterator
 from dataclasses import dataclass, field, fields
 from itertools import product
-from unittest.mock import AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
+from tuttitrip.profiles import db as profiles_db
 from tuttitrip.profiles.logic.age_defaults import DEFAULTS, age_group_for
 from tuttitrip.profiles.models import Profile
 from tuttitrip.profiles.services import profile_service
@@ -21,7 +25,7 @@ from tuttitrip.shared.db.api import get_session
 from tuttitrip.trips import db as trips_db
 from tuttitrip.trips.logic.member_rules import can_remove, can_set_role
 from tuttitrip.trips.schemas import TripMembership, TripRole
-from tuttitrip.trips.services import trip_service
+from tuttitrip.trips.services import member_service, trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
 HOST, CO_HOST, MEMBER = TripRole.HOST, TripRole.CO_HOST, TripRole.MEMBER
@@ -111,6 +115,11 @@ def state(monkeypatch: pytest.MonkeyPatch) -> Trip:
     )
     monkeypatch.setattr(
         trips_db, "select_member_roles", AsyncMock(side_effect=lambda *_: trip.roles)
+    )
+    monkeypatch.setattr(
+        trips_db,
+        "select_member_role",
+        AsyncMock(side_effect=lambda _s, _t, sub: trip.roles.get(sub)),
     )
     monkeypatch.setattr(trips_db, "delete_member", AsyncMock(side_effect=delete_member))
     monkeypatch.setattr(
@@ -280,3 +289,124 @@ def test_unknown_or_accountless_profile_is_404(client: TestClient, state: Trip) 
     assert client.delete(_member_path("remove_member", zosia)).status_code == 404
     ghost = Profile(id=uuid.uuid4())
     assert client.delete(_member_path("remove_member", ghost)).status_code == 404
+
+
+def test_403_names_roles_as_plain_values(client: TestClient, state: Trip) -> None:
+    _as(state, CO_HOST)
+    boss = state.add("Ola", HOST, "auth0|ola")
+    detail = client.delete(_member_path("remove_member", boss)).json()["detail"]
+    assert detail == "A co_host cannot remove a host"
+
+
+def test_403_on_role_change_names_roles_as_plain_values(
+    client: TestClient, state: Trip
+) -> None:
+    mine = state.add("Ja", HOST, ME.sub)
+    response = client.patch(
+        _member_path("update_member", mine), json={"role": "co_host"}
+    )
+    assert response.json()["detail"] == "A host cannot change a host to co_host"
+
+
+# The /profiles routes must not be a second way to change membership.
+@pytest.mark.parametrize(
+    ("caller", "target"),
+    [(CO_HOST, HOST), (CO_HOST, CO_HOST), (HOST, HOST), (HOST, MEMBER)],
+)
+def test_profiles_routes_refuse_to_unlink_or_delete_an_account_profile(
+    client: TestClient,
+    state: Trip,
+    session: AsyncMock,
+    caller: TripRole,
+    target: TripRole,
+) -> None:
+    mine = state.add("Ja", caller, ME.sub)
+    victim = mine if caller is target else state.add("Ola", target, "auth0|ola")
+    sub = victim.user_sub
+    unlink = client.patch(
+        path("update_profile", trip_id=TRIP, profile_id=victim.id),
+        json={"user_sub": None},
+    )
+    delete = client.delete(path("delete_profile", trip_id=TRIP, profile_id=victim.id))
+    assert (unlink.status_code, delete.status_code) == (409, 409)
+    assert "DELETE /trips/{trip_id}/members/{profile_id}" in delete.json()["detail"]
+    assert victim.user_sub == sub
+    assert victim.id in state.profiles
+    session.commit.assert_not_awaited()
+
+
+def test_accountless_profile_can_still_be_deleted(
+    client: TestClient,
+    state: Trip,
+    session: AsyncMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _as(state, HOST)
+    zosia = state.add("Zosia", None)
+    monkeypatch.setattr(profile_service.db, "delete_profile", AsyncMock())
+    response = client.delete(path("delete_profile", trip_id=TRIP, profile_id=zosia.id))
+    assert response.status_code == 204
+    session.commit.assert_awaited_once()
+
+
+def _run(coro: Coroutine[object, object, object]) -> None:
+    asyncio.run(coro)
+
+
+def _sql(statement: object) -> str:
+    return str(statement.compile(dialect=postgresql.dialect()))  # ty: ignore[unresolved-attribute]
+
+
+def _clauses(*names: str) -> list[str]:
+    return [f"{name} = %(" for name in names]
+
+
+def test_member_queries_are_scoped_to_the_trip() -> None:
+    session = AsyncMock()
+    rows = MagicMock()
+    rows.tuples.return_value.all.return_value = []
+    session.execute.return_value = rows
+    sub, role = "auth0|x", TripRole.MEMBER
+
+    async def run() -> None:
+        await trips_db.select_member_roles(session, TRIP)
+        await trips_db.delete_member(session, TRIP, sub)
+        await trips_db.update_member_role(session, TRIP, sub, role)
+
+    _run(run())
+    roles, delete, update = (_sql(c.args[0]) for c in session.execute.call_args_list)
+    assert "trip_members.trip_id = %(" in roles
+    for statement in (delete, update):
+        for clause in _clauses("trip_members.trip_id", "trip_members.user_sub"):
+            assert clause in statement
+    assert update.startswith("UPDATE trip_members")
+    assert delete.startswith("DELETE FROM trip_members")
+
+
+def test_profile_lookup_is_scoped_to_the_trip() -> None:
+    session = AsyncMock()
+    _run(profiles_db.select_profile(session, TRIP, uuid.uuid4()))
+    statement = _sql(session.scalar.call_args.args[0])
+    for clause in _clauses("profiles.id", "profiles.trip_id"):
+        assert clause in statement
+
+
+def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncMock()
+    profile = Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub="auth0|kuba")
+    session.scalar.side_effect = [profile, TripRole.MEMBER, profile]
+    monkeypatch.setattr(
+        profile_service.ProfileRead,
+        "model_validate",
+        lambda p: SimpleNamespace(id=p.id, user_sub=p.user_sub),
+    )
+    host = TripMembership(trip_id=TRIP, sub=ME.sub, role=HOST)
+    _run(member_service.remove_member(session, host, profile.id))
+    calls = [c[0] for c in session.method_calls]
+    assert calls == ["scalar", "scalar", "execute", "scalar", "flush", "commit"]
+    assert _sql(session.execute.call_args.args[0]).startswith(
+        "DELETE FROM trip_members"
+    )
+    assert profile.user_sub is None
