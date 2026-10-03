@@ -1,11 +1,15 @@
 """Accommodation DTOs."""
 
+from datetime import date
 from enum import StrEnum
 from typing import Self
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from tuttitrip.accommodation.logic.keys import RequirementKind, is_known_key
+from tuttitrip.accommodation.logic.keys import Platform, RequirementKind, is_known_key
+from tuttitrip.accommodation.logic.search_links import PriceBasis
+from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 
 
 class RequirementStatus(StrEnum):
@@ -87,3 +91,101 @@ class RequirementsRead(RequirementsWrite):
             "different current version makes that result stale."
         )
     )
+
+
+class SearchLinkParam(BaseModel):
+    """One query parameter of a search link."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    value: str
+    official: bool = Field(
+        description=(
+            "False when the platform does not document the parameter, so it may "
+            "stop working; the card should say so."
+        )
+    )
+
+
+class SearchLinkRead(BaseModel):
+    """A search link to one platform."""
+
+    platform: Platform
+    url: str = Field(description="Search with all filters; opened by a person.")
+    fallback_url: str = Field(
+        description="Same place without filters, for when a parameter stops working."
+    )
+    params: list[SearchLinkParam]
+
+
+class NightlyPrice(BaseModel):
+    """Price per night used as the upper filter, and where it came from."""
+
+    amount: int = Field(description="Whole units of `currency`, rounded down.")
+    currency: str = Field(description="ISO 4217.")
+    basis: PriceBasis = Field(
+        description=(
+            "`budget_day_max`: the trip's daily limit. "
+            "`budget_total_max_per_night`: the total limit divided by the nights. "
+            "Both cover the whole group's spending, so this is only a ceiling."
+        )
+    )
+
+
+class SearchLinksRead(BaseModel):
+    """What a host sees on the approval card before opening a platform."""
+
+    check_in: date
+    check_out: date
+    nights: int
+    adults: int
+    child_ages: list[int] = Field(description="Ages of the people under 18.")
+    area: str | None = Field(description="City or destination; null when unknown.")
+    price_per_night: NightlyPrice | None = Field(
+        description="Null when the trip has no budget or no currency is known."
+    )
+    platforms_restricted: bool = Field(
+        description="True when a hard platform requirement removed some platforms."
+    )
+    requirements_version: int
+    links: list[SearchLinkRead]
+
+
+class SearchOpenWrite(BaseModel):
+    """The host approved opening this platform's search."""
+
+    platform: Platform
+
+
+class SearchOpeningRead(BaseModel):
+    """One approved opening in the append-only log."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    trip_id: UUID
+    platform: Platform
+    url: str
+    params: list[SearchLinkParam]
+    actor_sub: str = Field(description="Who approved it (Auth0 `sub`).")
+    opened_at: AwareDatetime
+
+
+class OpeningSort(StrEnum):
+    """Sort keys of the openings log."""
+
+    OPENED_AT = "opened_at"
+
+
+class OpeningFilters(ListFilters):
+    """Filters of the openings log."""
+
+    platform: Platform | None = None
+
+
+class OpeningQuery(PageParams, OpeningFilters):
+    """Query of ``GET .../search-links/opened``."""
+
+    sort: OpeningSort = OpeningSort.OPENED_AT
+    dir: SortDir = SortDir.DESC
