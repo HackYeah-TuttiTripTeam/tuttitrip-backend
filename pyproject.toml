@@ -1,0 +1,90 @@
+[project]
+name = "tuttitrip"
+version = "0.1.0"
+description = "Backend aplikacji TuttiTrip (HackYeah)"
+readme = "README.md"
+authors = [
+    { name = "Cyprian Gburek", email = "cyprian@gburek.dev" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "pydantic>=2.13.5",
+    "pydantic-ai>=2.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-archon>=0.0.7",
+    "ruff>=0.16.10",
+    "ty>=0.0.84",
+]
+
+# --------------------------------------------------------------------------- #
+# Ruff: lint + format
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    # D203 (blank line before class docstring) conflicts with D211; keep D211.
+    "D203",
+    # D213 (summary on second line) conflicts with D212; keep D212.
+    "D213",
+    # Conflicts with the formatter (trailing commas are managed by `ruff format`).
+    "COM812",
+    # No per-file copyright/license header policy in this project.
+    "CPY001",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",    # assert is the whole point of pytest
+    "PLR2004", # magic values are fine in test assertions
+    "D",       # test docstrings are optional
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+
+# --------------------------------------------------------------------------- #
+# ty: type checking (strict)
+# --------------------------------------------------------------------------- #
+[tool.ty.environment]
+python-version = "3.14"
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.rules]
+# Every rule (including ones that default to `warn` or `ignore`) is an error.
+all = "error"
+
+[tool.ty.terminal]
+# Non-zero exit code on any diagnostic, including warnings.
+error-on-warning = true
+
+# --------------------------------------------------------------------------- #
+# pytest
+# --------------------------------------------------------------------------- #
+[tool.pytest]
+minversion = "9.0"
+testpaths = ["tests"]
+# Enables strict_config, strict_markers, strict_parametrization_ids, strict_xfail.
+strict = true
+addopts = ["-ra", "--strict-config", "--strict-markers", "--import-mode=importlib"]
+filterwarnings = ["error"]
