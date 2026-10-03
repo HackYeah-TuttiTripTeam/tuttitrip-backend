@@ -1,4 +1,4 @@
-"""HTTP side of auth: the ``CurrentUser`` dependency and ``GET /me``."""
+"""HTTP side of auth: ``CurrentUser``/``AdminUser`` dependencies and ``GET /me``."""
 
 from functools import lru_cache
 from typing import Annotated
@@ -19,6 +19,7 @@ _bearer = HTTPBearer(auto_error=False)
 
 _NO_BEARER_DETAIL = "Missing bearer token"
 _BAD_BEARER_DETAIL = "Invalid token"
+_NOT_ADMIN_DETAIL = "Administrator role required"
 
 
 class UnauthorizedError(HTTPException):
@@ -40,7 +41,9 @@ def get_token_verifier() -> TokenVerifier:
         A cached verifier (its JWKS client caches keys).
     """
     auth0 = get_settings().auth0
-    return TokenVerifier(domain=auth0.domain, audience=auth0.audience)
+    return TokenVerifier(
+        domain=auth0.domain, audience=auth0.audience, roles_claim=auth0.roles_claim
+    )
 
 
 def get_current_user(
@@ -70,6 +73,23 @@ def get_current_user(
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 
+def require_admin(user: CurrentUser) -> AuthenticatedUser:
+    """Allow only administrators (``admin`` in the Auth0 roles claim).
+
+    Args:
+        user: The authenticated caller.
+
+    Returns:
+        The caller, when they are an administrator.
+    """
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, detail=_NOT_ADMIN_DETAIL)
+    return user
+
+
+AdminUser = Annotated[AuthenticatedUser, Depends(require_admin)]
+
+
 @router.get("/me")
 def read_me(user: CurrentUser) -> MeResponse:
     """Return the identity behind the access token.
@@ -78,6 +98,12 @@ def read_me(user: CurrentUser) -> MeResponse:
         user: The authenticated caller.
 
     Returns:
-        The caller's subject, scopes and permissions.
+        The caller's subject, scopes, permissions and roles.
     """
-    return MeResponse(sub=user.sub, scopes=user.scopes, permissions=user.permissions)
+    return MeResponse(
+        sub=user.sub,
+        scopes=user.scopes,
+        permissions=user.permissions,
+        roles=user.roles,
+        is_admin=user.is_admin,
+    )

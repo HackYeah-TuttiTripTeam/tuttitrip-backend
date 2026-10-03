@@ -31,6 +31,9 @@ class Auth0Settings(BaseModel):
 
     domain: str = "dev-yahwm2zlut2gqdry.us.auth0.com"
     audience: str = "https://tuttitrip-api.gburek.app"
+    # Namespaced access-token claim with the user's roles, set by the Auth0
+    # post-login Action ("admin" for the superadmin allow-list).
+    roles_claim: str = "https://tuttitrip.gburek.app/roles"
 
 
 class LlmSettings(BaseModel):
