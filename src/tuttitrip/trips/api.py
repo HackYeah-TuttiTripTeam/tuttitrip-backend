@@ -16,9 +16,19 @@ from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
-from tuttitrip.trips.schemas import TripCreate, TripMembership, TripRead, TripRole
+from tuttitrip.trips.schemas import (
+    TripCreate,
+    TripMembership,
+    TripRead,
+    TripRole,
+    TripUpdate,
+)
 from tuttitrip.trips.services import trip_service
-from tuttitrip.trips.services.trip_service import TripNotFoundError, TripRoleError
+from tuttitrip.trips.services.trip_service import (
+    TripInvalidError,
+    TripNotFoundError,
+    TripRoleError,
+)
 
 router = APIRouter(prefix="/trips", tags=["trips"])
 
@@ -96,3 +106,63 @@ async def create_trip(
         The created trip.
     """
     return await trip_service.create_trip(session, user.sub, data)
+
+
+@router.get(
+    "/{trip_id}",  # ruff: ignore[fast-api-unused-path-parameter] TripAccess reads it
+    dependencies=[requires(Feature.TRIPS_CORE, Access.READ)],
+)
+async def get_trip(membership: TripMember, session: SessionDep) -> TripRead:
+    """Read one trip: dates, kind, city, day window and budget.
+
+    Args:
+        membership: The caller's membership (any role).
+        session: Database session.
+
+    Returns:
+        The trip.
+    """
+    try:
+        return await trip_service.get_trip(session, membership)
+    except TripNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, TRIP_NOT_FOUND) from exc
+
+
+@router.patch(
+    "/{trip_id}",  # ruff: ignore[fast-api-unused-path-parameter] TripAccess reads it
+    dependencies=[requires(Feature.TRIPS_CORE, Access.WRITE)],
+)
+async def update_trip(
+    data: TripUpdate, membership: TripCoHost, session: SessionDep
+) -> TripRead:
+    """Change trip details (co-host or host); only sent fields change.
+
+    Args:
+        data: Fields to change.
+        membership: The caller's membership (co-host or host).
+        session: Database session.
+
+    Returns:
+        The updated trip.
+    """
+    try:
+        return await trip_service.update_trip(session, membership, data)
+    except TripNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, TRIP_NOT_FOUND) from exc
+    except TripInvalidError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, exc.errors) from exc
+
+
+@router.delete(
+    "/{trip_id}",  # ruff: ignore[fast-api-unused-path-parameter] TripAccess reads it
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[requires(Feature.TRIPS_CORE, Access.WRITE)],
+)
+async def delete_trip(membership: TripHost, session: SessionDep) -> None:
+    """Delete the trip with its profiles, expenses and members (host only).
+
+    Args:
+        membership: The caller's membership (host).
+        session: Database session.
+    """
+    await trip_service.delete_trip(session, membership)
