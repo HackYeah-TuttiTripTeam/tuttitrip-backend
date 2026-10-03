@@ -8,9 +8,9 @@ an identical ``plan_hash``. Holds fixtures only; metrics and hashing live in
 Variant selection rule (also in the ``x-stub`` endpoint descriptions): the
 variant is ``group``, ``solo`` or ``approval`` (in that order) by
 ``sha256(str(trip_id).encode())[0] % 3``, the first byte of the digest. One trip
-always gets the same plan and different trips show different states. ``group`` and ``approval`` have a stop with an
-unverified price (inflated by delta) and a free stop (``0.00`` with a price
-source); ``solo`` covers only two days, so it has neither. All variants have a
+always gets the same plan and different trips show different states.
+``group`` and ``approval`` have a stop with an unverified price (inflated by
+delta) and a free stop (``0.00`` with a price source); ``solo`` covers only two days, so it has neither. All variants have a
 stop with unverified hours and no hours source, transfers with and without a
 cost, and a night at the lodging base. ``approval`` is the over-budget
 variant (``needs_approval`` with ``kappa``); the OpenAPI examples are built
