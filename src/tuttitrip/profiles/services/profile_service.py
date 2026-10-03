@@ -10,7 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.profiles import db
-from tuttitrip.profiles.logic.age_defaults import DEFAULTS, age_group_for
+from tuttitrip.profiles.logic.age_defaults import (
+    DEFAULTS,
+    ComfortDefaults,
+    age_group_for,
+    customized_fields,
+)
 from tuttitrip.profiles.logic.weight_presets import (
     WeightSubject,
     preset_weights,
@@ -147,7 +152,7 @@ async def list_profiles(
         The trip's profiles.
     """
     profiles = await db.select_profiles_by_trip(session, membership.trip_id)
-    return [ProfileRead.model_validate(profile) for profile in profiles]
+    return [_read(profile) for profile in profiles]
 
 
 async def create_profile(
@@ -186,7 +191,7 @@ async def create_profile(
     async with _account_conflicts(session):
         await db.insert_profile(session, profile)
         await session.commit()
-    return ProfileRead.model_validate(profile)
+    return _read(profile)
 
 
 async def create_host_profile(session: AsyncSession, trip_id: UUID, sub: str) -> None:
@@ -216,6 +221,26 @@ async def _get(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> Profil
     return profile
 
 
+def _comfort(profile: Profile) -> ComfortDefaults:
+    return ComfortDefaults(
+        **{k: getattr(profile, k) for k in asdict(DEFAULTS[AgeGroup.ADULT])}
+    )
+
+
+def _read(profile: Profile) -> ProfileRead:
+    """Profile DTO with ``customized_fields`` computed from the age defaults.
+
+    Args:
+        profile: The stored profile.
+
+    Returns:
+        The DTO.
+    """
+    read = ProfileRead.model_validate(profile)
+    read.customized_fields = customized_fields(_comfort(profile), read.age_group)
+    return read
+
+
 def _follow_new_group(profile: Profile, new_age: int) -> dict[str, Any]:
     """Defaults of the new age group for the fields still at the old defaults.
 
@@ -230,8 +255,8 @@ def _follow_new_group(profile: Profile, new_age: int) -> dict[str, Any]:
     old, new = age_group_for(profile.age), age_group_for(new_age)
     if old is new:
         return {}
-    was, now = asdict(DEFAULTS[old]), asdict(DEFAULTS[new])
-    return {k: v for k, v in now.items() if getattr(profile, k) == was[k]}
+    kept = customized_fields(_comfort(profile), old)
+    return {k: v for k, v in asdict(DEFAULTS[new]).items() if k not in kept}
 
 
 async def get_profile(
@@ -247,9 +272,7 @@ async def get_profile(
     Returns:
         The profile.
     """
-    return ProfileRead.model_validate(
-        await _get(session, membership.trip_id, profile_id)
-    )
+    return _read(await _get(session, membership.trip_id, profile_id))
 
 
 async def unlink_account(
@@ -323,7 +346,7 @@ async def update_profile(
         setattr(profile, key, value)
     async with _account_conflicts(session):
         await session.commit()
-    return ProfileRead.model_validate(profile)
+    return _read(profile)
 
 
 async def delete_profile(
@@ -380,4 +403,4 @@ async def set_weights(
     for pid, weight in new.items():
         profiles[pid].weight = weight
     await session.commit()
-    return [ProfileRead.model_validate(p) for p in profiles.values()]
+    return [_read(p) for p in profiles.values()]

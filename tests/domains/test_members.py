@@ -400,7 +400,7 @@ def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
     monkeypatch.setattr(
         profile_service.ProfileRead,
         "model_validate",
-        lambda p: SimpleNamespace(id=p.id, user_sub=p.user_sub),
+        lambda p: SimpleNamespace(id=p.id, user_sub=p.user_sub, age_group="adult"),
     )
     host = TripMembership(trip_id=TRIP, sub=ME.sub, role=HOST)
     _run(member_service.remove_member(session, host, profile.id))

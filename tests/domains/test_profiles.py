@@ -4,7 +4,7 @@ import asyncio
 import functools
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -16,7 +16,11 @@ from sqlalchemy.exc import IntegrityError
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
-from tuttitrip.profiles.logic.age_defaults import DEFAULTS, age_group_for
+from tuttitrip.profiles.logic.age_defaults import (
+    DEFAULTS,
+    age_group_for,
+    customized_fields,
+)
 from tuttitrip.profiles.logic.weight_presets import (
     FocusProfileRequiredError,
     WeightRatioError,
@@ -112,6 +116,20 @@ def session() -> AsyncMock:
 )
 def test_age_group_from_age(age: int, group: AgeGroup) -> None:
     assert age_group_for(age) is group
+
+
+def test_customized_fields_lists_only_differences_in_schema_order() -> None:
+    child = DEFAULTS[AgeGroup.CHILD]
+    assert customized_fields(child, AgeGroup.CHILD) == []
+    mine = replace(child, floor=50, daily_km=7.0, nap_start=None)
+    assert customized_fields(mine, AgeGroup.CHILD) == [
+        "daily_km",
+        "nap_start",
+        "floor",
+    ]
+    assert "daily_km" not in customized_fields(
+        replace(child, daily_km=child.daily_km + 1e-12), AgeGroup.CHILD
+    )
 
 
 def test_every_group_has_defaults_with_floor_30() -> None:
@@ -566,6 +584,26 @@ def test_comfort_contradictions_are_rejected_by_the_schema() -> None:
         ProfileCreate(display_name="X", age=30, nap_minutes=30, nap_start=None)
     with pytest.raises(ValueError, match="nap_start"):
         ProfileUpdate(nap_minutes=0, nap_start=time(13, 0))
+
+
+def test_customized_fields_over_http(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kid = _profile(age=6)
+    monkeypatch.setattr(
+        profile_service.db, "select_profile", AsyncMock(return_value=kid)
+    )
+    monkeypatch.setattr(
+        profile_service.db, "select_profiles_by_trip", AsyncMock(return_value=[kid])
+    )
+    url = path("list_profiles", trip_id=TRIP)
+    assert client.get(url).json()[0]["customized_fields"] == []
+    url = path("update_profile", trip_id=TRIP, profile_id=kid.id)
+    body = client.patch(url, json={"daily_km": 7.5, "customized_fields": ["floor"]})
+    assert body.json()["customized_fields"] == ["daily_km"]
+    body = client.patch(url, json={"age": 30})
+    assert body.json()["age_group"] == "adult"
+    assert body.json()["customized_fields"] == ["daily_km"]
 
 
 def test_delete_returns_204_404_and_403(

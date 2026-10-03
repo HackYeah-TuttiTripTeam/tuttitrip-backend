@@ -131,6 +131,14 @@ class ProfileRead(_Comfort):
     age_group: AgeGroup
     user_sub: str | None
     weight: float = Field(description="Vote multiplier in the fairness solver.")
+    customized_fields: list[str] = Field(
+        default_factory=list,
+        json_schema_extra={"readOnly": True},
+        description=(
+            "Comfort fields that differ from the defaults of the person's age "
+            "group, in schema order. Read-only, computed on read."
+        ),
+    )
 
 
 class WeightItem(BaseModel):
