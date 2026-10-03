@@ -234,3 +234,14 @@ def test_same_inputs_give_the_same_result() -> None:
     assert schedule_day(spots, window(), people) == schedule_day(
         list(reversed(spots)), window(), people
     )
+
+
+def test_lunch_after_the_last_visit_is_still_scheduled() -> None:
+    lunch = Lunch(time(12, 0), time(13, 0), 45)
+    day = ok(
+        schedule_day(
+            [place(1, visit=30)], window(start="09:00", lunch=lunch), [adult()]
+        )
+    )
+    (meal,) = day.breaks
+    assert (meal.kind, meal.start.hour) == ("lunch", 12)

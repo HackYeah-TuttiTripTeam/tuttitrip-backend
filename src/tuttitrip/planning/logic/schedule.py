@@ -12,6 +12,7 @@ on UTC instants, so a day with a daylight-saving change keeps real durations;
 results are converted back to local time. The module is deterministic.
 """
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
@@ -339,7 +340,9 @@ def schedule_day(
         )
         cursor = fit.end
 
-    distance = sum(p.segment_km for p in places)
+    if meal is not None and meal.pending:
+        _take_lunch(meal, cursor, day_end, blocked)
+    distance = math.fsum(p.segment_km for p in places)
     over = _too_far(distance, people)
     if over:
         return Infeasible(InfeasibleCode.DISTANCE, person_ids=tuple(over))
