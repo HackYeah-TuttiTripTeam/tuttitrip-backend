@@ -237,3 +237,34 @@ async def test_name_sort_ignores_case(world: World) -> None:
         await world.add(name)
     body = await world.get(world.me, {"sort": "name", "dir": "asc"})
     assert names(body) == ["A", "b", "c"]
+
+
+@with_world
+async def test_combined_filter_is_stable_across_a_page_boundary(world: World) -> None:
+    for i in range(5):
+        await world.add(
+            f"k{i}", city_slug="krakow", start_date=date(2026, 11, 1 + i % 2)
+        )
+    await world.add("undated", city_slug="krakow")
+    await world.add("guest", TripRole.MEMBER, city_slug="krakow", start_date=NOW.date())
+    await world.add("other city", city_slug="gdansk", start_date=date(2026, 11, 2))
+    params = {
+        "role": "host",
+        "start_from": "2026-11-01",
+        "city": "krakow",
+        "sort": "start_date",
+        "dir": "asc",
+        "size": 2,
+    }
+    seen: list[str] = []
+    for page in (1, 2, 3):
+        body = await world.get(world.me, {**params, "page": page})
+        assert body["total"] == 5
+        seen += [i["name"] for i in body["items"]]
+    assert sorted(seen) == [f"k{i}" for i in range(5)]
+    assert len(seen) == len(set(seen))
+    again = []
+    for page in (1, 2, 3):
+        body = await world.get(world.me, {**params, "page": page})
+        again += [i["name"] for i in body["items"]]
+    assert again == seen

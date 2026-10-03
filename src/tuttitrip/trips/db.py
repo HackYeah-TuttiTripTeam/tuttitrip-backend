@@ -127,6 +127,8 @@ async def select_trips_page(
         query,
         ordering(SORT_COLUMNS, query.sort, Trip.id),
     )
+    if not page.items:
+        return page, {}
     rows = await session.execute(
         select(TripMember.trip_id, TripMember.role).where(
             TripMember.user_sub == sub,

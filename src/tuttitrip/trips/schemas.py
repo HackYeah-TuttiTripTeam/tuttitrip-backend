@@ -304,6 +304,7 @@ class TripListQuery(PageParams, TripFilter):
     """Query of ``GET /trips``: paging, sort and the filters."""
 
     sort: TripSort = TripSort.CREATED_AT
+    # Overrides the base default (ASC): newest trips first.
     dir: Annotated[SortDir, Field(description="Sort direction.")] = SortDir.DESC
 
 
