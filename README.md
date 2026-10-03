@@ -89,7 +89,9 @@ docker compose up --build
 ### 4. Testy, lint i typy
 
 ```bash
-uv run pytest                 # testy, w tym testy architektury
+uv run pytest -m "not integration and not e2e"  # testy jednostkowe i architektury, to samo robi CI
+uv run pytest -m "integration or e2e"            # lokalnie przed PR (CI ich nie uruchamia; dziś brak takich testów)
+uv run pytest                                    # wszystko
 uv run ruff check .           # lint (uv run ruff check --fix . poprawia, co się da)
 uv run ruff format .          # formatowanie
 uv run ty check               # typy
@@ -98,7 +100,7 @@ uv run ty check               # typy
 Przed każdym commitem (CI sprawdza to samo):
 
 ```bash
-uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -m "not integration and not e2e"
 ```
 
 ### Nowa migracja
