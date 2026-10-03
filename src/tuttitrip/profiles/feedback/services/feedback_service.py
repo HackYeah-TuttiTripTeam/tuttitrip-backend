@@ -77,6 +77,41 @@ async def _require_place(session: AsyncSession, place_id: UUID) -> None:
         raise FeedbackPlaceNotFoundError(str(place_id)) from exc
 
 
+async def stage_rating(
+    session: AsyncSession,
+    membership: TripMembership,
+    profile_id: UUID,
+    place_id: UUID,
+    data: RatingUpdate,
+) -> PlaceRating:
+    """Upsert a rating without committing, for callers that own the transaction.
+
+    The caller has checked that the author may act for the profile and that the
+    place exists (``rate_place`` does both).
+
+    Args:
+        session: Open session (caller commits).
+        membership: The author's membership of the trip.
+        profile_id: Whose rating it is.
+        place_id: Catalog place.
+        data: Value and, for ``dont_want``, the reason.
+
+    Returns:
+        The stored row.
+    """
+    return await db.upsert_rating(
+        session,
+        PlaceRating(
+            trip_id=membership.trip_id,
+            profile_id=profile_id,
+            place_id=place_id,
+            value=data.value,
+            reason_code=data.reason_code,
+            updated_by_sub=membership.sub,
+        ),
+    )
+
+
 async def rate_place(
     session: AsyncSession,
     membership: TripMembership,
@@ -98,17 +133,7 @@ async def rate_place(
     """
     await _profile_for_author(session, membership, profile_id)
     await _require_place(session, place_id)
-    row = await db.upsert_rating(
-        session,
-        PlaceRating(
-            trip_id=membership.trip_id,
-            profile_id=profile_id,
-            place_id=place_id,
-            value=data.value,
-            reason_code=data.reason_code,
-            updated_by_sub=membership.sub,
-        ),
-    )
+    row = await stage_rating(session, membership, profile_id, place_id, data)
     read = RatingRead.model_validate(row)
     await session.commit()
     return read
