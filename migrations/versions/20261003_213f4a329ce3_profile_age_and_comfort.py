@@ -38,39 +38,36 @@ _COLUMNS = (
 )
 
 
+_KEYS = ("age", "seg", "day", "act", "stairs", "queue", "nap", "nap_min")
+
+
+_SET = (
+    "UPDATE profiles SET age = :age, segment_km = :seg, daily_km = :day,"
+    " active_min = :act, stairs_sensitivity = :stairs,"
+    " queue_patience_min = :queue, nap_start = CAST(CAST(:nap AS text) AS time),"
+    " nap_minutes = :nap_min, floor = 30"
+)
+_BY_GROUP = sa.text(_SET + " WHERE age_group = :grp")
+_UNKNOWN_GROUP = sa.text(_SET + " WHERE age IS NULL")
+
+
+def _backfill(statement: sa.TextClause, row: tuple[object, ...]) -> None:
+    params = dict(zip(_KEYS, row[1:], strict=True))
+    if statement is _BY_GROUP:
+        params["grp"] = row[0]
+    op.get_bind().execute(statement, params)
+
+
 def upgrade() -> None:
     """Apply this revision."""
     op.add_column("profiles", sa.Column("user_sub", sa.String(length=255)))
     op.add_column("profiles", sa.Column("nap_start", sa.Time()))
     for name, type_ in _COLUMNS:
         op.add_column("profiles", sa.Column(name, type_))
-    for group, *values in _BACKFILL:
-        op.execute(
-            sa.text(
-                "UPDATE profiles SET age = :age, segment_km = :seg, daily_km = :day,"
-                " active_min = :act, stairs_sensitivity = :stairs,"
-                " queue_patience_min = :queue, nap_start = CAST(:nap AS time),"
-                " nap_minutes = :nap_min, floor = 30 WHERE age_group = :grp"
-            ).bindparams(
-                grp=group,
-                **dict(
-                    zip(
-                        (
-                            "age",
-                            "seg",
-                            "day",
-                            "act",
-                            "stairs",
-                            "queue",
-                            "nap",
-                            "nap_min",
-                        ),
-                        values,
-                        strict=True,
-                    )
-                ),
-            )
-        )
+    for row in _BACKFILL:
+        _backfill(_BY_GROUP, row)
+    # age_group was a free string: anything unknown is treated as adult.
+    _backfill(_UNKNOWN_GROUP, next(r for r in _BACKFILL if r[0] == "adult"))
     for name, type_ in _COLUMNS:
         op.alter_column("profiles", name, existing_type=type_, nullable=False)
     op.create_unique_constraint(

@@ -1,8 +1,10 @@
 """Create, edit, delete profiles and set weights."""
 
+from collections.abc import Awaitable
 from dataclasses import asdict
 from uuid import UUID
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.profiles import db
@@ -54,6 +56,28 @@ async def _check_account(session: AsyncSession, trip_id: UUID, sub: str) -> None
         raise ProfileAccountError(msg)
 
 
+async def _commit(
+    session: AsyncSession, pending: Awaitable[object] | None = None
+) -> None:
+    """Run ``pending`` (a flush) and commit; map a racing duplicate account link.
+
+    Args:
+        session: Open session.
+        pending: An awaitable that flushes, if the caller has one.
+
+    Raises:
+        ProfileAccountError: When the account got a profile in the meantime.
+    """
+    try:
+        if pending is not None:
+            await pending
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        msg = "The account already has a profile on this trip"
+        raise ProfileAccountError(msg) from exc
+
+
 async def list_profiles(
     session: AsyncSession, membership: TripMembership
 ) -> list[ProfileRead]:
@@ -93,18 +117,15 @@ async def create_profile(
         for k, v in given.items()
         if k in comfort and (v is not None or k == "nap_start")
     }
-    profile = await db.insert_profile(
-        session,
-        Profile(
-            trip_id=membership.trip_id,
-            display_name=data.display_name,
-            age=data.age,
-            age_group=group.value,
-            user_sub=data.user_sub,
-            **comfort,
-        ),
+    profile = Profile(
+        trip_id=membership.trip_id,
+        display_name=data.display_name,
+        age=data.age,
+        age_group=group.value,
+        user_sub=data.user_sub,
+        **comfort,
     )
-    await session.commit()
+    await _commit(session, db.insert_profile(session, profile))
     return ProfileRead.model_validate(profile)
 
 
@@ -162,7 +183,7 @@ async def update_profile(
         changes["age_group"] = group.value
     for key, value in changes.items():
         setattr(profile, key, value)
-    await session.commit()
+    await _commit(session)
     return ProfileRead.model_validate(profile)
 
 

@@ -94,7 +94,7 @@ class WeightItem(BaseModel):
     """One person's weight."""
 
     profile_id: UUID
-    weight: float = Field(gt=0)
+    weight: float = Field(gt=0, le=100, allow_inf_nan=False)
 
 
 class WeightsUpdate(BaseModel):

@@ -436,3 +436,16 @@ def test_member_gets_403_on_co_host_routes(
         params["profile_id"] = uuid.uuid4()
     url = path(route, **params)
     assert client.request(method, url, json=body).status_code == 403
+
+
+@pytest.mark.parametrize("weight", ["NaN", "Infinity", 101])
+def test_nan_inf_and_huge_weights_are_rejected(
+    client: TestClient, weight: float | str
+) -> None:
+    body = f'{{"weights": [{{"profile_id": "{uuid.uuid4()}", "weight": {weight}}}]}}'
+    response = client.put(
+        path("set_weights", trip_id=TRIP),
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
