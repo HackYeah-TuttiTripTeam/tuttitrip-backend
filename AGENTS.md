@@ -499,6 +499,19 @@ Wydania:
   the enum and a migration.
 - Money is `Decimal` in the code and a string in the API (`"35.00"`).
 
+## Ratings and vetoes (profiles/feedback)
+
+- A rating (`place_ratings`, one row per profile and place, upsert) is the vote
+  `v_ip` of E1: `want` +1, `neutral` 0, `dont_want` -1. `dont_want` needs a
+  `reason_code`, other values forbid it (CHECK and 422). Reason codes are the
+  plan contract's `ReasonCode`; do not add a second list.
+- A veto (`place_vetoes`) is the hard constraint of E0, not a vote. It keeps
+  its author (`created_by_sub`, `on_behalf`); revoking sets `revoked_at` and
+  it stops blocking at once. Planning reads only
+  `feedback_service.list_for_trip()`, which returns active vetoes.
+- Own profile (`profiles.user_sub` equals the caller) or co-host and above;
+  the services take a `TripMembership` as the author, not `CurrentUser`.
+
 ## Git flow
 
 - `main` is production; `develop` is integration. Both change only through
