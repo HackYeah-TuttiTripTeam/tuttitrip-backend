@@ -1,11 +1,20 @@
 """In-memory test doubles."""
 
+from collections.abc import Iterable
+
+from fastapi import FastAPI
+
+from tuttitrip.shared.auth.api import get_current_user
+from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.jobs.contracts import WORKFLOWS, ContractPayload, Queue, Workflow
 from tuttitrip.shared.jobs.schemas import JobState
 from tuttitrip.shared.jobs.services.job_queue import (
     JobNotFoundError,
     workflow_id_for,
 )
+from tuttitrip.shared.permissions.api import get_user_grants
+from tuttitrip.shared.permissions.logic.resolution import Grant
+from tuttitrip.shared.permissions.registry import Access, Feature
 
 
 class FakeJobQueue:
@@ -49,3 +58,18 @@ class FakeJobQueue:
         job = await self.get(workflow_id)
         if job.status in {"ENQUEUED", "PENDING"}:
             self.jobs[workflow_id] = job.model_copy(update={"status": "CANCELLED"})
+
+
+EVERYTHING = (Grant(Feature.ROOT, Access.WRITE),)
+
+
+def authorize(
+    app: FastAPI, user: AuthenticatedUser, grants: Iterable[Grant] = EVERYTHING
+) -> None:
+    """Skip token checks and the grants query: ``user`` holds exactly ``grants``.
+
+    Tests that are not about permissions use the default (``*`` WRITE).
+    """
+    fixed = list(grants)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_user_grants] = lambda: fixed

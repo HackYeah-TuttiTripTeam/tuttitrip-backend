@@ -1,33 +1,28 @@
 """Profile endpoints (nested under a trip)."""
 
-from uuid import UUID
-
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
-from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
-from tuttitrip.trips.services.trip_service import TripNotFoundError
+from tuttitrip.shared.permissions.api import requires
+from tuttitrip.shared.permissions.registry import Access, Feature
+from tuttitrip.trips.api import TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/profiles", tags=["profiles"])
 
 
-@router.get("")
+@router.get("", dependencies=[requires(Feature.PROFILES_CORE, Access.READ)])
 async def list_profiles(
-    trip_id: UUID, user: CurrentUser, session: SessionDep
+    membership: TripMember, session: SessionDep
 ) -> list[ProfileRead]:
-    """List the people on one of the caller's trips.
+    """List the people on a trip the caller belongs to.
 
     Args:
-        trip_id: Trip id.
-        user: The authenticated organizer.
+        membership: The caller's membership of ``{trip_id}``.
         session: Database session.
 
     Returns:
         The trip's profiles.
     """
-    try:
-        return await profile_service.list_profiles(session, trip_id, user.sub)
-    except TripNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Trip not found") from exc
+    return await profile_service.list_profiles(session, membership)

@@ -4,8 +4,9 @@ from fastapi import APIRouter, Response, status
 
 from tuttitrip.shared.health.schemas import HealthResponse, LiveResponse
 from tuttitrip.shared.health.services.health_check import check_health
+from tuttitrip.shared.permissions.api import public
 
-router = APIRouter(prefix="/health", tags=["health"])
+router = APIRouter(prefix="/health", tags=["health"], dependencies=[public()])
 
 
 @router.get("")

@@ -11,10 +11,9 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.shared.fakes import FakeJobQueue
+from tests.shared.fakes import FakeJobQueue, authorize
 from tuttitrip.main import create_app
 from tuttitrip.planning.services import plan_job_service
-from tuttitrip.shared.auth.api import get_current_user
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.jobs import contracts
@@ -46,7 +45,7 @@ def queue() -> FakeJobQueue:
 def client(queue: FakeJobQueue) -> Iterator[TestClient]:
     app = create_app()
     app.dependency_overrides[get_job_queue] = lambda: queue
-    app.dependency_overrides[get_current_user] = lambda: ALICE
+    authorize(app, ALICE)
     app.dependency_overrides[get_session] = lambda: None
     with TestClient(app) as test_client:
         yield test_client
@@ -103,7 +102,7 @@ def test_ping_is_public_and_visible_only_as_ping(
 def test_jobs_are_private_to_their_owner(
     client: TestClient, queue: FakeJobQueue, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(plan_job_service.trip_service, "get_owned_trip", AsyncMock())
+    monkeypatch.setattr(plan_job_service.trip_service, "get_membership", AsyncMock())
     monkeypatch.setattr(plan_job_service, "ensure_worker_available", AsyncMock())
     body = {"trip_id": str(uuid.uuid4()), "request": "Gdańsk, 3 dni"}
 
@@ -140,7 +139,7 @@ def test_unknown_job_is_404(client: TestClient) -> None:
 def test_plan_job_refused_without_worker(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(plan_job_service.trip_service, "get_owned_trip", AsyncMock())
+    monkeypatch.setattr(plan_job_service.trip_service, "get_membership", AsyncMock())
     monkeypatch.setattr(
         plan_job_service,
         "ensure_worker_available",
@@ -200,7 +199,7 @@ def test_incompatible_worker_blocks_enqueue(monkeypatch: pytest.MonkeyPatch) -> 
 def test_local_provider_goes_to_the_local_llm_queue(
     client: TestClient, queue: FakeJobQueue, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(plan_job_service.trip_service, "get_owned_trip", AsyncMock())
+    monkeypatch.setattr(plan_job_service.trip_service, "get_membership", AsyncMock())
     monkeypatch.setattr(plan_job_service, "ensure_worker_available", AsyncMock())
     body = {"trip_id": str(uuid.uuid4()), "request": "Gdańsk", "provider": "local"}
     workflow_id = client.post("/api/v1/planning/jobs", json=body).json()["workflow_id"]

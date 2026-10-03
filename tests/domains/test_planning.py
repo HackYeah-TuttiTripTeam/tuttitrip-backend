@@ -7,12 +7,14 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
 
+from tests.shared.fakes import authorize
 from tuttitrip.main import create_app
 from tuttitrip.planning.fairness.logic.welfare import weighted_log_welfare
 from tuttitrip.planning.linter.logic.rules import lint
 from tuttitrip.planning.linter.schemas import LintRequest, PlanItem
 from tuttitrip.planning.schemas import TripPlan
 from tuttitrip.planning.services.planner_agent import planner_agent
+from tuttitrip.shared.auth.schemas import AuthenticatedUser
 
 
 def test_planner_agent_returns_trip_plan() -> None:
@@ -56,7 +58,9 @@ def test_linter_flags_over_budget_plan() -> None:
 
 
 def test_fairness_endpoint() -> None:
-    with TestClient(create_app()) as client:
+    app = create_app()
+    authorize(app, AuthenticatedUser(sub="auth0|tester"))
+    with TestClient(app) as client:
         response = client.post(
             "/api/v1/planning/fairness/score",
             json={"people": [{"utility": 9, "weight": 1}]},
