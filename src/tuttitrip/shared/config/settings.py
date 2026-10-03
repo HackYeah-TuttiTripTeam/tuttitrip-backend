@@ -37,9 +37,27 @@ class Auth0Settings(BaseModel):
 
 
 class LlmSettings(BaseModel):
-    """Default model for Pydantic AI agents (provider keys use their own vars)."""
+    """Model providers behind the Pydantic AI model catalog.
 
-    model: str = "openai:gpt-5.2"
+    The GB10 host serves the Qwen models and the decision models (basal, Laya)
+    behind one key; OpenRouter is the cloud fallback and serves JEV.
+    """
+
+    # GB10 (OpenAI-compatible Qwen endpoint, LiteLLM key).
+    gb10_base_url: str = "https://llm.gburek.app/v1"
+    gb10_api_key: SecretStr = SecretStr("")
+    gb10_agent_model: str = "qwen3.8-27b"
+    gb10_chat_model: str = "qwen3.8-27b-chat"
+    # Decision models (System One API on the same host and key).
+    basal_base_url: str = "https://llm.gburek.app/basal/v1"
+    basal_model: str = "basal"
+    laya_base_url: str = "https://llm.gburek.app/laya/v1"
+    laya_model: str = "laya"
+    # OpenRouter. Empty key = fall back to the standard OPENROUTER_API_KEY.
+    openrouter_api_key: SecretStr = SecretStr("")
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "google/gemini-3.8-flash"
+    jev_model: str = "typesafe/jev-1.13"
 
 
 class DbosSettings(BaseModel):

@@ -75,6 +75,10 @@ ignore = [
     "D",                      # test docstrings are optional
     "DOC",                    # ...and so are their Args/Returns sections
 ]
+"scripts/**/*.py" = [
+    "implicit-namespace-package", # standalone scripts, not a package
+    "print",                      # output is the point of a smoke script
+]
 "migrations/**/*.py" = [
     "implicit-namespace-package", # Alembic's script directory is not a Python package
 ]

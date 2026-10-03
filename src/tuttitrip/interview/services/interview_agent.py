@@ -3,10 +3,11 @@
 from pydantic_ai import Agent
 
 from tuttitrip.interview.schemas import InterviewCard
-from tuttitrip.shared.config.settings import get_settings
+from tuttitrip.shared.llm.services.model_catalog import ModelKey, catalog, model_id
 
 interview_agent: Agent[None, InterviewCard] = Agent(
-    get_settings().llm.model,
+    model_id(ModelKey.AGENT),
+    capabilities=[catalog.capability()],
     output_type=InterviewCard,
     instructions=(
         "You interview a trip organizer about their group. Ask one short "
