@@ -69,7 +69,7 @@ def test_host_stores_a_pasted_plan(client: TestClient) -> None:
     body = response.json()
     assert body["trip_id"] == str(TRIP)
     assert body["created_by"] == BOB.sub
-    assert body["text"] == "Dzień 1: Wawel"
+    assert "text" not in body
 
 
 def test_text_at_the_limit_is_accepted(client: TestClient) -> None:
@@ -83,7 +83,10 @@ def test_text_over_the_limit_is_422_with_a_readable_message(
     text = "a" * (MAX_DOCUMENT_CHARS + 1)
     response = client.post(_url(), json={"kind": "offer", "text": text})
     assert response.status_code == 422
-    assert "at most 20000 characters" in response.json()["detail"][0]["msg"]
+    error = response.json()["detail"][0]
+    assert "at most 20000 characters" in error["msg"]
+    assert "input" not in error
+    assert "ctx" not in error
 
 
 @pytest.mark.parametrize(

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from tuttitrip.shared.jobs.contracts import Progress
 
@@ -32,7 +32,14 @@ class JobState(BaseModel):
     owner: str | None = None
     output: dict[str, Any] | None = None
     error: str | None = None
-    error_code: str | None = None
+    error_code: str | None = Field(
+        default=None,
+        description=(
+            "Machine code of a worker error: `unsupported_contract_version`, "
+            "`invalid_payload` or `not_implemented` (not retried). Clients branch "
+            "on this, never on the text of `error`."
+        ),
+    )
     progress: Progress | None = None
 
 

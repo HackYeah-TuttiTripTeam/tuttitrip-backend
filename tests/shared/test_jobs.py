@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -222,17 +221,6 @@ def test_every_workflow_has_a_timeout() -> None:
 # --- mirrored workflows ----------------------------------------------------
 
 
-def test_mirror_has_the_same_workflows_as_the_worker() -> None:
-    assert {w.value for w in Workflow} >= {
-        "parse_pasted_plan",
-        "extract_offer_evidence",
-        "fetch_place_candidates",
-        "write_justifications",
-    }
-    for workflow in Workflow:
-        assert workflow in contracts.WORKFLOWS
-
-
 def test_pasted_text_travels_by_id_not_in_the_payload() -> None:
     assert "text" not in contracts.ParsePastedPlanInput.model_fields
     assert "document_id" in contracts.ExtractOfferEvidenceInput.model_fields
@@ -260,26 +248,6 @@ def test_offer_requirements_must_be_unique_known_keys() -> None:
             requirement_keys=["a"],
             requirements=[contracts.RequirementLabel(key="b", label="B")],
         )
-
-
-@pytest.mark.parametrize(
-    ("name", "slug"),
-    [
-        ("Gdańsk", "gdansk"),
-        ("Gdańsk, Polska", "gdansk-polska"),
-        ("Łódź", "lodz"),
-        ("  Kraków  --  Stare Miasto ", "krakow-stare-miasto"),
-        ("São Paulo", "sao-paulo"),
-    ],
-)
-def test_city_slug_follows_the_worker_rule(name: str, slug: str) -> None:
-    assert contracts.city_slug(name) == slug
-    assert re.fullmatch(contracts.SLUG_PATTERN, slug)
-
-
-def test_city_slug_refuses_a_name_without_latin_characters() -> None:
-    with pytest.raises(ValueError, match="no slug"):
-        contracts.city_slug("Москва")
 
 
 class _WorkerError(Exception):

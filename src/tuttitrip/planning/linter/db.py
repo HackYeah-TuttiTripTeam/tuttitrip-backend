@@ -2,7 +2,6 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.planning.linter.models import PastedDocument
@@ -30,23 +29,3 @@ async def insert_document(
     await session.flush()
     await session.refresh(document)
     return document
-
-
-async def select_document(
-    session: AsyncSession, trip_id: UUID, document_id: UUID
-) -> PastedDocument | None:
-    """Find a pasted text of a trip.
-
-    Args:
-        session: Open session.
-        trip_id: Trip the text must belong to.
-        document_id: Document id.
-
-    Returns:
-        The row, or ``None``.
-    """
-    return await session.scalar(
-        select(PastedDocument).where(
-            PastedDocument.id == document_id, PastedDocument.trip_id == trip_id
-        )
-    )

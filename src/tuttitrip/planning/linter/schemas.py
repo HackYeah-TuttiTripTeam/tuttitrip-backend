@@ -59,13 +59,12 @@ class DocumentCreate(BaseModel):
 
 
 class DocumentRead(BaseModel):
-    """A stored pasted text; the worker reads it by ``id``."""
+    """A stored pasted text (not echoed back; the worker reads it by ``id``)."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
     trip_id: UUID
     kind: DocumentKind
-    text: str
     created_by: str
     created_at: datetime

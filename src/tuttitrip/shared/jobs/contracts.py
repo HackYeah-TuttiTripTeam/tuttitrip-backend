@@ -11,7 +11,6 @@ Rules (deploy/CONVENTIONS.md, "Integracja z workerem"):
 
 import json
 import re
-import unicodedata
 from enum import StrEnum
 from typing import Final, Literal, NamedTuple, Self
 from uuid import UUID
@@ -115,33 +114,6 @@ run of other characters into one ``-`` and trimming ``-`` at both ends
 one rule."""
 
 Locale = Literal["pl", "en"]
-
-_NON_ASCII_LETTERS = str.maketrans({"ł": "l", "Ł": "L", "đ": "d", "Đ": "D"})
-
-
-def city_slug(name: str) -> str:
-    """Build a city slug the way the worker does (rule in ``SLUG_PATTERN``).
-
-    Args:
-        name: Free-text city name, e.g. ``"Gdańsk, Polska"``.
-
-    Returns:
-        Lowercase ASCII words joined by ``-`` (``"gdansk-polska"``).
-
-    Raises:
-        ValueError: The name has no Latin letters or digits (no valid slug).
-    """
-    ascii_name = (
-        unicodedata.normalize("NFKD", name.translate(_NON_ASCII_LETTERS))
-        .encode("ascii", "ignore")
-        .decode()
-    )
-    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")
-    if not slug:
-        msg = f"no slug can be built from {name!r}"
-        raise ValueError(msg)
-    return slug
-
 
 # --- parse_pasted_plan -------------------------------------------------------------
 
