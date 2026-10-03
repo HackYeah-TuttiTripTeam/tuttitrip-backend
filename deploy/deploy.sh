@@ -140,6 +140,12 @@ for i in $(seq 60); do
 done
 tt_log "healthy behind the gateway"
 
+# Demo account data (jury login): reset to the sample set; never fails the deploy.
+if grep -qE '^TUTTITRIP_DEMO__TOKEN_SHA256=.' "$envfile"; then
+  docker exec "$container" python -m tuttitrip.demo.services.seed_command >/dev/null 2>&1 \
+    && tt_log "demo account data reset" || tt_log "WARNING: demo account reset failed"
+fi
+
 # --- routing -------------------------------------------------------------------
 cf_ingress_ensure "$host" "http://$TT_GATEWAY_BIND"
 cf_dns_ensure "$host"
