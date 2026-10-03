@@ -2,21 +2,46 @@
 
 Symbols follow the specification: ``u`` (welfare), ``u_star`` (best alone),
 ``r`` (share of it), ``q`` (domain satisfaction), ``S_h`` (lodging contract),
-``kappa`` (price per point). Fields filled by later issues are optional or
-empty lists, so their arrival does not change the shape.
+``kappa`` (price per point). Money is ``Decimal`` (serialised as a string) in
+the trip currency. Fields filled by later issues are optional or empty, so
+their arrival does not change the shape. Generic names carry a ``Plan`` prefix
+so they never collide with other domains in the OpenAPI schema.
 """
 
 import datetime as dt
+from decimal import Decimal
 from enum import StrEnum, unique
+from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from tuttitrip.accommodation.schemas import RequirementStatus
 
+Money = Annotated[Decimal, Field(ge=0, decimal_places=2, max_digits=12)]
+Hash12 = Annotated[str, Field(min_length=12, max_length=12)]
+
 
 @unique
-class Domain(StrEnum):
+class Currency(StrEnum):
+    """Trip currency."""
+
+    PLN = "PLN"
+    EUR = "EUR"
+    GBP = "GBP"
+
+
+@unique
+class WeightPreset(StrEnum):
+    """Weight preset of the fairness solver."""
+
+    DEFAULT = "default"
+    EQUAL = "equal"
+    WEIGHTED = "weighted"
+
+
+@unique
+class PlanDomainCode(StrEnum):
     """The five domains of satisfaction ``q_ij`` (E2)."""
 
     ATTRACTIONS = "attractions"
@@ -35,6 +60,16 @@ class PlaceKind(StrEnum):
 
 
 @unique
+class TransferMode(StrEnum):
+    """How people get to a stop."""
+
+    WALK = "walk"
+    TRANSIT = "transit"
+    CAR = "car"
+    BIKE = "bike"
+
+
+@unique
 class BudgetZone(StrEnum):
     """Where the plan cost falls against the budget (E2 cost, E6)."""
 
@@ -44,12 +79,45 @@ class BudgetZone(StrEnum):
 
 
 @unique
+class ApprovalStatus(StrEnum):
+    """State of the organizer's approval of going over ``B_do``."""
+
+    NOT_NEEDED = "not_needed"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+@unique
 class FloorMissKind(StrEnum):
-    """Which soft guarantee (penalty 1000 in E5) was not met."""
+    """Which soft guarantee (penalty 1000 in E5) was not met; the code."""
 
     FLOOR = "floor"
     OWN_PLACE_DAY = "own_place_day"
     TAG_MINIMUM = "tag_minimum"
+
+
+@unique
+class ConflictCode(StrEnum):
+    """Why a conflict is reported; the UI writes the text (PL/EN)."""
+
+    LODGING_HARD_REQUIREMENT = "lodging_hard_requirement"
+    VETO_BLOCKS_PLACE = "veto_blocks_place"
+    BUDGET_LIMIT = "budget_limit"
+    FLOOR_UNREACHABLE = "floor_unreachable"
+    OTHER = "other"
+
+
+@unique
+class ReasonCode(StrEnum):
+    """Why a person is against a place; shared with the verdict reasons."""
+
+    TOO_EXPENSIVE = "too_expensive"
+    TOO_FAR = "too_far"
+    NOT_MY_STYLE = "not_my_style"
+    TOO_CROWDED = "too_crowded"
+    TOO_HARD_FOR_CHILD = "too_hard_for_child"
+    OTHER = "other"
 
 
 @unique
@@ -71,22 +139,25 @@ class PlanCreate(BaseModel):
         le=3,
         description="Fairness slider: 0 utility, 1 Nash, 3 near-egalitarian.",
     )
-    weight_preset: str = Field(
-        default="default",
-        min_length=1,
-        max_length=50,
-        description="Weight preset name.",
-    )
+    weight_preset: WeightPreset = WeightPreset.DEFAULT
 
 
 class PlanParams(BaseModel):
     """Parameters the plan was computed with."""
 
     alpha: float = Field(description="Fairness slider (alpha of phi_alpha, E5).")
-    weight_preset: str = Field(description="Weight preset name.")
+    weight_preset: WeightPreset
 
 
-class PlanItem(BaseModel):
+class StopTransfer(BaseModel):
+    """The leg to a stop from the previous one."""
+
+    minutes: int = Field(ge=0)
+    mode: TransferMode
+    cost: Money | None = Field(default=None, description="Null: no data.")
+
+
+class PlanStop(BaseModel):
     """One place in a day, in visiting order."""
 
     place_id: UUID
@@ -96,22 +167,24 @@ class PlanItem(BaseModel):
     lon: float
     start: dt.time = Field(description="Arrival time.")
     end: dt.time = Field(description="Departure time.")
-    transfer_min: int = Field(
-        ge=0, description="Minutes of transfer before this place."
+    transfer: StopTransfer | None = Field(
+        default=None, description="Leg to this stop; null for the first of the day."
     )
-    cost_per_person: float = Field(
-        ge=0, description="Price per person after inflation, PLN."
+    cost_per_person: Money | None = Field(
+        default=None, description="Price per person after inflation; null: no data."
     )
-    price_base: float = Field(
-        ge=0, description="Price per person before inflation by delta, PLN."
+    price_base: Money | None = Field(
+        default=None, description="Price per person before inflating by delta."
     )
-    price_inflated: float = Field(
-        ge=0,
-        description="Price per person after inflating by delta, PLN.",
+    price_inflated: Money | None = Field(
+        default=None, description="Price per person after inflating by delta."
     )
     price_verified: bool
     price_source_url: str | None = None
+    price_verified_at: dt.datetime | None = None
     hours_verified: bool
+    hours_source_url: str | None = None
+    hours_verified_at: dt.datetime | None = None
     google_place_id: str | None = Field(
         default=None,
         description="For the Places UI Kit card; no Places data is returned.",
@@ -126,14 +199,16 @@ class RequirementState(BaseModel):
     status: RequirementStatus
 
 
-class Lodging(BaseModel):
+class PlanLodging(BaseModel):
     """The lodging base (one for all nights)."""
 
     name: str
     lat: float
     lon: float
     nights: int = Field(ge=0)
-    cost_total: float = Field(ge=0, description="All nights for the whole group, PLN.")
+    cost_total: Money | None = Field(
+        default=None, description="All nights for the whole group; null: no data."
+    )
     s_h: float = Field(ge=0, le=1, description="Lodging contract S_h.")
     requirements: list[RequirementState] = Field(default_factory=list)
 
@@ -143,22 +218,29 @@ class PlanDay(BaseModel):
 
     index: int = Field(ge=1, description="1-based day number.")
     date: dt.date | None = None
-    items: list[PlanItem]
+    items: list[PlanStop]
 
 
-class DomainScore(BaseModel):
+class PlanDomainScore(BaseModel):
     """Satisfaction of one person in one domain."""
 
-    domain: Domain
+    domain: PlanDomainCode
     q: float | None = Field(
         default=None,
         ge=0,
         le=100,
-        description="q_ij on a 0-100 scale; null when not applicable.",
+        description="q_ij on a 0-100 scale; null exactly when not applicable.",
     )
     not_applicable: bool = Field(
         default=False, description="The person's weight a_ij for this domain is 0."
     )
+
+    @model_validator(mode="after")
+    def _q_matches_applicability(self) -> Self:
+        if (self.q is None) != self.not_applicable:
+            msg = "q is None if and only if not_applicable"
+            raise ValueError(msg)
+        return self
 
 
 class PersonFairness(BaseModel):
@@ -174,16 +256,16 @@ class PersonFairness(BaseModel):
     floor: float = Field(ge=0, description="Requested floor f_i.")
     floor_eff: float = Field(ge=0, description="min(f_i, 0.6 * u_star).")
     floor_met: bool
-    domains: list[DomainScore] = Field(
-        description="Exactly five entries, one per domain."
+    domains: list[PlanDomainScore] = Field(
+        min_length=5, max_length=5, description="Exactly five entries, one per domain."
     )
     own_place_days: int = Field(
         ge=0, description="Days with a place of their own (m >= 0.6)."
     )
-    weakest_domain: Domain
+    weakest_domain: PlanDomainCode
 
 
-class Fairness(BaseModel):
+class PlanFairness(BaseModel):
     """The fairness measure and ledger."""
 
     group_size: int = Field(
@@ -197,21 +279,23 @@ class Fairness(BaseModel):
 
 
 class FloorMiss(BaseModel):
-    """A soft guarantee that could not be met."""
+    """A soft guarantee that could not be met; ``kind`` is the code."""
 
     kind: FloorMissKind
     profile_id: UUID
     shortfall: float = Field(
         ge=0, description="How much is missing (points, days or places)."
     )
-    reason: str = Field(min_length=1)
+    day: int | None = Field(default=None, ge=1, description="Day, for own_place_day.")
+    tag: str | None = Field(default=None, description="Tag, for tag_minimum.")
+    params: dict[str, str | int | float] = Field(default_factory=dict)
 
 
-class Conflict(BaseModel):
-    """A conflict between people or constraints; always with a reason."""
+class PlanConflict(BaseModel):
+    """A conflict between people or constraints; always with a reason code."""
 
-    code: str = Field(min_length=1)
-    reason: str = Field(min_length=1)
+    reason_code: ConflictCode
+    params: dict[str, str | int | float] = Field(default_factory=dict)
     profile_ids: list[UUID] = Field(default_factory=list)
     place_id: UUID | None = None
 
@@ -230,74 +314,104 @@ class VoteReason(BaseModel):
     """A person on one side of a verdict, with a reason code."""
 
     profile_id: UUID
-    reason_code: str | None = Field(default=None, description="E.g. 'za_daleko'.")
+    reason_code: ReasonCode | None = None
 
 
-class Verdict(BaseModel):
+class PlanVerdict(BaseModel):
     """Verdict on one candidate place (filled by backend#51)."""
 
     place_id: UUID
     verdict: VerdictKind
+    v_p: float | None = Field(
+        default=None,
+        ge=-1,
+        le=1,
+        description="Weighted opinion V_p (extension, outside v1.0).",
+    )
     yes: list[VoteReason] = Field(default_factory=list)
     no: list[VoteReason] = Field(default_factory=list)
-    alternative_place_id: UUID | None = None
+    substitute_place_id: UUID | None = None
     explanation: str | None = Field(
         default=None, description="Written later by a model."
     )
 
 
-class Budget(BaseModel):
-    """Cost of the plan against the budget and the approval (E6)."""
+class PlanBudget(BaseModel):
+    """Plan cost against the budget and the approval (E6); money in ``currency``."""
 
-    cost: float = Field(ge=0, description="c(P), PLN.")
-    b_from: float = Field(ge=0, description="B_od.")
-    b_to: float = Field(ge=0, description="B_do.")
-    b_max: float = Field(ge=0, description="B_max (hard).")
+    currency: Currency
+    cost: Money = Field(description="c(P).")
+    b_from: Money = Field(description="B_od.")
+    b_to: Money = Field(description="B_do.")
+    b_max: Money = Field(description="B_max (hard).")
     zone: BudgetZone
-    over_budget: float = Field(ge=0, description="PLN above B_do (0 when within).")
+    over_budget: Money = Field(description="Amount above B_do (0 when within).")
     needs_approval: bool = Field(
         description="The organizer must approve going over B_do."
     )
-    kappa: float | None = Field(
+    kappa: Decimal | None = Field(
         default=None,
-        description="Price per point in PLN/pt; set only with needs_approval.",
+        ge=0,
+        decimal_places=2,
+        description="Price per point (currency per pt); set iff needs_approval.",
     )
+    gain_profile_id: UUID | None = Field(
+        default=None, description="Who gains most from going over."
+    )
+    gain_points: float | None = Field(
+        default=None, ge=0, description="Their gain in points."
+    )
+    strict_plan_id: UUID | None = Field(
+        default=None, description="The P_strict alternative."
+    )
+    strict_cost: Money | None = None
+    approval_status: ApprovalStatus = ApprovalStatus.NOT_NEEDED
+
+    @model_validator(mode="after")
+    def _kappa_matches_approval(self) -> Self:
+        if (self.kappa is None) == self.needs_approval:
+            msg = "kappa is set if and only if needs_approval"
+            raise ValueError(msg)
+        return self
 
 
-class Telemetry(BaseModel):
+class PlanTelemetry(BaseModel):
     """How the plan was computed."""
 
-    solver: str
+    solver: str = Field(description="Solver name; 'stub' while the response is fixed.")
     steps: int = Field(ge=0)
     solo_runs: int = Field(ge=0)
     elapsed_ms: int = Field(ge=0)
 
 
 class PlanRead(BaseModel):
-    """A plan with the fairness measure, ledger, verdicts and budget."""
+    """A plan with the fairness measure, ledger, verdicts and budget.
+
+    STUB: until backend#50 the content is a fixed sample; the shape is final.
+    """
 
     id: UUID
     trip_id: UUID
     version: int = Field(ge=1)
-    input_hash: str
-    plan_hash: str = Field(
-        min_length=12,
-        max_length=12,
-        description="SHA-256 prefix, 12 characters, reproducible.",
+    input_hash: str = Field(
+        min_length=64, max_length=64, description="SHA-256 hex of the input."
+    )
+    plan_hash: Hash12 = Field(
+        description="SHA-256 prefix, 12 characters, reproducible."
     )
     created_at: dt.datetime
     params: PlanParams
     days: list[PlanDay]
-    lodging: Lodging | None = Field(
+    lodging: PlanLodging | None = Field(
         default=None, description="Null for a one-day trip."
     )
-    fairness: Fairness
+    fairness: PlanFairness
     floors_missed: list[FloorMiss] = Field(default_factory=list)
     violation: float = Field(ge=0, description="V(P) of E5; 0 when nothing is missed.")
-    conflicts: list[Conflict] = Field(default_factory=list)
+    conflicts: list[PlanConflict] = Field(default_factory=list)
     explain: list[ExplainEntry] = Field(default_factory=list)
-    verdicts: list[Verdict] | None = Field(
+    verdicts: list[PlanVerdict] | None = Field(
         default=None, description="Null until backend#51; then one per candidate."
     )
-    budget: Budget
-    telemetry: Telemetry
+    budget: PlanBudget
+    telemetry: PlanTelemetry

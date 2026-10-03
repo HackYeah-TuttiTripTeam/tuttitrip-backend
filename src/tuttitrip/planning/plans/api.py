@@ -10,20 +10,40 @@ from tuttitrip.trips.api import TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/plans", tags=["planning"])
 
+STUB = {"x-stub": True}
+STUB_NOTE = (
+    "STUB: until backend#50 the content is a fixed sample (section 7 of "
+    "`docs/algorytm.md`); the shape is final."
+)
+NOT_FOUND = {404: {"description": "Trip not found, or the caller is not on it."}}
+
 
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
+    summary="Generate a plan with the fairness measure (STUB)",
+    description=(
+        f"{STUB_NOTE}\n\nGenerates a plan with the fairness measure, ledger, "
+        "verdicts and budget. Repeating the call with the same `input_hash` "
+        "returns 200 with the existing version instead of 201 (the stub "
+        "always returns 201)."
+    ),
+    responses={
+        **NOT_FOUND,
+        200: {"model": PlanRead, "description": "Existing version for the same input."},
+        201: {
+            "content": {
+                "application/json": {"examples": plan_service.openapi_examples()}
+            }
+        },
+    },
+    openapi_extra=STUB,
     dependencies=[requires(Feature.PLANNING_PLANS, Access.WRITE)],
 )
 async def create_plan(
     membership: TripMember, data: PlanCreate | None = None
 ) -> PlanRead:
-    """Generate a plan with the fairness measure, ledger and verdicts (stub).
-
-    Stub: returns a fixed sample plan (numbers of section 7 of
-    ``docs/algorytm.md``); the real solver arrives with backend#50. The shape
-    will not change.
+    """Generate a plan (stub).
 
     Args:
         membership: The caller's membership of ``{trip_id}``.
@@ -35,9 +55,22 @@ async def create_plan(
     return plan_service.generate_plan(membership, data)
 
 
-@router.get("/latest", dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)])
+@router.get(
+    "/latest",
+    summary="Latest plan of the trip (STUB)",
+    description=(
+        f"{STUB_NOTE}\n\nReturns 404 `No plan yet` when the trip has no plan "
+        "(the empty state of the plan view); the stub always has one and never "
+        "returns it."
+    ),
+    responses={
+        404: {"description": "No plan yet, trip not found or caller not on it."}
+    },
+    openapi_extra=STUB,
+    dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
+)
 async def get_latest_plan(membership: TripMember) -> PlanRead:
-    """Latest plan of the trip (stub: the same fixed sample plan).
+    """Latest plan (stub).
 
     Args:
         membership: The caller's membership of ``{trip_id}``.
