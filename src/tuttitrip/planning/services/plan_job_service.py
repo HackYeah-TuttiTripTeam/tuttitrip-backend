@@ -10,6 +10,7 @@ from tuttitrip.shared.jobs.contracts import (
 )
 from tuttitrip.shared.jobs.services.job_queue import JobQueue
 from tuttitrip.shared.jobs.services.worker_liveness import ensure_worker_available
+from tuttitrip.trips.schemas import TripRole
 from tuttitrip.trips.services import trip_service
 
 
@@ -27,7 +28,9 @@ async def start_plan_generation(
     Returns:
         The workflow id (the same one for a repeated identical request).
     """
-    await trip_service.get_owned_trip(session, data.trip_id, owner_sub)
+    await trip_service.get_membership(
+        session, data.trip_id, owner_sub, TripRole.CO_HOST
+    )
     await ensure_worker_available(session)
     payload = GenerateTripPlanInput(
         trip_id=data.trip_id, request=data.request, provider=data.provider

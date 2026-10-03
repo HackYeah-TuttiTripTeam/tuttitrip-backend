@@ -34,3 +34,18 @@ def test_worker_writes_only_its_tables() -> None:
     assert writable is not None
     names = set(re.findall(r"public\.([a-z_]+)", writable.group(1)))
     assert names == {"worker_heartbeats", "job_results", "embeddings"}
+
+
+def test_worker_has_no_access_to_permissions() -> None:
+    sql = GRANTS.read_text()
+    for table in (
+        "roles",
+        "role_grants",
+        "user_roles",
+        "user_grants",
+        "permission_audit",
+        "trip_members",
+    ):
+        assert f"public.{table}" not in sql
+    assert "ALL TABLES" not in sql.upper()
+    assert "DEFAULT PRIVILEGES" not in sql.upper()

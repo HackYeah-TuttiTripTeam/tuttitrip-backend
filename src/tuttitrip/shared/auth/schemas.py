@@ -24,13 +24,3 @@ class AuthenticatedUser(BaseModel):
             True when the roles claim contains ``admin``.
         """
         return ADMIN_ROLE in self.roles
-
-
-class MeResponse(BaseModel):
-    """Response of ``GET /me``."""
-
-    sub: str
-    scopes: list[str]
-    permissions: list[str]
-    roles: list[str] = Field(description="Roles from the Auth0 roles claim.")
-    is_admin: bool = Field(description="True for TuttiTrip administrators.")

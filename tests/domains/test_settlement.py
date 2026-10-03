@@ -4,9 +4,11 @@ from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
+from tests.shared.fakes import authorize
 from tuttitrip.expenses.settlement.logic.balances import net_balances
 from tuttitrip.expenses.settlement.schemas import Payment
 from tuttitrip.main import create_app
+from tuttitrip.shared.auth.schemas import AuthenticatedUser
 
 
 def test_equal_split_balances() -> None:
@@ -28,7 +30,9 @@ def test_equal_split_balances() -> None:
 
 
 def test_balances_endpoint() -> None:
-    with TestClient(create_app()) as client:
+    app = create_app()
+    authorize(app, AuthenticatedUser(sub="auth0|tester"))
+    with TestClient(app) as client:
         response = client.post(
             "/api/v1/expenses/settlement/balances",
             json={

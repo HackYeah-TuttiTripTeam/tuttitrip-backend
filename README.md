@@ -74,7 +74,7 @@ uv run uvicorn tuttitrip.main:app --reload
 - http://localhost:8000/api/v1/docs: dokumentacja Swagger
 - http://localhost:8000/api/v1/openapi.json: schemat dla generatora klienta TS
 - http://localhost:8000/api/v1/health: stan aplikacji, bazy i workera (`503`, gdy baza nie odpowiada albo worker ma niezgodną wersję kontraktu)
-- http://localhost:8000/api/v1/me: dane zalogowanego użytkownika (wymaga tokenu Auth0)
+- http://localhost:8000/api/v1/me: dane zalogowanego użytkownika i jego uprawnienia (wymaga tokenu Auth0)
 
 Wszystkie endpointy są pod `/api/v1/` (stała `API_PREFIX` w `main.py`,
 pilnuje tego test `tests/architecture/test_routes.py`). Wdrożone frontendy
@@ -140,6 +140,29 @@ i `DBOS__APPVERSION=local`, a potem sprawdź połączenie:
 (nazwy, pliki env, wersje, sprzątanie) opisuje
 [deploy/CONVENTIONS.md](deploy/CONVENTIONS.md).
 
+## Uprawnienia
+
+Każdy endpoint wymaga uprawnienia `READ` albo `WRITE` do funkcjonalności z
+drzewa w `shared/permissions/registry.py` (np. `trips.core`, `trips.members`).
+`WRITE` obejmuje `READ`, a uprawnienie na grupie (`trips`) obejmuje wszystko
+pod nią. Wyjątki bez logowania to `/api/v1/health`, smoke test
+`/api/v1/jobs/ping` i dokumentacja (`/api/v1/docs`, `/api/v1/openapi.json`).
+Dalej ścieżki podajemy bez prefiksu `/api/v1`.
+
+- Rola `user` ma każdy zalogowany. Superadmini (claim Auth0 `admin`) mają
+  `*:WRITE`, czyli wszystko. Pozostałe role i uprawnienia nadaje się przez
+  `/admin/permissions/...`, a każda zmiana trafia do dziennika.
+- `GET /me` zwraca `access`, płaską mapę funkcjonalność → poziom (np.
+  `{"trips.core": "WRITE", "search": "READ"}`). Frontend ukrywa na jej
+  podstawie niedostępne elementy.
+- Uprawnienia do funkcjonalności są globalne. To, czy możesz zmienić *ten*
+  wyjazd, zależy od twojej roli na nim (`host`, `co_host`, `member`;
+  `my_role` w `TripRead`). Spoza wyjazdu dostajesz 404.
+- Wymagane uprawnienie widać w `/docs` i w `x-required-permission` w schemacie.
+
+Szczegóły (dodawanie funkcjonalności, ochrona endpointu, role) są w
+[AGENTS.md](AGENTS.md#uprawnienia).
+
 ## Architektura
 
 Kod jest podzielony na pionowe moduły domenowe (vertical slices). Każda domena
@@ -159,7 +182,8 @@ src/tuttitrip/
 ├── shared/            # wspólne komponenty, nie znają domen
 │   ├── config/        # Settings
 │   ├── db/            # Base, silnik, sesje
-│   ├── auth/          # weryfikacja tokenów Auth0, GET /api/v1/me
+│   ├── auth/          # weryfikacja tokenów Auth0 (CurrentUser)
+│   ├── permissions/   # uprawnienia READ/WRITE, role, GET /api/v1/me, API admina
 │   ├── health/        # GET /api/v1/health, GET /api/v1/health/live
 │   └── jobs/          # klient DBOS: zlecanie zadań workerowi, kontrakt
 ├── trips/             # wyjazdy (wzorcowa domena: api -> services -> db)
@@ -184,7 +208,9 @@ Zasady sprawdzane przez `tests/architecture/` (pytest-archon i testy struktury):
 - moduły w `logic/` i pliki `schemas.py` nie sięgają (nawet pośrednio) po
   FastAPI, Pydantic AI, SQLAlchemy ani bazę;
 - pliki `__init__.py` niczego nie importują, bo pytest-archon nie widzi
-  importów wykonywanych przez pakiety nadrzędne.
+  importów wykonywanych przez pakiety nadrzędne;
+- każdy endpoint deklaruje uprawnienie (`requires`) albo jest jawnie
+  publiczny (`public()`), a trasy z `{trip_id}` sprawdzają członkostwo w wyjeździe.
 
 Szczegóły i konwencje dla zespołu i agentów są w [AGENTS.md](AGENTS.md).
 

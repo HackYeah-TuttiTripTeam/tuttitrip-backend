@@ -10,16 +10,24 @@ from tuttitrip.shared.jobs.api import JobQueueDep
 from tuttitrip.shared.jobs.schemas import JobAccepted
 from tuttitrip.shared.jobs.services.job_queue import JobQueueUnavailableError
 from tuttitrip.shared.jobs.services.worker_liveness import WorkerUnavailableError
-from tuttitrip.trips.services.trip_service import TripNotFoundError
+from tuttitrip.shared.permissions.api import requires
+from tuttitrip.shared.permissions.registry import Access, Feature
+from tuttitrip.trips.services.trip_service import TripNotFoundError, TripRoleError
 
 router = APIRouter(prefix="/planning", tags=["planning"])
 
 
-@router.post("/jobs", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/jobs",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[requires(Feature.PLANNING_PROPOSALS, Access.WRITE)],
+)
 async def start_plan_job(
     data: PlanJobRequest, user: CurrentUser, session: SessionDep, queue: JobQueueDep
 ) -> JobAccepted:
     """Enqueue plan generation; poll ``GET /jobs/{workflow_id}`` for the result.
+
+    The caller must be at least a co-host of the trip (404 when not on it).
 
     Args:
         data: Trip and free-text request.
@@ -36,6 +44,8 @@ async def start_plan_job(
         )
     except TripNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Trip not found") from exc
+    except TripRoleError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except WorkerUnavailableError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
     except JobQueueUnavailableError as exc:

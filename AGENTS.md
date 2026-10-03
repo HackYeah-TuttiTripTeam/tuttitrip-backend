@@ -36,10 +36,11 @@ src/tuttitrip/
   shared/              shared kernel, imports no feature domain
     config/            Settings (pydantic-settings)
     db/                Base, async engine/sessions, SessionDep (db/api.py)
-    auth/              Auth0 JWT verification, CurrentUser, GET /api/v1/me
+    auth/              Auth0 JWT verification, CurrentUser (authentication only)
+    permissions/       feature registry, roles/grants, requires(), GET /api/v1/me, admin API
     health/            GET /api/v1/health (DB + worker), GET /api/v1/health/live
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
-  trips/               reference slice: api -> services -> db -> models
+  trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
   interview/           AI interview agent (AG-UI endpoint goes here)
   planning/            planner agent; subdomains fairness/ and linter/
@@ -77,7 +78,9 @@ the parent when it shares everything else with it.
 1. `shared` never imports a feature domain (transitive).
 2. A feature domain may import another domain **only** through its `services`
    or `schemas` (direct imports checked; that domain's own services may use
-   their own db). Subdomains belong to their top-level domain.
+   their own db). Subdomains belong to their top-level domain. Exception for
+   HTTP dependencies: an `api.py` may import another domain's `api.py` (e.g.
+   `TripAccess` from `trips.api`); nothing else imports an `api` module.
 3. Only `api.py` modules (and `tuttitrip.main`) import `fastapi`/`starlette`.
 4. Only `services` import `pydantic_ai`.
 5. Only `models.py`, `db.py`, `services` and `shared.db` import `sqlalchemy`.
@@ -145,8 +148,9 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   access-token claim `https://tuttitrip.gburek.app/roles`
   (`TUTTITRIP_AUTH0__ROLES_CLAIM`) for people on the superadmin allow-list
   (kept in Auth0 and host env files, never in a repo). `CurrentUser.roles` /
-  `.is_admin` expose it, `AdminUser` (`require_admin`) answers 403 to
-  everyone else, and `GET /api/v1/me` returns `roles` and `is_admin`.
+  `.is_admin` expose it; the permission system turns it into `*` WRITE
+  (section "Uprawnienia"). `GET /api/v1/me` returns `roles`, `is_admin` and
+  `access`.
 - Provider API keys (e.g. `OPENAI_API_KEY`) are read by Pydantic AI under
   their own names and are not Settings fields.
 - Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions
@@ -197,6 +201,115 @@ through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
   uv run dbos migrate -s postgresql://tuttitrip:tuttitrip@localhost:5432/tuttitrip`,
   then start the worker from its repo with the same `DBOS_SYSTEM_DATABASE_URL`
   and `DBOS__APPVERSION=local`.
+
+## Uprawnienia
+
+Ścieżki w tej sekcji są względne wobec `API_PREFIX` (`/api/v1`). Dwie
+warstwy, sprawdzane niezależnie:
+
+1. **Uprawnienia do funkcjonalności** (globalne możliwości): `READ` albo
+   `WRITE` na węźle drzewa funkcjonalności. `WRITE` obejmuje `READ`. Kod w
+   `src/tuttitrip/shared/permissions/`.
+2. **Dostęp do obiektu** (czy *ten* wyjazd jest twój): role na wyjeździe
+   `member < co_host < host` w tabeli `trip_members`. Twórca wyjazdu jest
+   hostem. Sprawdza to domena (`TripAccess`, serwisy), nie system uprawnień.
+
+`trips.core:WRITE` znaczy „może tworzyć i edytować wyjazdy w ogóle”. Czy może
+edytować wyjazd X, decyduje jego rola na X.
+
+### Drzewo funkcjonalności
+
+- Rejestr jest w kodzie: `shared/permissions/registry.py`, enum `Feature`
+  (kod z kropkami odpowiada domenie i poddomenie) i `DESCRIPTIONS` (polskie
+  opisy dla panelu admina i OpenAPI). Korzeń to `*`.
+- Rodzicem `a.b` jest `a`, rodzicem `a` jest `*`. Uprawnienie na węźle
+  obejmuje całe poddrzewo: `trips:WRITE` daje `WRITE` na `trips.core`,
+  `trips.members` i `trips.invitations`.
+- Endpointy wymagają tylko liści. Własne dane grupy mają liść `<grupa>.core`
+  (np. `trips.core`, `profiles.core`, `expenses.core`).
+- Wszystko, co tylko dla administratorów, jest pod `admin.*`
+  (`admin.permissions`, `admin.users`, `admin.planning_weights`).
+- Efektywny poziom = maksimum ze wszystkich uprawnień (role, domyślna rola
+  `user`, uprawnienia bezpośrednie, claim superadmina) na danym węźle albo
+  jego przodku. Kody spoza rejestru (np. usuniętej funkcji) są ignorowane.
+- Uprawnienia liczymy raz na żądanie (jedno zapytanie, cache zależności
+  FastAPI w obrębie żądania), nigdy między żądaniami i nigdy z tokenu.
+
+Nowy węzeł (skill `new-permission`):
+
+1. Dodaj członka do `Feature` i opis w `DESCRIPTIONS` (testy sprawdzają opis
+   i istnienie rodzica).
+2. Jeśli zwykły użytkownik ma go mieć, dodaj migrację, która wstawia wiersz
+   do `role_grants` roli `user` (tylko liście spoza `admin.*`). Seed w starej
+   migracji jest zamrożony.
+3. Nigdzie nie pisz kodu jako tekstu (`"trips.core"`), zawsze
+   `Feature.TRIPS_CORE`. Test architektury to wyłapie.
+
+### Ochrona endpointu
+
+Każdy endpoint ma dokładnie jeden znacznik w `dependencies=[...]`:
+
+```python
+from tuttitrip.shared.permissions.api import requires
+from tuttitrip.shared.permissions.registry import Access, Feature
+
+@router.get("", dependencies=[requires(Feature.TRIPS_CORE, Access.READ)])
+```
+
+- Bez tokenu 401, bez uprawnienia 403 `Missing permission trips.core:READ`.
+- `public()` (bez logowania) tylko dla `/health`, `/health/live` i smoke
+  testu `/jobs/ping*`. Lista jest w `tests/architecture/test_permissions.py`;
+  `/docs`, `/openapi.json` i `/redoc` są publiczne z definicji.
+- `tests/architecture/test_permissions.py` przechodzi po `create_app().routes`
+  (z zależnościami routerów) i nie przepuści trasy bez znacznika, z dwoma
+  znacznikami, z grupą zamiast liścia ani ze stringiem zamiast `Feature.X`.
+- OpenAPI dostaje `x-required-permission: "trips.core:READ"` (albo
+  `x-public: true`), linijkę „Wymagane uprawnienie” w opisie i odpowiedzi
+  401/403, więc widać to w `/docs` i w kliencie TS.
+- Gdy decyzja zależy od uprawnienia w środku logiki, `api.py` wstrzykuje
+  `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
+  `permissions.allows(Feature.X, Access.WRITE)`.
+
+### Role
+
+| Rola | Uprawnienia | Uwagi |
+| --- | --- | --- |
+| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
+| `superadmin` | `*:WRITE` | Tylko z claimu Auth0 `admin` (lista osób jest w Akcji Auth0). API jej nie przypisze ani nie zmieni, a wiersz w bazie jest ignorowany. Nowe funkcjonalności obejmuje automatycznie (test). |
+| własne | dowolne | `POST /admin/permissions/roles`. |
+
+- Tabele: `roles`, `role_grants`, `user_roles`, `user_grants` (użytkownik =
+  Auth0 `sub`, bez tabeli użytkowników) i `permission_audit`. Rola workera nie
+  ma do nich dostępu (`deploy/worker-grants.sql`, test).
+- Nikt nie nada więcej, niż sam ma: dotyczy grantów roli, przypisania roli
+  i uprawnień bezpośrednich (403). Zmiany wymagają `admin.permissions:WRITE`.
+- Każda zmiana trafia do `permission_audit` (kto, co, komu, kiedy) w tej samej
+  transakcji. Trigger blokuje `UPDATE`, `DELETE` i `TRUNCATE` tej tabeli.
+- API admina (`admin.permissions` READ/WRITE): `GET /admin/permissions/features`
+  (drzewo), `roles` (lista, `POST`, `PUT`/`DELETE {name}`), `users`
+  (`GET {sub}`, `PUT`/`DELETE {sub}/roles/{role}`,
+  `PUT`/`DELETE {sub}/grants/{feature}`), `audit`.
+- Dlaczego `shared/permissions`, a nie domena `accounts`: znacznika `requires`
+  używa każdy router, także te w `shared` (`/me`, `/jobs`), a `shared` nie
+  może importować domen. Autoryzacja zależy od uwierzytelniania (`shared.auth`),
+  nigdy odwrotnie, dlatego `/me` jest w `shared/permissions/api.py`.
+
+### Dostęp do obiektu (wyjazdy)
+
+- Każda trasa z `{trip_id}` w ścieżce zależy od `TripAccess(min_role)` z
+  `tuttitrip.trips.api` (aliasy `TripMember`, `TripCoHost`, `TripHost`).
+  Test architektury to wymusza.
+- Ktoś spoza wyjazdu dostaje 404 (nie zdradzamy, że wyjazd istnieje), ktoś
+  z za niską rolą 403.
+- `TripAccess` zwraca `TripMembership`. Przekaż go do serwisu jako dowód
+  sprawdzenia (`list_profiles(session, membership)`).
+- Gdy `trip_id` przychodzi w treści żądania, serwis woła
+  `trip_service.get_membership(session, trip_id, sub, TripRole.X)` sam (np.
+  generowanie planu wymaga `co_host`).
+- `TripRead.my_role` mówi frontendowi, jaką rolę ma użytkownik na wyjeździe.
+- Nowy zasób z właścicielem (inny niż wyjazd): ten sam wzorzec w jego domenie,
+  czyli tabela członkostwa albo `owner_sub`, serwis z `get_membership`
+  i zależność w `api.py`. Bez ogólnych ACL per obiekt.
 
 ## Zgłoszenia, PR i wydania
 

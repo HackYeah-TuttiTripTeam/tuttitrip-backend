@@ -20,11 +20,12 @@ from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.search.api import router as search_router
-from tuttitrip.shared.auth.api import router as auth_router
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
 from tuttitrip.shared.health.api import router as health_router
 from tuttitrip.shared.jobs.api import router as jobs_router
+from tuttitrip.shared.permissions.api import document_permissions
+from tuttitrip.shared.permissions.api import router as permissions_router
 from tuttitrip.trips.api import router as trips_router
 
 # Bump the version only for a breaking change that needs both APIs side by side.
@@ -38,7 +39,7 @@ LEGACY_UNVERSIONED_TAG = "legacy-unversioned"
 # Every `api.py` router must be listed here (a test checks it).
 ROUTERS: tuple[APIRouter, ...] = (
     health_router,
-    auth_router,
+    permissions_router,
     jobs_router,
     trips_router,
     profiles_router,
@@ -104,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(
             router, include_in_schema=False, tags=[LEGACY_UNVERSIONED_TAG]
         )
+    document_permissions(app)
     return app
 
 

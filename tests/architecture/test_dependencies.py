@@ -65,16 +65,32 @@ def test_domains_talk_only_through_services_and_schemas(domain: str) -> None:
             f"{PACKAGE}.{other}.*.schemas",
             f"{PACKAGE}.{other}.*.services",
             f"{PACKAGE}.{other}.*.services.*",
+            # HTTP dependencies such as `TripAccess` (only api modules may
+            # import api modules, see the next test).
+            f"{PACKAGE}.{other}.api",
+            f"{PACKAGE}.{other}.*.api",
         )
     ]
     (
         archrule(
             "cross-domain access",
-            comment="only another domain's services/schemas, never api/models/db/logic",
+            comment="other domains: services/schemas (api: also api), never db/logic",
         )
         .match(*_tree(f"{PACKAGE}.{domain}"))
         .should_not_import(*forbidden)
         .may_import(*allowed)
+        .check(PACKAGE, only_direct_imports=True)
+    )
+
+
+def test_only_api_modules_import_api_modules() -> None:
+    # api -> api is allowed (e.g. `TripAccess` from trips.api); services, db,
+    # models, logic and schemas never depend on the HTTP layer.
+    (
+        archrule("HTTP layer on top", use_regex=True)
+        .match(rf"^{PACKAGE}(\.|$)")
+        .exclude(r"\.api$", rf"^{PACKAGE}\.main$")
+        .should_not_import(rf"^{PACKAGE}\..*\.api$")
         .check(PACKAGE, only_direct_imports=True)
     )
 
