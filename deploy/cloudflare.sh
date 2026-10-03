@@ -12,6 +12,9 @@ CF_API="https://api.cloudflare.com/client/v4"
 CF_MARK="managed-by=tuttitrip-deploy"
 # Our hostnames: tuttitrip-api.<domain> and tuttitrip-api-<slug>.<domain>.
 CF_HOST_RE="^${TT_PREFIX//./\\.}(-[a-z0-9-]+)?\\.${TT_DOMAIN//./\\.}$"
+# Admin tools (deploy/admin/setup.sh). Never matched by CF_HOST_RE, so the
+# branch cleanup never sees (or removes) them.
+CF_ADMIN_HOST_RE="^tuttitrip-(pgadmin|dbos)\\.${TT_DOMAIN//./\\.}$"
 
 cf_api() {
   local method=$1 url=$2 body=${3:-}
@@ -52,7 +55,8 @@ cf_put_config() {
 # cf_ingress_ensure <hostname> <service>: our rule goes first, before wildcards.
 cf_ingress_ensure() {
   local host=$1 service=$2 old new
-  [[ $host =~ $CF_HOST_RE ]] || { tt_log "refusing foreign hostname $host"; return 1; }
+  [[ $host =~ $CF_HOST_RE ]] || [[ $host =~ $CF_ADMIN_HOST_RE ]] \
+    || { tt_log "refusing foreign hostname $host"; return 1; }
   old=$(cf_get_config) || return 1
   new=$(jq --arg h "$host" --arg s "$service" '
     .ingress = ([{hostname: $h, service: $s}] + [.ingress[] | select(.hostname != $h)])' <<<"$old")

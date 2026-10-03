@@ -427,6 +427,18 @@ Cleanup (every deploy + on branch deletion) removes containers, images,
 feature databases and ingress for branches that no longer exist. Never touch
 host resources outside this namespace.
 
+Admin tools (`deploy/admin/`, details in `deploy/CONVENTIONS.md`):
+https://tuttitrip-pgadmin.gburek.app (pgAdmin, read-only role
+`tuttitrip_readonly`) and https://tuttitrip-dbos.gburek.app (DBOS dashboard
+from tuttitrip-worker). Both sit behind their own nginx
+(`tuttitrip-admin-gateway`, `172.17.0.1:18081`) with `auth_request` to
+oauth2-proxy (Auth0 app "TuttiTrip Admin (oauth2-proxy)") and the superadmin
+allow-list. The list lives in the Auth0 Action secrets and
+`~/tuttitrip/admin.env`, never in a repo. `deploy/admin/setup.sh` (idempotent)
+sets everything up and runs after every deploy of `main`. The Action code is
+`deploy/admin/auth0-post-login.js`; test it with
+`node --test deploy/admin/test-auth0-action.mjs`.
+
 ## Powiadomienia (Discord)
 
 - `.github/workflows/discord-notify.yml` wysyła na Discord zespołu wynik
