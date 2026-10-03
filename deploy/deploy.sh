@@ -124,4 +124,5 @@ docker image ls --filter "label=tuttitrip.env=$env" --format '{{.Repository}}:{{
   | grep -vx "$image" | xargs -r docker rmi >/dev/null 2>&1 || true
 
 flock -u 9
-"$here/cleanup.sh"
+# A failed cleanup never fails the deploy (the cleanup workflow reports it).
+"$here/cleanup.sh" || tt_log "WARNING: cleanup did not complete; deploy itself succeeded"
