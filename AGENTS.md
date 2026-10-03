@@ -172,6 +172,13 @@ How:
 - Validation errors (422) never echo request values: `shared/errors/api.py`
   strips `input` and `ctx` from every item. This protects secrets in headers
   and bodies and large pasted texts; do not add a handler that returns them.
+- Because `ctx` is stripped, a stable error code travels in the error `type`
+  (kept by the handler), never in `ctx`. Trip rules from `check_trip` use the
+  enum `TripErrorCode` in `trips/schemas.py` (`trip.dates_order`, ...), with
+  `loc` `["body", field]`; the enum is the single list and reaches OpenAPI
+  through the 422 model of `POST`/`PATCH /trips`. Clients map errors by `type`,
+  never by `msg`. New rule = new enum member plus a test. `POST /trips` takes
+  the same fields as `PATCH` and validates them with `check_trip(complete=True)`.
 
 ## Settings and secrets
 
