@@ -39,6 +39,7 @@ src/tuttitrip/
     auth/              Auth0 JWT verification, CurrentUser (authentication only)
     permissions/       feature registry, roles/grants, requires(), GET /api/v1/me, admin API
     health/            GET /api/v1/health (DB + worker), GET /api/v1/health/live
+    llm/               Pydantic AI model catalog (services/model_catalog.py)
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
@@ -151,8 +152,13 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   `.is_admin` expose it; the permission system turns it into `*` WRITE
   (section "Uprawnienia"). `GET /api/v1/me` returns `roles`, `is_admin` and
   `access`.
-- Provider API keys (e.g. `OPENAI_API_KEY`) are read by Pydantic AI under
-  their own names and are not Settings fields.
+- Models: agents use catalog ids (`tuttitrip:agent`, `chat`, `decide`,
+  `decide-laya`, `decide-cloud`, `openrouter`) with `catalog.capability()`,
+  never `provider:model` strings. The GB10 key is `TUTTITRIP_LLM__GB10_API_KEY`;
+  OpenRouter reads `OPENROUTER_API_KEY` when `TUTTITRIP_LLM__OPENROUTER_API_KEY`
+  is empty. Live check outside CI: `uv run python scripts/smoke_llm.py`.
+- Other provider API keys are read by Pydantic AI under their own names and are
+  not Settings fields.
 - Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions
   secrets/variables; host-only secrets live in `~/tuttitrip/*.env` on the host.
 
