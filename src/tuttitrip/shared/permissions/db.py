@@ -1,12 +1,14 @@
 """Queries on roles, role grants, user roles and user grants."""
 
 from collections.abc import Iterable, Sequence
+from uuid import UUID
 
 from sqlalchemy import delete, select, union_all
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.shared.permissions.models import (
+    AccessToken,
     PermissionAudit,
     Role,
     RoleGrant,
@@ -282,3 +284,59 @@ async def select_audit(
     if target_sub is not None:
         statement = statement.where(PermissionAudit.target_sub == target_sub)
     return (await session.scalars(statement)).all()
+
+
+async def insert_access_token(session: AsyncSession, row: AccessToken) -> AccessToken:
+    """Insert a token (hash only) and flush to get server defaults.
+
+    Args:
+        session: Open session (caller commits).
+        row: The new token, built by the service.
+
+    Returns:
+        The persisted row.
+    """
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
+async def select_access_token_by_hash(
+    session: AsyncSession, token_hash: str
+) -> AccessToken | None:
+    """Find a token by its hash.
+
+    Args:
+        session: Open session.
+        token_hash: SHA-256 hex of the presented token.
+
+    Returns:
+        The row (active or not) or None.
+    """
+    return await session.scalar(
+        select(AccessToken).where(AccessToken.token_hash == token_hash)
+    )
+
+
+async def select_access_token(
+    session: AsyncSession, token_id: UUID, trip_id: UUID, profile_id: UUID
+) -> AccessToken | None:
+    """Find a token of one profile of one trip by id.
+
+    Args:
+        session: Open session.
+        token_id: Token id.
+        trip_id: Trip the caller was checked for.
+        profile_id: Profile in the path.
+
+    Returns:
+        The row or None (also when it belongs to another trip or profile).
+    """
+    return await session.scalar(
+        select(AccessToken).where(
+            AccessToken.id == token_id,
+            AccessToken.trip_id == trip_id,
+            AccessToken.profile_id == profile_id,
+        )
+    )

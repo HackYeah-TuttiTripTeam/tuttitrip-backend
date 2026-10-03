@@ -258,7 +258,8 @@ Nowy węzeł (skill `new-permission`):
 
 ### Ochrona endpointu
 
-Każdy endpoint ma dokładnie jeden znacznik w `dependencies=[...]`:
+Każdy endpoint ma dokładnie jeden znacznik w `dependencies=[...]`: `requires(...)`,
+`public()` albo `token_access(...)` (dostęp bez konta, niżej):
 
 ```python
 from tuttitrip.shared.permissions.api import requires
@@ -277,6 +278,19 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 - OpenAPI dostaje `x-required-permission: "trips.core:READ"` (albo
   `x-public: true`), linijkę „Wymagane uprawnienie” w opisie i odpowiedzi
   401/403, więc widać to w `/api/v1/docs` i w kliencie TS.
+- `token_access(TokenScope.VOTE)` to dostęp bez konta, dla osoby z linkiem (np. głosowanie
+  babci). Trasa czyta nagłówek `X-Access-Token`, a dowód (`TokenAccessDep`, czyli
+  `TokenAccess` z `trip_id` i `profile_id` z tokenu) przekazuje do serwisu jak `TripMembership`.
+  Brak nagłówka to 401, token nieznany, wygasły, odwołany albo z innym zakresem to 404.
+  Trasa tokenowa nie ma `{trip_id}` w ścieżce (wyjazd bierze się z tokenu); test pilnuje i tego,
+  i listy takich tras (`TOKEN_ENDPOINTS` w `tests/architecture/test_permissions.py`).
+  OpenAPI dostaje `x-token-access: "vote"` i odpowiedzi 401/404.
+- Tokeny: 32 losowe bajty (`secrets.token_urlsafe`), w tabeli `access_tokens` tylko SHA-256,
+  porównanie przez `hmac.compare_digest`, token widać jeden raz w odpowiedzi tworzenia
+  (`POST /trips/{trip_id}/profiles/{profile_id}/access-tokens`, co-host; odwołanie `DELETE`
+  `.../access-tokens/{token_id}`). Nie logujemy go, nie wkładamy do wyjątków ani do URL-a
+  (frontend trzyma go we fragmencie `#t=...` i wysyła w nagłówku). Nowy zakres to nowy
+  członek `TokenScope`, a nowa trasa tokenowa trafia na listę w teście architektury.
 - Gdy decyzja zależy od uprawnienia w środku logiki, `api.py` wstrzykuje
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
   `permissions.allows(Feature.X, Access.WRITE)`.
@@ -317,6 +331,8 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 - Gdy `trip_id` przychodzi w treści żądania, serwis woła
   `trip_service.get_membership(session, trip_id, sub, TripRole.X)` sam (np.
   generowanie planu wymaga `co_host`).
+- Osoba bez konta nie ma roli na wyjeździe: ma token (`token_access`), który daje jedną funkcję
+  i jeden profil jednego wyjazdu (patrz „Ochrona endpointu”).
 - `TripRead.my_role` mówi frontendowi, jaką rolę ma użytkownik na wyjeździe.
 - Nowy zasób z właścicielem (inny niż wyjazd): ten sam wzorzec w jego domenie,
   czyli tabela członkostwa albo `owner_sub`, serwis z `get_membership`

@@ -9,12 +9,13 @@ from tuttitrip.profiles.logic.weight_presets import (
     WeightRatioError,
 )
 from tuttitrip.profiles.schemas import (
+    AccessTokenCreate,
     ProfileCreate,
     ProfileRead,
     ProfileUpdate,
     WeightsUpdate,
 )
-from tuttitrip.profiles.services import profile_service
+from tuttitrip.profiles.services import access_token_service, profile_service
 from tuttitrip.profiles.services.profile_service import (
     ProfileAccountError,
     ProfileComfortError,
@@ -24,6 +25,7 @@ from tuttitrip.profiles.services.profile_service import (
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
+from tuttitrip.shared.permissions.schemas import AccessTokenCreated, AccessTokenRead
 from tuttitrip.trips.api import TripCoHost, TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/profiles", tags=["profiles"])
@@ -154,3 +156,62 @@ async def delete_profile(
     except ProfileAccountError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{profile_id}/access-tokens",
+    dependencies=[requires(Feature.PROFILES_CORE, Access.WRITE)],
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_vote_token(
+    profile_id: UUID,
+    data: AccessTokenCreate,
+    membership: TripCoHost,
+    session: SessionDep,
+) -> AccessTokenCreated:
+    """Create a voting link token for a person without an account.
+
+    The response is the only time the token is visible. The frontend puts it
+    in a URL fragment (`#t=...`) and sends it back as `X-Access-Token`.
+
+    Args:
+        profile_id: The person's profile on this trip.
+        data: Lifetime of the link.
+        membership: The caller's (co-host) membership of ``{trip_id}``.
+        session: Database session.
+
+    Returns:
+        The token and its data.
+    """
+    try:
+        return await access_token_service.create_vote_token(
+            session, membership, profile_id, data
+        )
+    except ProfileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND) from exc
+
+
+@router.delete(
+    "/{profile_id}/access-tokens/{token_id}",
+    dependencies=[requires(Feature.PROFILES_CORE, Access.WRITE)],
+)
+async def revoke_access_token(
+    profile_id: UUID, token_id: UUID, membership: TripCoHost, session: SessionDep
+) -> AccessTokenRead:
+    """Revoke a link token (idempotent); it answers 404 from then on.
+
+    Args:
+        profile_id: The person's profile on this trip.
+        token_id: Token id from creation.
+        membership: The caller's (co-host) membership of ``{trip_id}``.
+        session: Database session.
+
+    Returns:
+        The token's data with `revoked_at`.
+    """
+    try:
+        return await access_token_service.revoke_token(
+            session, membership, profile_id, token_id
+        )
+    except ProfileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND) from exc

@@ -18,12 +18,15 @@ from tuttitrip.main import create_app
 from tuttitrip.shared.permissions.api import (
     PermissionRequirement,
     PublicMarker,
+    TokenRequirement,
     api_routes,
     public,
     requires,
     route_markers,
+    token_access,
 )
 from tuttitrip.shared.permissions.registry import Access, Feature, is_leaf
+from tuttitrip.shared.permissions.schemas import TokenScope
 from tuttitrip.trips.api import TripAccess
 
 APP = create_app()
@@ -31,6 +34,9 @@ API_ROUTES = api_routes(APP)
 
 # Endpoint function names of the only routes that may be public.
 PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status"}
+# Endpoint function names of the only routes reachable with an access token
+# instead of an account (the token's trip and profile come from the token).
+TOKEN_ENDPOINTS = {"read_vote_access"}
 
 
 def docs_paths(app: FastAPI) -> set[str | None]:
@@ -43,7 +49,7 @@ def docs_paths(app: FastAPI) -> set[str | None]:
 
 
 def uncovered_routes(app: FastAPI) -> list[str]:
-    """Routes without exactly one marker (``requires`` or ``public``)."""
+    """Routes without exactly one marker (requires, public or token_access)."""
     problems: list[str] = []
     for route in iter_route_contexts(app.routes):
         if isinstance(route.original_route, APIRoute):
@@ -97,6 +103,56 @@ def test_coverage_check_catches_unmarked_and_double_marked_routes() -> None:
         "GET /open: 0 markers",
         "GET /twice: 2 markers",
     ]
+
+
+def test_a_token_marker_counts_as_a_marker() -> None:
+    app = FastAPI()
+    app.get("/ok", dependencies=[token_access(TokenScope.VOTE)])(lambda: None)
+    app.get(
+        "/token-and-public",
+        dependencies=[token_access(TokenScope.VOTE), public()],
+    )(lambda: None)
+    app.get(
+        "/token-and-requires",
+        dependencies=[
+            token_access(TokenScope.VOTE),
+            requires(Feature.SEARCH, Access.READ),
+        ],
+    )(lambda: None)
+    assert uncovered_routes(app) == [
+        "GET /token-and-public: 2 markers",
+        "GET /token-and-requires: 2 markers",
+    ]
+
+
+def test_only_the_allow_listed_routes_use_a_token() -> None:
+    token_routes = {
+        r.name
+        for r in API_ROUTES
+        if any(isinstance(m, TokenRequirement) for m in route_markers(r))
+    }
+    assert token_routes == TOKEN_ENDPOINTS
+
+
+def token_routes_with_trip_in_path(app: FastAPI) -> list[str]:
+    return [
+        route.path or ""
+        for route in api_routes(app)
+        if "{trip_id}" in (route.path or "")
+        and any(isinstance(m, TokenRequirement) for m in route_markers(route))
+    ]
+
+
+def test_token_routes_take_the_trip_from_the_token_not_the_path() -> None:
+    assert token_routes_with_trip_in_path(APP) == []
+
+
+def test_token_route_check_catches_a_trip_id_in_the_path() -> None:
+    app = FastAPI()
+    app.get("/vote/{trip_id}/x", dependencies=[token_access(TokenScope.VOTE)])(
+        lambda trip_id: trip_id
+    )
+    assert token_routes_with_trip_in_path(app) == ["/vote/{trip_id}/x"]
 
 
 def test_only_the_allow_listed_routes_are_public() -> None:
