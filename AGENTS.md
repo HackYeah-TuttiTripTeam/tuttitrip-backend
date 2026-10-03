@@ -593,8 +593,8 @@ Wydania:
 
 `/api/v1/openapi.json` and `/api/v1/docs` are public on every deployment (the
 frontend generates its client from them). Every push runs CI once (checks run on push only): `lint` and
-`tests` in parallel on the org runners `[self-hosted, hackathon]`, `contracts-check`
-on a GitHub-hosted runner, then `deploy` on the runner installed on the host
+`tests` and `contracts-check` in parallel on the org runners `[self-hosted, hackathon]`,
+then `deploy` on the runner installed on the host
 (`[self-hosted, tuttitrip-deploy]`). A branch preview deploys only when the org variable `PREVIEW_DEPLOYS` is `true`
 or the PR has the label `preview` (the `preview-gate` job decides and writes a
 summary line when it is off), without waiting for the checks; `main` and `develop` wait for `lint` and `tests`. A newer push cancels

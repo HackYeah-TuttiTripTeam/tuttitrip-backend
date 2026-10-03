@@ -223,8 +223,7 @@ Szczegóły i konwencje dla zespołu i agentów są w [AGENTS.md](AGENTS.md).
 ## Wdrożenie
 
 Każdy push uruchamia CI raz: `lint` (ruff, ty) i `tests` (pytest) równolegle na
-runnerach organizacji `[self-hosted, hackathon]`, `contracts-check` na runnerze
-GitHuba. Job `deploy` buduje obraz Dockera i wdraża go na serwer
+runnerach organizacji `[self-hosted, hackathon]`, `contracts-check` też na tych runnerach. Job `deploy` buduje obraz Dockera i wdraża go na serwer
 `dellpromaxgb10`, na którym działa osobny runner `tuttitrip-deploy`. Podgląd
 gałęzi wdraża się od razu, `main` i `develop` czekają na zielone `lint` i
 `tests`. Nowy push do tej samej gałęzi anuluje niedokończone testy poprzedniego.
