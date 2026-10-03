@@ -1,7 +1,7 @@
 """Trip invitations.
 
 Revision ID: d8fd431ca322
-Revises: d5b531aaa32c
+Revises: f3ed8c494ca7
 Create Date: 2026-10-03 22:06:47.887469
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d8fd431ca322"
-down_revision: str | None = "d5b531aaa32c"
+down_revision: str | None = "f3ed8c494ca7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
