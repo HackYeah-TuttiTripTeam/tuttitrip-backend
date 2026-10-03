@@ -246,7 +246,9 @@ async def test_cannot_link_an_account_twice(
 ) -> None:
     monkeypatch.setattr(trip_service, "get_membership", AsyncMock())
     monkeypatch.setattr(
-        profile_service.db, "user_has_profile", AsyncMock(return_value=True)
+        profile_service.db,
+        "select_account_profile_id",
+        AsyncMock(return_value=uuid.uuid4()),
     )
     with pytest.raises(ProfileAccountError):
         await profile_service.create_profile(
@@ -386,7 +388,7 @@ async def test_racing_account_link_maps_to_409_but_other_errors_pass(
 ) -> None:
     monkeypatch.setattr(trip_service, "get_membership", AsyncMock())
     monkeypatch.setattr(
-        profile_service.db, "user_has_profile", AsyncMock(return_value=False)
+        profile_service.db, "select_account_profile_id", AsyncMock(return_value=None)
     )
     other = IntegrityError(
         "INSERT", {}, Exception('violates "ck_profiles_floor_range"')

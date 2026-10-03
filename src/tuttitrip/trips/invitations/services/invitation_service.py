@@ -78,9 +78,8 @@ async def create_invitation(
         ),
     )
     await session.commit()
-    return InvitationCreated(
-        **InvitationRead.model_validate(row).model_dump(), token=token
-    )
+    fields = {name: getattr(row, name) for name in InvitationRead.model_fields}
+    return InvitationCreated(**fields, token=token)
 
 
 async def list_invitations(
@@ -126,27 +125,28 @@ async def revoke_invitation(
 
 async def _find(
     session: AsyncSession, body: InvitationToken, sub: str
-) -> tuple[TripInvitation, TripRole | None]:
+) -> tuple[db.Found, TripRole | None]:
     """The working invitation behind a token, and the caller's role on its trip.
 
     A caller who is on the trip already may use a used-up invitation (they
     consume nothing); anyone else needs a free use.
 
     Returns:
-        The invitation and the caller's role on its trip (None if not a member).
+        The invitation with its trip, and the caller's role (None if not a member).
 
     Raises:
         InvitationNotFoundError: The token does not give the caller a way in.
     """
     if len(body.token) > MAX_TOKEN_LENGTH:
         raise InvitationNotFoundError
-    row = await db.select_by_hash(session, hash_token(body.token), datetime.now(UTC))
-    if row is None:
+    found = await db.select_by_hash(session, hash_token(body.token), datetime.now(UTC))
+    if found is None:
         raise InvitationNotFoundError
+    row = found.invitation
     role = await trips_db.select_member_role(session, row.trip_id, sub)
     if role is None and row.uses >= row.max_uses:
         raise InvitationNotFoundError
-    return row, role
+    return found, role
 
 
 async def preview(
@@ -165,31 +165,63 @@ async def preview(
     Raises:
         InvitationNotFoundError: The token does not work for the caller.
     """
-    row, role = await _find(session, body, sub)
-    trip = await trips_db.select_trip(session, row.trip_id)
-    if trip is None:  # pragma: no cover - the FK cascades invitations with the trip
-        raise InvitationNotFoundError
+    found, role = await _find(session, body, sub)
     return InvitationPreview(
-        trip_name=trip.name,
-        destination=trip.destination,
+        trip_name=found.trip_name,
+        destination=found.destination,
         already_member=role is not None,
     )
 
 
-async def _existing(
-    session: AsyncSession, trip_id: UUID, sub: str, role: TripRole
+async def _join(
+    session: AsyncSession,
+    sub: str,
+    row: TripInvitation,
+    role: TripRole | None,
+    name: str,
 ) -> JoinResult:
-    """The result for someone already on the trip (a profile is made if missing).
+    """Make the caller a member with a profile; only what is missing is created.
+
+    A use is taken only for a new member. An account that already has a profile
+    on the trip (a member whose profile is missing is repaired the same way)
+    keeps it instead of getting a second one.
 
     Returns:
-        The join result with ``already_member`` set.
+        The join result.
+
+    Raises:
+        InvitationNotFoundError: No free use was left.
     """
-    profile_id = await profile_service.find_account_profile(session, trip_id, sub)
+    profile_id = await profile_service.find_account_profile(session, row.trip_id, sub)
+    was_member = role is not None
+    if role is None:
+        if not await db.consume_use(session, row.id, datetime.now(UTC)):
+            raise InvitationNotFoundError
+        await trips_db.insert_member(session, row.trip_id, sub, TripRole.MEMBER)
+        role = TripRole.MEMBER
     if profile_id is None:
         profile_id = await profile_service.create_account_profile(
-            session, trip_id, sub, PLACEHOLDER_NAME
+            session, row.trip_id, sub, name
         )
-        await session.commit()
+    await session.commit()
+    return JoinResult(
+        trip_id=row.trip_id, profile_id=profile_id, role=role, already_member=was_member
+    )
+
+
+async def _settled(session: AsyncSession, trip_id: UUID, sub: str) -> JoinResult:
+    """The result after a concurrent request for the same account won the race.
+
+    Returns:
+        The join result of the account that is now on the trip with a profile.
+
+    Raises:
+        InvitationNotFoundError: The conflict was not that race (nothing joined).
+    """
+    role = await trips_db.select_member_role(session, trip_id, sub)
+    profile_id = await profile_service.find_account_profile(session, trip_id, sub)
+    if role is None or profile_id is None:
+        raise InvitationNotFoundError
     return JoinResult(
         trip_id=trip_id, profile_id=profile_id, role=role, already_member=True
     )
@@ -200,7 +232,9 @@ async def accept(session: AsyncSession, sub: str, body: InvitationAccept) -> Joi
 
     Idempotent: someone already on the trip gets their profile back and no use
     is taken. A person removed earlier keeps their old profile (without an
-    account) and gets a new one.
+    account) and gets a new one. A uniqueness conflict means the same account
+    joined concurrently: the transaction rolls back (the use with it) and the
+    caller gets what the other request created, or 404 if nothing joined.
 
     Args:
         session: Open session.
@@ -213,28 +247,11 @@ async def accept(session: AsyncSession, sub: str, body: InvitationAccept) -> Joi
     Raises:
         InvitationNotFoundError: The token does not work for the caller.
     """
-    row, role = await _find(session, body, sub)
-    trip_id = row.trip_id
-    if role is not None:
-        return await _existing(session, trip_id, sub, role)
-    if not await db.consume_use(session, row.id, datetime.now(UTC)):
-        raise InvitationNotFoundError
+    found, role = await _find(session, body, sub)
+    trip_id = found.invitation.trip_id
+    name = body.display_name or PLACEHOLDER_NAME
     try:
-        await trips_db.insert_member(session, trip_id, sub, TripRole.MEMBER)
-        profile_id = await profile_service.create_account_profile(
-            session, trip_id, sub, body.display_name or PLACEHOLDER_NAME
-        )
-        await session.commit()
+        return await _join(session, sub, found.invitation, role, name)
     except IntegrityError:
-        # The same account joined concurrently: its other request won.
         await session.rollback()
-        role = await trips_db.select_member_role(session, trip_id, sub)
-        if role is None:
-            raise
-        return await _existing(session, trip_id, sub, role)
-    return JoinResult(
-        trip_id=trip_id,
-        profile_id=profile_id,
-        role=TripRole.MEMBER,
-        already_member=False,
-    )
+        return await _settled(session, trip_id, sub)

@@ -74,7 +74,7 @@ async def _check_account(session: AsyncSession, trip_id: UUID, sub: str) -> None
     except trip_service.TripNotFoundError as exc:
         msg = "The account is not a member of this trip"
         raise ProfileAccountError(msg) from exc
-    if await db.user_has_profile(session, trip_id, sub):
+    if await db.select_account_profile_id(session, trip_id, sub) is not None:
         msg = "The account already has a profile on this trip"
         raise ProfileAccountError(msg)
 

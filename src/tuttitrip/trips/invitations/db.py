@@ -2,12 +2,22 @@
 
 from collections.abc import Sequence
 from datetime import datetime
+from typing import NamedTuple
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import ColumnElement, Update, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.trips.invitations.models import TripInvitation
+from tuttitrip.trips.models import Trip
+
+
+class Found(NamedTuple):
+    """An invitation with the name and destination of its trip."""
+
+    invitation: TripInvitation
+    trip_name: str
+    destination: str | None
 
 
 def _active(now: datetime) -> tuple[ColumnElement[bool], ...]:
@@ -34,7 +44,7 @@ async def insert_invitation(
 
 async def select_by_hash(
     session: AsyncSession, token_hash: str, now: datetime
-) -> TripInvitation | None:
+) -> Found | None:
     """The invitation with this token hash, if it has not expired or been revoked.
 
     Args:
@@ -43,13 +53,15 @@ async def select_by_hash(
         now: Current time.
 
     Returns:
-        The invitation (possibly used up), or None.
+        The invitation (possibly used up) with its trip's name, or None.
     """
-    return await session.scalar(
-        select(TripInvitation).where(
-            TripInvitation.token_hash == token_hash, *_active(now)
-        )
+    result = await session.execute(
+        select(TripInvitation, Trip.name, Trip.destination)
+        .join(Trip, Trip.id == TripInvitation.trip_id)
+        .where(TripInvitation.token_hash == token_hash, *_active(now))
     )
+    found = result.tuples().first()
+    return None if found is None else Found(*found)
 
 
 async def select_for_trip(
@@ -113,20 +125,17 @@ async def count_usable(session: AsyncSession, trip_id: UUID, now: datetime) -> i
     return count or 0
 
 
-async def consume_use(
-    session: AsyncSession, invitation_id: UUID, now: datetime
-) -> bool:
-    """Take one use in a single conditional UPDATE (safe under concurrent accepts).
+def consume_stmt(invitation_id: UUID, now: datetime) -> Update:
+    """The single conditional UPDATE that takes one use.
 
     Args:
-        session: Open session (caller commits).
         invitation_id: Invitation id.
         now: Current time.
 
     Returns:
-        False when the invitation was revoked, expired or used up in the meantime.
+        The statement; it returns the id only if a use was free.
     """
-    result = await session.execute(
+    return (
         update(TripInvitation)
         .where(
             TripInvitation.id == invitation_id,
@@ -136,4 +145,20 @@ async def consume_use(
         .values(uses=TripInvitation.uses + 1)
         .returning(TripInvitation.id)
     )
+
+
+async def consume_use(
+    session: AsyncSession, invitation_id: UUID, now: datetime
+) -> bool:
+    """Take one use (safe under concurrent accepts).
+
+    Args:
+        session: Open session (caller commits).
+        invitation_id: Invitation id.
+        now: Current time.
+
+    Returns:
+        False when the invitation was revoked, expired or used up in the meantime.
+    """
+    result = await session.execute(consume_stmt(invitation_id, now))
     return result.scalar_one_or_none() is not None

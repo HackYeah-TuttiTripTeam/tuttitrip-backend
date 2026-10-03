@@ -31,6 +31,7 @@ from tuttitrip.trips.invitations.services.invitation_service import (
 router = APIRouter(tags=["invitations"])
 
 NOT_FOUND = "Invitation not found"
+NO_STORE = {"Cache-Control": "no-store"}
 INVITATION_NOT_FOUND: dict[int | str, dict[str, str]] = {
     404: {"description": "Unknown, expired, revoked or used-up invitation."}
 }
@@ -131,7 +132,9 @@ async def preview_invitation(
     try:
         return await invitation_service.preview(session, user.sub, body)
     except InvitationNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from exc
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, NOT_FOUND, headers=NO_STORE
+        ) from exc
 
 
 @router.post(
@@ -158,4 +161,6 @@ async def accept_invitation(
     try:
         return await invitation_service.accept(session, user.sub, body)
     except InvitationNotFoundError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, NOT_FOUND) from exc
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, NOT_FOUND, headers=NO_STORE
+        ) from exc

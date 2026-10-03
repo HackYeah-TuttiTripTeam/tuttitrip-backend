@@ -4,12 +4,12 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
 from tests.shared.fakes import authorize
@@ -57,6 +57,11 @@ class World:
         self.invitations[row.token_hash] = row
         return row
 
+    def undo(self, sub: str) -> None:
+        """What a rollback does to the account's rows."""
+        self.roles.pop(sub, None)
+        self.profiles[:] = [p for p in self.profiles if p.user_sub != sub]
+
     def membership(
         self, _s: object, trip_id: uuid.UUID, sub: str, min_role: TripRole
     ) -> TripMembership:
@@ -69,11 +74,11 @@ class World:
 
     def by_hash(
         self, _s: object, token_hash: str, now: datetime
-    ) -> TripInvitation | None:
+    ) -> inv_db.Found | None:
         row = self.invitations.get(token_hash)
         if row is None or row.revoked_at is not None or row.expires_at <= now:
             return None
-        return row
+        return inv_db.Found(row, "Kraków", "PL")
 
     def consume(self, _s: object, invitation_id: uuid.UUID, now: datetime) -> bool:
         row = self.one(_s, TRIP, invitation_id)
@@ -142,8 +147,6 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
         (profiles_db, "select_account_profile_id", w.account_profile),
     ):
         monkeypatch.setattr(module, name, AsyncMock(side_effect=fake))
-    trip = SimpleNamespace(name="Kraków", destination="PL")
-    monkeypatch.setattr(trips_db, "select_trip", AsyncMock(return_value=trip))
     return w
 
 
@@ -306,6 +309,7 @@ def test_revoked_and_expired_look_like_unknown(
     dead = guest.post(path(ACCEPT), json=BODY)
     assert (dead.status_code, dead.json()) == (unknown.status_code, unknown.json())
     assert dead.status_code == 404
+    assert dead.headers["cache-control"] == "no-store"
     assert GUEST.sub not in world.roles
     assert guest.post(path("preview_invitation"), json=BODY).status_code == 404
 
@@ -376,3 +380,61 @@ def test_a_member_without_a_profile_gets_one_and_no_use_is_taken(
         uuid.UUID(body["profile_id"])
     ]
     assert row.uses == 0
+
+
+def test_a_conflict_that_is_not_the_race_is_a_404_and_creates_nothing(
+    guest: TestClient, world: World, session: AsyncMock
+) -> None:
+    world.invite()
+    cause = Exception("uq_something_else")
+    statement = "INSERT INTO trip_members"
+    session.commit.side_effect = IntegrityError(statement, {}, cause)
+    session.rollback = AsyncMock(side_effect=lambda: world.undo(GUEST.sub))
+    response = guest.post(path(ACCEPT), json=BODY)
+    assert response.status_code == 404
+    assert GUEST.sub not in world.roles
+    assert response.headers["cache-control"] == "no-store"
+    session.rollback.assert_awaited_once()
+
+
+def test_an_account_with_a_profile_but_no_membership_keeps_that_profile(
+    guest: TestClient, world: World
+) -> None:
+    row = world.invite()
+    profile = Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub=GUEST.sub)
+    world.profiles.append(profile)
+    body = guest.post(path(ACCEPT), json=BODY).json()
+    assert body["profile_id"] == str(profile.id)
+    assert body["already_member"] is False
+    assert world.roles[GUEST.sub] is TripRole.MEMBER
+    assert len([p for p in world.profiles if p.user_sub == GUEST.sub]) == 1
+    assert row.uses == 1
+
+
+def test_no_free_use_creates_no_member_and_no_profile(
+    guest: TestClient, world: World
+) -> None:
+    world.invite()
+    profiles = len(world.profiles)
+    inv_db.consume_use.side_effect = lambda *_: False  # ty: ignore[unresolved-attribute]
+    response = guest.post(path(ACCEPT), json=BODY)
+    assert response.status_code == 404
+    assert GUEST.sub not in world.roles
+    assert len(world.profiles) == profiles
+    assert world.commits == 0
+
+
+def test_the_use_is_taken_by_one_conditional_update() -> None:
+    sql = str(
+        inv_db.consume_stmt(uuid.uuid4(), datetime.now(UTC)).compile(
+            dialect=postgresql.dialect()
+        )
+    )
+    for part in (
+        "trip_invitations.uses < trip_invitations.max_uses",
+        "trip_invitations.revoked_at IS NULL",
+        "trip_invitations.expires_at >",
+        "SET uses=(trip_invitations.uses + ",
+        "RETURNING trip_invitations.id",
+    ):
+        assert part in sql
