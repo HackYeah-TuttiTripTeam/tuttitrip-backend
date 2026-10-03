@@ -48,6 +48,7 @@ src/tuttitrip/
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
+  places/              city and place catalog; prices and hours carry source + verified mark
 contracts/             jobs.schema.json: rendered job contract (compared with the worker)
 migrations/            Alembic (async); versions/ holds revisions
 deploy/                host deployment scripts (bash), gateway config
@@ -274,7 +275,7 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 
 | Rola | Uprawnienia | Uwagi |
 | --- | --- | --- |
-| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
+| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
 | `superadmin` | `*:WRITE` | Tylko z claimu Auth0 `admin` (lista osób jest w Akcji Auth0). API jej nie przypisze ani nie zmieni, a wiersz w bazie jest ignorowany. Nowe funkcjonalności obejmuje automatycznie (test). |
 | własne | dowolne | `POST /admin/permissions/roles`. |
 
