@@ -35,7 +35,7 @@ APP = create_app()
 API_ROUTES = api_routes(APP)
 
 # Endpoint function names of the only routes that may be public.
-PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status", "demo_login"}
+PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status", "demo_login", "reset_demo"}
 # Endpoint function names of the only routes reachable with an access token
 # instead of an account (the token's trip and profile come from the token).
 TOKEN_ENDPOINTS = {"read_vote_access"}

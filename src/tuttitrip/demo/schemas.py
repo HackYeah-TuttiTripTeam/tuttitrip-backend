@@ -1,5 +1,7 @@
 """Demo login DTOs."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -13,3 +15,12 @@ class DemoSession(BaseModel):
         default=None,
         description="Only when the deployment allows `offline_access`.",
     )
+
+
+class DemoResetResult(BaseModel):
+    """What the internal reset did."""
+
+    status: Literal["reset", "disabled"] = Field(
+        description="`disabled` when the demo is switched off: nothing was touched."
+    )
+    trips: int = Field(default=0, description="Trips created for the demo account.")
