@@ -1,7 +1,7 @@
 """Place ratings and vetoes.
 
 Revision ID: f3ed8c494ca7
-Revises: 2647fc89c3ae
+Revises: 7b4fe93c3762
 Create Date: 2026-10-03 21:18:04.410856
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "f3ed8c494ca7"
-down_revision: str | None = "2647fc89c3ae"
+down_revision: str | None = "7b4fe93c3762"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

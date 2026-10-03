@@ -46,7 +46,7 @@ def test_trip_details_migration_names_its_checks_once_both_ways() -> None:
 
 
 def test_feedback_migration_grants_and_removes_the_user_role_permission() -> None:
-    up = _sql("upgrade", "2647fc89c3ae:f3ed8c494ca7")
-    down = _sql("downgrade", "f3ed8c494ca7:2647fc89c3ae")
+    up = _sql("upgrade", "7b4fe93c3762:f3ed8c494ca7")
+    down = _sql("downgrade", "f3ed8c494ca7:7b4fe93c3762")
     assert "VALUES ('user', 'profiles.feedback', 'WRITE') ON CONFLICT DO NOTHING" in up
     assert "role_name = 'user' AND feature = 'profiles.feedback'" in down
