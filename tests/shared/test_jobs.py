@@ -175,18 +175,21 @@ def _beat(
 
 
 @pytest.mark.parametrize(
-    ("beat", "expected"),
+    ("age_seconds", "expected"),
     [
         (None, "missing"),
-        (_beat(5), "ok"),
-        (_beat(300), "stale"),
-        (_beat(3600), "missing"),
+        (5, "ok"),
+        (300, "stale"),
+        (3600, "missing"),
     ],
     ids=["none", "fresh", "stale", "old"],
 )
 def test_liveness_classification(
-    monkeypatch: pytest.MonkeyPatch, beat: WorkerHeartbeat | None, expected: str
+    monkeypatch: pytest.MonkeyPatch, age_seconds: int | None, expected: str
 ) -> None:
+    # Built here, not in the parametrize list: that list is evaluated at import,
+    # and on a long suite a 5-second-old beat would already be stale.
+    beat = None if age_seconds is None else _beat(age_seconds)
     monkeypatch.setattr(
         worker_liveness.db, "select_latest_heartbeat", AsyncMock(return_value=beat)
     )
