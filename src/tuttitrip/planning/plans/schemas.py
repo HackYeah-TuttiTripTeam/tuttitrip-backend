@@ -17,6 +17,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field, model_validator
 
 from tuttitrip.accommodation.schemas import RequirementStatus
+from tuttitrip.profiles.feedback.schemas import ReasonCode
 
 Money = Annotated[Decimal, Field(ge=0, decimal_places=2, max_digits=12)]
 Hash12 = Annotated[str, Field(min_length=12, max_length=12)]
@@ -105,18 +106,6 @@ class ConflictCode(StrEnum):
     VETO_BLOCKS_PLACE = "veto_blocks_place"
     BUDGET_LIMIT = "budget_limit"
     FLOOR_UNREACHABLE = "floor_unreachable"
-    OTHER = "other"
-
-
-@unique
-class ReasonCode(StrEnum):
-    """Why a person is against a place; shared with the verdict reasons."""
-
-    TOO_EXPENSIVE = "too_expensive"
-    TOO_FAR = "too_far"
-    NOT_MY_STYLE = "not_my_style"
-    TOO_CROWDED = "too_crowded"
-    TOO_HARD_FOR_CHILD = "too_hard_for_child"
     OTHER = "other"
 
 

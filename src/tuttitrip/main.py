@@ -21,6 +21,7 @@ from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.planning.plans.api import router as plans_router
 from tuttitrip.profiles.api import router as profiles_router
+from tuttitrip.profiles.feedback.api import router as feedback_router
 from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
@@ -42,6 +43,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     jobs_router,
     trips_router,
     profiles_router,
+    feedback_router,
     interview_router,
     planning_router,
     fairness_router,
