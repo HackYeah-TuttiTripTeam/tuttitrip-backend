@@ -27,6 +27,7 @@ System stoi na shadcn/ui (Tailwind v4), ale celowo nie wygląda jak domyślny sh
 - Osoby: `member-1…6` (niebieski, fiolet, morski, malinowy, oliwkowy, grafit) leżą poza kątami barw stanów. Tylko awatar, kropka na osi albo kreska 3px. Nigdy jako tło stanu. W ciemnym motywie jasne z ciemnymi inicjałami.
 - `ink` (atrament jako tło przycisku i aktywnej pozycji doku) to drugi akcent obok zieleni.
 - `route`: kropki trasy, czysto dekoracyjne.
+- Kolory znaku (`brand-sky`, `brand-gold`, `brand-ivory`, `brand-night`) służą tylko logo i ikonom aplikacji. Złoto marki nie jest `warning` i nie wchodzi do interfejsu.
 - Bez gradientów, poświat i szkła.
 
 ## Typografia
@@ -60,7 +61,7 @@ Zainstaluj kroje przez `@font-face` z plików `fonts/*.woff2` (`font-display: sw
 
 ## Motyw trasy
 
-Znak TuttiTrip (duża kropka, kropki trasy, pierścień celu) jest językiem wykresów i list:
+Z motywu trasy (kropka, kropki trasy, pierścień celu) zostaje język wykresów i list; ten sam pierścień celu nosi znak „Horyzont” (patrz Logo):
 
 - **Kropki `route`** (2px co 8px) łączą przystanki: oś dnia, separator ceny w karcie miejsca, tory wykresu sprawiedliwości.
 - **Przystanek** = kropka 10px `foreground`; zrobione = `primary`; czekające = `route`.
@@ -93,7 +94,35 @@ Keyline Icons (MIT): siatka 24×24, linia 2px, zaokrąglone rogi. 20px w kontrol
 
 ## Logo
 
-Znak: `assets/Logos/tuttitrip-mark.svg` (z `favicon.svg` produkcji) w `brand` / `brand-ink`. Wordmark nie istnieje: „TuttiTrip” składaj w Funnel Display 800 z rozstrzałem −0,035em obok znaku.
+Znak „Horyzont”: okrągła plakietka z drogą w perspektywie, która biegnie do horyzontu. Niebo w `brand-sky`, ziemia w `brand`, droga w `brand-ivory`, nad nią złoty pierścień celu w `brand-gold`. Pliki: `assets/Logos` (SVG i PNG), ikony i obrazy do udostępniania w `assets/AppIcons`.
+
+- **Wersje.** Sam znak (`tuttitrip-mark`), sam napis (`tuttitrip-wordmark`), znak z tytułem pionowo i poziomo (`tuttitrip-logo-stacked`, `tuttitrip-logo-horizontal`) oraz te same z podtytułem (`-tagline`). Każda w `-light` na jasne tło i `-dark` na ciemne.
+- **Napis** to krzywe Funnel Display 800 z rozstrzałem −0,035em, podtytuł to krzywe Atkinson Hyperlegible Next. Nie składaj ich ponownie w tekście.
+- **Podtytuł** jest zawsze tym samym tagline’em: „Plan, po którym nikt nie czuje, że przegrał”. W interfejsie i poniżej 320px szerokości używaj wersji bez podtytułu.
+- **Ciemny motyw.** Niebo robi się jaśniejsze (`brand-sky` w ciemnym), napis przechodzi na `brand-ink`, podtytuł na `muted-foreground`. Wersji `-light` nie kładź na ciemnym tle ani odwrotnie.
+- **Rozmiar i pole ochronne.** Pole ochronne to ćwierć średnicy plakietki i jest już w plikach. Znak minimum 24px; 16px tylko jako favicon.
+- **Złoto to kolor marki, nie stan.** `brand-gold` występuje wyłącznie w znaku i nigdy nie oznacza ostrzeżenia ani decyzji, która czeka (to zawsze `warning`). Pierścień celu w interfejsie zostaje w `primary`.
+- **Bez przeróbek:** bez zmiany kolorów i proporcji, bez obrysu, cienia, gradientu, obrotu i bez rozciągania. Znak zawsze z własną plakietką.
+
+### Ikony aplikacji
+
+Kafelek `icon-tile` (promień 112/512) w rozmiarach 16 do 1024px, `apple-touch-icon-180` (pełny kwadrat, iOS zaokrągla sam), `icon-maskable` 192 i 512 (pełny kwadrat, treść w bezpiecznym polu 80%) oraz `favicon.svg`, który w ciemnym motywie przeglądarki sam rozjaśnia niebo. Obrazy do udostępniania `og-image-light` i `og-image-dark` mają 1200×630px. `theme_color` zostaje `brand` (#00774d). Pliku `.ico` nie ma; w razie potrzeby złóż go z `icon-16`, `icon-32` i `icon-48`.
+
+```html
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/icon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon-180.png">
+<meta name="theme-color" content="#00774d">
+<meta property="og:image" content="/og-image-light.png">
+```
+
+```json
+"icons": [
+  {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png"},
+  {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png"},
+  {"src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+]
+```
 
 ## Komponenty
 

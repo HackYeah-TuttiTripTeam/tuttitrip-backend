@@ -50,6 +50,10 @@
   --chart-5: oklch(28% 0.015 170);
   --brand: #00774d;
   --brand-ink: #f4fbf8;
+  --brand-sky: #0a2f23;
+  --brand-gold: #f2b53a;
+  --brand-ivory: #f5efe6;
+  --brand-night: #0f1b17;
   --route: oklch(78% 0.015 168);
   --want: var(--primary);
   --want-soft: #dcf2e6;
@@ -102,6 +106,10 @@
   --chart-5: oklch(37% 0.015 170);
   --brand: #00774d;
   --brand-ink: #f4fbf8;
+  --brand-sky: #0f4434;
+  --brand-gold: #f2b53a;
+  --brand-ivory: #f5efe6;
+  --brand-night: #0f1b17;
   --route: oklch(42% 0.015 170);
   --want: var(--primary);
   --want-soft: #0f2f23;
@@ -181,6 +189,10 @@
   --color-on-destructive: var(--on-destructive);
   --color-brand: var(--brand);
   --color-brand-ink: var(--brand-ink);
+  --color-brand-sky: var(--brand-sky);
+  --color-brand-gold: var(--brand-gold);
+  --color-brand-ivory: var(--brand-ivory);
+  --color-brand-night: var(--brand-night);
   --color-route: var(--route);
   --color-want: var(--want);
   --color-want-soft: var(--want-soft);
