@@ -33,7 +33,7 @@ description: Create a correctly named branch, run local checks and open a pull r
    - <zmiana>
 
    ## Jak przetestować
-   1. Preview: https://tuttitrip-api-<slug>.gburek.app/docs
+   1. Preview: https://tuttitrip-api-<slug>.gburek.app/api/v1/docs
    2. <kroki>
 
    ## Zrzuty ekranu

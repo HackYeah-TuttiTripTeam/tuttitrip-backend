@@ -93,10 +93,10 @@ def test_workflow_ids_are_deterministic() -> None:
 def test_ping_is_public_and_visible_only_as_ping(
     client: TestClient, queue: FakeJobQueue
 ) -> None:
-    accepted = client.post("/jobs/ping")
+    accepted = client.post("/api/v1/jobs/ping")
     assert accepted.status_code == 202
     workflow_id = accepted.json()["workflow_id"]
-    assert client.get(f"/jobs/ping/{workflow_id}").json()["status"] == "ENQUEUED"
+    assert client.get(f"/api/v1/jobs/ping/{workflow_id}").json()["status"] == "ENQUEUED"
     assert queue.jobs[workflow_id].owner == "smoke-test"
 
 
@@ -107,34 +107,34 @@ def test_jobs_are_private_to_their_owner(
     monkeypatch.setattr(plan_job_service, "ensure_worker_available", AsyncMock())
     body = {"trip_id": str(uuid.uuid4()), "request": "Gdańsk, 3 dni"}
 
-    first = client.post("/planning/jobs", json=body)
-    again = client.post("/planning/jobs", json=body)
+    first = client.post("/api/v1/planning/jobs", json=body)
+    again = client.post("/api/v1/planning/jobs", json=body)
     assert first.status_code == 202
     workflow_id = first.json()["workflow_id"]
     assert again.json()["workflow_id"] == workflow_id  # idempotent
     assert len(queue.jobs) == 1
     assert queue.queues[workflow_id] == "openrouter"
 
-    assert client.get(f"/jobs/{workflow_id}").json()["owner"] == ALICE.sub
-    assert client.get(f"/jobs/ping/{workflow_id}").status_code == 404
+    assert client.get(f"/api/v1/jobs/{workflow_id}").json()["owner"] == ALICE.sub
+    assert client.get(f"/api/v1/jobs/ping/{workflow_id}").status_code == 404
 
     queue.jobs[workflow_id] = queue.jobs[workflow_id].model_copy(
         update={"owner": "auth0|mallory"}
     )
-    assert client.get(f"/jobs/{workflow_id}").status_code == 404
+    assert client.get(f"/api/v1/jobs/{workflow_id}").status_code == 404
 
 
 def test_cancel(client: TestClient, queue: FakeJobQueue) -> None:
-    workflow_id = client.post("/jobs/ping").json()["workflow_id"]
+    workflow_id = client.post("/api/v1/jobs/ping").json()["workflow_id"]
     queue.jobs[workflow_id] = queue.jobs[workflow_id].model_copy(
         update={"owner": ALICE.sub}
     )
-    response = client.post(f"/jobs/{workflow_id}/cancel")
+    response = client.post(f"/api/v1/jobs/{workflow_id}/cancel")
     assert response.json()["status"] == "CANCELLED"
 
 
 def test_unknown_job_is_404(client: TestClient) -> None:
-    assert client.get("/jobs/nope").status_code == 404
+    assert client.get("/api/v1/jobs/nope").status_code == 404
 
 
 def test_plan_job_refused_without_worker(
@@ -147,7 +147,7 @@ def test_plan_job_refused_without_worker(
         AsyncMock(side_effect=WorkerUnavailableError("no worker")),
     )
     body = {"trip_id": str(uuid.uuid4()), "request": "x"}
-    response = client.post("/planning/jobs", json=body)
+    response = client.post("/api/v1/planning/jobs", json=body)
     assert response.status_code == 503
     assert response.json()["detail"] == "no worker"
 
@@ -203,7 +203,7 @@ def test_local_provider_goes_to_the_local_llm_queue(
     monkeypatch.setattr(plan_job_service.trip_service, "get_owned_trip", AsyncMock())
     monkeypatch.setattr(plan_job_service, "ensure_worker_available", AsyncMock())
     body = {"trip_id": str(uuid.uuid4()), "request": "Gdańsk", "provider": "local"}
-    workflow_id = client.post("/planning/jobs", json=body).json()["workflow_id"]
+    workflow_id = client.post("/api/v1/planning/jobs", json=body).json()["workflow_id"]
     assert queue.queues[workflow_id] == "local_llm"
     assert queue.payloads[workflow_id].model_dump()["provider"] == "local"
 

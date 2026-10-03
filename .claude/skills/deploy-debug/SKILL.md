@@ -16,11 +16,11 @@ Read-only first. Only touch resources named `tuttitrip-*` / labelled
    - `docker ps -a --filter label=tuttitrip.managed=true`
    - `docker logs --tail 100 <container>`
    - readiness behind the gateway:
-     `curl -s -H "Host: <hostname>" http://172.17.0.1:18080/health`
+     `curl -s -H "Host: <hostname>" http://172.17.0.1:18080/api/v1/health`
      (`database: unavailable` -> check `tuttitrip-postgres`)
    - `docker exec tuttitrip-postgres psql -U tuttitrip -d postgres -c '\l'`
    - runner service: `systemctl status 'actions.runner.HackYeah-TuttiTripTeam-tuttitrip-backend.*'`
-4. Public path: `curl -sI https://<hostname>/health`.
+4. Public path: `curl -sI https://<hostname>/api/v1/health`.
    - 404 "page not found" (plain text): no ingress rule, so the request hit the
      shared wildcard. Check the rule order in the tunnel config (ours must be
      before `*.gburek.app`): source `deploy/lib.sh deploy/cloudflare.sh`, then `cf_ingress_list`.
