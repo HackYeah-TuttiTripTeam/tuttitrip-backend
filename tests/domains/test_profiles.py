@@ -586,24 +586,52 @@ def test_comfort_contradictions_are_rejected_by_the_schema() -> None:
         ProfileUpdate(nap_minutes=0, nap_start=time(13, 0))
 
 
-def test_customized_fields_over_http(
+def _use_profile(monkeypatch: pytest.MonkeyPatch, person: Profile) -> None:
+    monkeypatch.setattr(
+        profile_service.db, "select_profile", AsyncMock(return_value=person)
+    )
+    monkeypatch.setattr(
+        profile_service.db, "select_profiles_by_trip", AsyncMock(return_value=[person])
+    )
+
+
+def test_new_child_has_no_customized_fields(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use_profile(monkeypatch, _profile(age=6))
+    body = client.get(path("list_profiles", trip_id=TRIP)).json()
+    assert body[0]["customized_fields"] == []
+
+
+def test_changed_daily_km_is_the_only_customized_field(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     kid = _profile(age=6)
-    monkeypatch.setattr(
-        profile_service.db, "select_profile", AsyncMock(return_value=kid)
-    )
-    monkeypatch.setattr(
-        profile_service.db, "select_profiles_by_trip", AsyncMock(return_value=[kid])
-    )
-    url = path("list_profiles", trip_id=TRIP)
-    assert client.get(url).json()[0]["customized_fields"] == []
+    _use_profile(monkeypatch, kid)
     url = path("update_profile", trip_id=TRIP, profile_id=kid.id)
     body = client.patch(url, json={"daily_km": 7.5, "customized_fields": ["floor"]})
     assert body.json()["customized_fields"] == ["daily_km"]
-    body = client.patch(url, json={"age": 30})
-    assert body.json()["age_group"] == "adult"
-    assert body.json()["customized_fields"] == ["daily_km"]
+
+
+def test_customized_fields_survive_an_age_group_change(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kid = _profile(age=6)
+    kid.daily_km = 7.5
+    kid.segment_km = DEFAULTS[AgeGroup.CHILD].segment_km + 1e-12  # still default
+    _use_profile(monkeypatch, kid)
+    url = path("update_profile", trip_id=TRIP, profile_id=kid.id)
+    body = client.patch(url, json={"age": 30}).json()
+    assert body["age_group"] == "adult"
+    assert body["customized_fields"] == ["daily_km"]
+    assert body["segment_km"] == DEFAULTS[AgeGroup.ADULT].segment_km
+
+
+def test_customized_fields_is_required_and_read_only_in_openapi() -> None:
+    schemas = create_app().openapi()["components"]["schemas"]
+    assert "customized_fields" in schemas["ProfileRead"]["required"]
+    assert "customized_fields" not in schemas["ProfileCreate"]["properties"]
+    assert "customized_fields" not in schemas["ProfileUpdate"]["properties"]
 
 
 def test_delete_returns_204_404_and_403(

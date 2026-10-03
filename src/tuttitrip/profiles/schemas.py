@@ -122,7 +122,10 @@ class ProfileUpdate(_ComfortOverrides):
 class ProfileRead(_Comfort):
     """A person on a trip."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # Filled by the service on every read, so it is always present in responses.
+    model_config = ConfigDict(
+        from_attributes=True, json_schema_serialization_defaults_required=True
+    )
 
     id: UUID
     trip_id: UUID

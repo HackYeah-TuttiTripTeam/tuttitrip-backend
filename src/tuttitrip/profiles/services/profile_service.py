@@ -237,7 +237,9 @@ def _read(profile: Profile) -> ProfileRead:
         The DTO.
     """
     read = ProfileRead.model_validate(profile)
-    read.customized_fields = customized_fields(_comfort(profile), read.age_group)
+    read.customized_fields = customized_fields(
+        _comfort(profile), age_group_for(profile.age)
+    )
     return read
 
 
@@ -340,7 +342,7 @@ async def update_profile(
     changes = _consistent_nap(changes)
     if "age" in changes:
         changes = _follow_new_group(profile, changes["age"]) | changes
-    current = {k: getattr(profile, k) for k in asdict(DEFAULTS[AgeGroup.ADULT])}
+    current = asdict(_comfort(profile))
     _check_comfort(current | changes)
     for key, value in changes.items():
         setattr(profile, key, value)

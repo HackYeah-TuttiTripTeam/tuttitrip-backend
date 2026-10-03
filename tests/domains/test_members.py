@@ -395,12 +395,12 @@ def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = AsyncMock()
-    profile = Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub="auth0|kuba")
+    profile = Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub="auth0|kuba", age=30)
     session.scalar.side_effect = [profile, TripRole.MEMBER, profile]
     monkeypatch.setattr(
         profile_service.ProfileRead,
         "model_validate",
-        lambda p: SimpleNamespace(id=p.id, user_sub=p.user_sub, age_group="adult"),
+        lambda p: SimpleNamespace(id=p.id, user_sub=p.user_sub),
     )
     host = TripMembership(trip_id=TRIP, sub=ME.sub, role=HOST)
     _run(member_service.remove_member(session, host, profile.id))
