@@ -33,3 +33,7 @@ class TripInvitation(Base):
     max_uses: Mapped[int]
     uses: Mapped[int] = mapped_column(default=0, server_default="0")
     revoked_at: Mapped[datetime | None]
+    # A named invitation: joining takes over this profile (without an account).
+    profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE")
+    )
