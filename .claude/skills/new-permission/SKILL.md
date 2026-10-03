@@ -43,6 +43,6 @@ fail when something is missing.
    Only leaves outside `admin.*`. `downgrade()` deletes the row. Superadmins
    (Auth0 `admin` claim) get every new node automatically; admin-only nodes
    need nothing else.
-5. Frontend: the node shows up in `GET /me` `access` and in
+5. Frontend: the node shows up in `GET /api/v1/me` `access` and in
    `GET /admin/permissions/features`; OpenAPI shows `x-required-permission`.
 6. Run `uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest`.

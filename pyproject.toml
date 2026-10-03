@@ -78,6 +78,10 @@ ignore = [
 "migrations/**/*.py" = [
     "implicit-namespace-package", # Alembic's script directory is not a Python package
 ]
+"deploy/admin/pgadmin/config_local.py" = [
+    "implicit-namespace-package", # pgAdmin config mounted into its container, not a package
+    "hardcoded-password-string",  # MASTER_PASSWORD_HOOK is a script path, not a password
+]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
