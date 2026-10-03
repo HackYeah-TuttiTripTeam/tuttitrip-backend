@@ -1,0 +1,38 @@
+name: Discord notify
+
+# Wysyła wynik każdego innego workflow tego repozytorium na Discord zespołu.
+# Logika, zasady szumu i opis są wspólne dla organizacji, w repozytorium
+# HackYeah-TuttiTripTeam/.github (workflow discord-notify.yml, CONTRIBUTING.md,
+# sekcja "Powiadomienia (Discord)"). Działa na runnerze GitHuba (ubuntu-latest),
+# nie pobiera kodu, a URL webhooka dostaje tylko z sekretu DISCORD_WEBHOOK_URL.
+#
+# workflow_run uruchamia się tylko z kopii tego pliku na gałęzi domyślnej (main).
+# Nowy workflow w repozytorium trzeba dopisać do listy niżej (pole name:).
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Cleanup branch deployments
+      - Delete merged branch
+      - Issue format
+      - PR format
+      - Release notes
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    uses: HackYeah-TuttiTripTeam/.github/.github/workflows/discord-notify.yml@main
+    with:
+      quiet-on-success: '["Cleanup branch deployments", "Delete merged branch", "Issue format", "PR format", "Release notes"]'
+      deploy-workflow: CI
+      deploy-urls: |
+        main: https://tuttitrip-api.gburek.app
+        develop: https://tuttitrip-api-develop.gburek.app
+        push: https://tuttitrip-api-{slug:49}.gburek.app
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
