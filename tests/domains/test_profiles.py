@@ -438,11 +438,15 @@ def test_member_gets_403_on_co_host_routes(
     assert client.request(method, url, json=body).status_code == 403
 
 
-@pytest.mark.parametrize("weight", ["NaN", "Infinity", 101])
-def test_nan_inf_and_huge_weights_are_rejected(
-    client: TestClient, weight: float | str
+@pytest.mark.parametrize("weight", ["NaN", "Infinity", -1])
+def test_nan_inf_and_negative_weights_give_422(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, weight: float | str
 ) -> None:
-    body = f'{{"weights": [{{"profile_id": "{uuid.uuid4()}", "weight": {weight}}}]}}'
+    people = [_profile("A", 40)]
+    monkeypatch.setattr(
+        profile_service.db, "select_profiles_by_trip", AsyncMock(return_value=people)
+    )
+    body = f'{{"weights": [{{"profile_id": "{people[0].id}", "weight": {weight}}}]}}'
     response = client.put(
         path("set_weights", trip_id=TRIP),
         content=body,

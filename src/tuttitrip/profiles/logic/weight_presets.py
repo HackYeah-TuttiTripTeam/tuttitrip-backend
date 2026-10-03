@@ -1,5 +1,6 @@
 """Weight presets and the weight-spread rule (section 2 of docs/algorytm.md)."""
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
@@ -39,8 +40,11 @@ def validate_weights(weights: Sequence[float]) -> None:
     if not weights:
         return
     low, high = min(weights), max(weights)
-    if low <= 0 or high / low > MAX_WEIGHT_RATIO:
-        msg = f"Weights must be positive with max/min <= {MAX_WEIGHT_RATIO:g}"
+    finite = all(math.isfinite(w) for w in weights)
+    if not finite or low <= 0 or high / low > MAX_WEIGHT_RATIO:
+        msg = (
+            f"Weights must be finite and positive with max/min <= {MAX_WEIGHT_RATIO:g}"
+        )
         raise WeightRatioError(msg)
 
 

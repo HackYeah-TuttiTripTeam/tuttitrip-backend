@@ -94,7 +94,9 @@ class WeightItem(BaseModel):
     """One person's weight."""
 
     profile_id: UUID
-    weight: float = Field(gt=0, le=100, allow_inf_nan=False)
+    # Unconstrained on purpose: a NaN input would crash FastAPI's 422 body.
+    # Positive, finite and the spread are checked in validate_weights.
+    weight: float
 
 
 class WeightsUpdate(BaseModel):
