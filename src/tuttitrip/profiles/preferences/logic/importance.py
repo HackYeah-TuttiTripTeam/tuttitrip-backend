@@ -1,4 +1,4 @@
-"""Default importance pool by age group and renormalisation to active domains.
+"""Default importance pool by age group.
 
 The pool is ten points over lodging, food, attractions, pace and cost. The
 defaults are a starting point (uncalibrated, like the rest of the spec's
@@ -36,25 +36,3 @@ def default_pool(group: AgeGroup) -> dict[ImportanceDomain, int]:
         Points per domain, adding up to 10.
     """
     return dict(DEFAULT_POOLS[group])
-
-
-def renormalize(
-    pool: dict[ImportanceDomain, int], active: frozenset[ImportanceDomain]
-) -> dict[ImportanceDomain, float]:
-    """Spread the pool over the active domains only (spec section 2).
-
-    Args:
-        pool: Points per domain.
-        active: Domains in play (``lodging`` only when the trip has stays).
-
-    Returns:
-        ``a_ij`` per active domain, summing to 1; an even split when every
-        active domain has 0 points.
-    """
-    kept = {d: p for d, p in pool.items() if d in active}
-    total = sum(kept.values())
-    if not kept:
-        return {}
-    if total == 0:
-        return {d: 1 / len(kept) for d in kept}
-    return {d: p / total for d, p in kept.items()}

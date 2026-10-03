@@ -22,10 +22,7 @@ from tuttitrip.profiles.logic.age_defaults import DEFAULTS, age_group_for
 from tuttitrip.profiles.models import Profile
 from tuttitrip.profiles.preferences import db
 from tuttitrip.profiles.preferences.logic.access import stairs_sensitivity
-from tuttitrip.profiles.preferences.logic.importance import (
-    default_pool,
-    renormalize,
-)
+from tuttitrip.profiles.preferences.logic.importance import default_pool
 from tuttitrip.profiles.preferences.models import ProfilePreferences
 from tuttitrip.profiles.preferences.schemas import (
     ImportanceDomain,
@@ -116,25 +113,6 @@ def test_pool_that_does_not_add_up_to_ten_is_rejected(body: dict[str, int]) -> N
 def test_pool_points_stay_within_zero_to_ten() -> None:
     with pytest.raises(ValidationError):
         ImportancePool.model_validate(POOL | {"pace": -1, "cost": 4})
-
-
-def test_renormalize_drops_inactive_domains_like_a_trip_without_stays() -> None:
-    pool = {ImportanceDomain(k): v for k, v in POOL.items()}
-    active = frozenset(set(ImportanceDomain) - {ImportanceDomain.LODGING})
-    result = renormalize(pool, active)
-    assert ImportanceDomain.LODGING not in result
-    assert sum(result.values()) == pytest.approx(1)
-    assert result[ImportanceDomain.ATTRACTIONS] == pytest.approx(3 / 8)
-
-
-def test_renormalize_splits_evenly_when_active_domains_have_no_points() -> None:
-    pool = {ImportanceDomain(k): 0 for k in POOL} | {ImportanceDomain.LODGING: 10}
-    active = frozenset({ImportanceDomain.FOOD, ImportanceDomain.COST})
-    assert renormalize(pool, active) == {
-        ImportanceDomain.FOOD: 0.5,
-        ImportanceDomain.COST: 0.5,
-    }
-    assert renormalize(pool, frozenset()) == {}
 
 
 def test_interests_use_the_places_taxonomy_and_stay_within_0_1() -> None:

@@ -1,6 +1,5 @@
 """Read and replace the preferences of people on a trip."""
 
-from dataclasses import asdict
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +28,12 @@ class ExamplePlaceNotFoundError(Exception):
     """An example place names a ``place_id`` that is not in the catalog."""
 
 
+def _default_pool(profile: Profile) -> ImportancePool:
+    return ImportancePool.model_validate(
+        {d.value: p for d, p in default_pool(profile.age_group).items()}
+    )
+
+
 def _read(profile: Profile, row: ProfilePreferences | None) -> PreferencesRead:
     """Preferences of a person; the age defaults while nothing is saved.
 
@@ -40,9 +45,7 @@ def _read(profile: Profile, row: ProfilePreferences | None) -> PreferencesRead:
         The DTO, with ``filled`` false for the defaults.
     """
     if row is None:
-        pool = ImportancePool.model_validate(
-            {d.value: p for d, p in default_pool(profile.age_group).items()}
-        )
+        pool = _default_pool(profile)
         return PreferencesRead(
             profile_id=profile.id,
             importance_pool=pool,
@@ -146,9 +149,7 @@ async def replace_preferences(
                 await place_service.get_place(session, example.place_id)
             except place_service.PlaceNotFoundError as exc:
                 raise ExamplePlaceNotFoundError(str(example.place_id)) from exc
-    pool = data.importance_pool or ImportancePool.model_validate(
-        {d.value: p for d, p in default_pool(profile.age_group).items()}
-    )
+    pool = data.importance_pool or _default_pool(profile)
     dumped = data.model_dump(mode="json", exclude={"importance_pool"})
     dumped["importance_pool"] = pool.model_dump()
     row = await db.select_preferences(session, profile_id)
@@ -166,7 +167,7 @@ async def replace_preferences(
     profile.stairs_sensitivity = stairs_sensitivity(
         blocked=data.constraints.stairs or data.constraints.wheelchair,
         current=profile.stairs_sensitivity,
-        age_default=asdict(DEFAULTS[profile.age_group])["stairs_sensitivity"],
+        age_default=DEFAULTS[profile.age_group].stairs_sensitivity,
     )
     await session.commit()
     await session.refresh(row)
