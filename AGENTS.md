@@ -563,7 +563,7 @@ Wydania:
 ## Git flow
 
 - `main` is production; `develop` is integration. Both change only through
-  PRs with green `checks` and `contracts-check`, with no force-push and no
+  PRs with green `lint`, `tests` and `contracts-check`, with no force-push and no
   deletion (0 required approvals: a 5-person, 24 h team, so CI is the gate).
   GitHub cannot enforce this for a private repo on the org's free plan
   (branch protection and rulesets both return 403), so it is a team rule
@@ -586,8 +586,12 @@ Wydania:
 ## Deployment
 
 `/api/v1/openapi.json` and `/api/v1/docs` are public on every deployment (the
-frontend generates its client from them). Every push runs CI (`checks` on the org runners `[self-hosted, hackathon]`),
-then `deploy` on the runner installed on the host (`[self-hosted, tuttitrip-deploy]`).
+frontend generates its client from them). Every push runs CI once (no `pull_request` run for the same commit): `lint` and
+`tests` in parallel on the org runners `[self-hosted, hackathon]`, `contracts-check`
+on a GitHub-hosted runner, then `deploy` on the runner installed on the host
+(`[self-hosted, tuttitrip-deploy]`). A branch preview deploys without waiting for
+the checks; `main` and `develop` wait for `lint` and `tests`. A newer push cancels
+the unfinished checks of the same branch, never a deployment.
 
 | Branch | URL | Database |
 | --- | --- | --- |

@@ -1,27 +1,37 @@
 name: CI
 
+# One run per commit: every branch is built on push (the branch deployment
+# needs the push event anyway), so there is no pull_request trigger.
+#   lint, tests    parallel, on the org runners; a newer push to the same branch
+#                  cancels them (never on main/develop).
+#   contracts-check  8 s of curl + diff, so it runs on a GitHub-hosted runner
+#                  instead of waiting in the queue for a hackathon runner.
+#   deploy         main/develop wait for lint + tests; any other branch deploys
+#                  its preview at once (it does not wait for the queue). Deploys
+#                  are never cancelled mid-way, they run one after another per branch.
 on:
   push:
     branches: ["**"]
-  pull_request:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+# uv keeps its package cache in ~/.cache/uv, which stays on the self-hosted
+# runners between runs, so the GitHub cache upload/download step is off.
 
 jobs:
-  checks:
-    name: checks
+  lint:
+    name: lint
     runs-on: [self-hosted, hackathon]
-    timeout-minutes: 15
+    timeout-minutes: 10
+    concurrency:
+      group: ci-lint-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          enable-cache: true
+          enable-cache: false
       - name: Install
         run: uv sync --locked
       - name: Ruff lint
@@ -30,32 +40,55 @@ jobs:
         run: uv run ruff format --check .
       - name: Types (ty)
         run: uv run ty check
-      - name: Tests
+
+  tests:
+    name: tests
+    runs-on: [self-hosted, hackathon]
+    timeout-minutes: 15
+    concurrency:
+      group: ci-tests-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+      - name: Install
+        run: uv sync --locked
+      - name: Tests (including architecture tests)
         run: uv run pytest
 
   contracts-check:
     name: contracts-check
-    runs-on: [self-hosted, hackathon]
+    # GitHub-hosted: this repository is private, so the run draws on the org's
+    # included minutes (about one billed minute per push).
+    runs-on: ubuntu-latest
     timeout-minutes: 5
+    concurrency:
+      group: ci-contracts-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
     env:
       # Fine-grained PAT (or GitHub App token) with Contents: read on
       # HackYeah-TuttiTripTeam/tuttitrip-worker. GITHUB_TOKEN cannot read
       # another private repository.
       GH_TOKEN: ${{ secrets.WORKER_REPO_TOKEN }}
-      BRANCH: ${{ github.head_ref || github.ref_name }}
+      BRANCH: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Compare contracts/jobs.schema.json with tuttitrip-worker
         run: deploy/check-contract.sh
 
-  deploy:
+  # Branch previews: no `needs`, so the deployment is not held back by the queue.
+  deploy-preview:
     name: deploy
-    needs: [checks, contracts-check]
-    if: github.event_name == 'push'
+    if: github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main'
     # Runner installed on the deploy host itself (dellpromaxgb10).
     runs-on: [self-hosted, tuttitrip-deploy]
     timeout-minutes: 20
-    env:
+    concurrency:
+      group: deploy-${{ github.ref }}
+      cancel-in-progress: false
+    env: &deploy-env
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_TUNNEL_ID: ${{ vars.CLOUDFLARE_TUNNEL_ID }}
@@ -64,7 +97,7 @@ jobs:
       TUTTITRIP_AUTH0__AUDIENCE: ${{ vars.AUTH0_AUDIENCE }}
       TUTTITRIP_CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
       TUTTITRIP_CORS_ORIGIN_REGEX: ${{ vars.CORS_ORIGIN_REGEX }}
-    steps:
+    steps: &deploy-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Deploy and clean up stale branches
         run: deploy/deploy.sh "${GITHUB_REF_NAME}" "${GITHUB_SHA}"
@@ -77,3 +110,17 @@ jobs:
             sleep 5
           done
           echo "::error::$url did not become healthy"; exit 1
+
+  # main and develop only go out after lint and tests are green. contracts-check
+  # is not a dependency of a deployment: it reports drift on its own.
+  deploy:
+    name: deploy
+    needs: [lint, tests]
+    if: github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, tuttitrip-deploy]
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-${{ github.ref }}
+      cancel-in-progress: false
+    env: *deploy-env
+    steps: *deploy-steps
