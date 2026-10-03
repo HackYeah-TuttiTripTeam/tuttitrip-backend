@@ -1,0 +1,21 @@
+name: Delete merged branch
+
+# Po merge'u PR usuwa jego gałąź i uruchamia cleanup.yml, który kasuje
+# wdrożenie gałęzi (usunięcie gałęzi przez GITHUB_TOKEN nie wywołuje zdarzenia delete).
+# main i develop nie są nigdy usuwane. Logika jest wspólna, w repozytorium
+# HackYeah-TuttiTripTeam/.github (workflow delete-merged-branch.yml).
+# Działa na runnerze GitHuba (ubuntu-latest) i nie pobiera kodu.
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: read
+  actions: write
+
+jobs:
+  delete:
+    uses: HackYeah-TuttiTripTeam/.github/.github/workflows/delete-merged-branch.yml@main
+    with:
+      cleanup-workflow: cleanup.yml

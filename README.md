@@ -241,7 +241,14 @@ i w plikach `~/tuttitrip/*.env` na serwerze, nigdy w repozytorium.
   albo `chore/<nazwa>` i otwierasz PR do `develop`. Każda gałąź dostaje własny
   podgląd pod `https://tuttitrip-api-<slug>.gburek.app`.
 - Wydanie to PR z `develop` do `main`.
-- Po scaleniu PR usuń gałąź (GitHub proponuje to pod przyciskiem merge), a jej
-  wdrożenie zniknie razem z nią. Automatyczne usuwanie gałęzi jest wyłączone,
-  bo bez ochrony gałęzi GitHub skasowałby też `develop` po scaleniu PR wydania
-  (`develop` -> `main`).
+- Tytuły zgłoszeń zaczynają się od `feat:`, `docs:`, `chore:` albo `bug:`,
+  a tytuły PR od `feat:`, `docs:`, `chore:` albo `bugfix:` (wydanie:
+  `release:`). Opisy piszemy po polsku według formularza i szablonu PR. PR do
+  `develop` mergujemy przez "Squash and merge", wydanie przez "Create a merge
+  commit". Notatki wydań tworzy Release Drafter w GitHub Releases. Pełne
+  zasady: [CONTRIBUTING.md](https://github.com/HackYeah-TuttiTripTeam/.github/blob/main/CONTRIBUTING.md).
+- Po scaleniu PR gałąź usuwa workflow `Delete merged branch` i uruchamia
+  sprzątanie, więc jej wdrożenie znika razem z nią. `main` i `develop` nie są
+  nigdy usuwane, dlatego PR wydania idzie prosto z `develop`. Automatyczne
+  usuwanie gałęzi w ustawieniach GitHuba jest wyłączone, bo bez ochrony gałęzi
+  skasowałoby też `develop` po scaleniu PR wydania (`develop` -> `main`).
