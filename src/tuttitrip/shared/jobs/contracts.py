@@ -126,15 +126,21 @@ def city_slug(name: str) -> str:
         name: Free-text city name, e.g. ``"Gdańsk, Polska"``.
 
     Returns:
-        Lowercase ASCII words joined by ``-`` (``"gdansk-polska"``); empty when
-        the name has no letters or digits.
+        Lowercase ASCII words joined by ``-`` (``"gdansk-polska"``).
+
+    Raises:
+        ValueError: The name has no Latin letters or digits (no valid slug).
     """
     ascii_name = (
         unicodedata.normalize("NFKD", name.translate(_NON_ASCII_LETTERS))
         .encode("ascii", "ignore")
         .decode()
     )
-    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")
+    if not slug:
+        msg = f"no slug can be built from {name!r}"
+        raise ValueError(msg)
+    return slug
 
 
 # --- parse_pasted_plan -------------------------------------------------------------

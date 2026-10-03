@@ -277,6 +277,11 @@ def test_city_slug_follows_the_worker_rule(name: str, slug: str) -> None:
     assert re.fullmatch(contracts.SLUG_PATTERN, slug)
 
 
+def test_city_slug_refuses_a_name_without_latin_characters() -> None:
+    with pytest.raises(ValueError, match="no slug"):
+        contracts.city_slug("Москва")
+
+
 class _WorkerError(Exception):
     """Stands in for DBOS's ``PortableWorkflowError`` (message and ``code``)."""
 
