@@ -222,10 +222,11 @@ Szczegóły i konwencje dla zespołu i agentów są w [AGENTS.md](AGENTS.md).
 
 ## Wdrożenie
 
-Każdy push uruchamia CI (`checks`: ruff, ty, pytest) na runnerach organizacji
-`[self-hosted, hackathon]`. Jeśli CI przejdzie, job `deploy` buduje obraz Dockera
-i wdraża go na serwer `dellpromaxgb10`, na którym działa osobny runner
-`tuttitrip-deploy`.
+Każdy push uruchamia CI raz: `lint` (ruff, ty) i `tests` (pytest) równolegle na
+runnerach organizacji `[self-hosted, hackathon]`, `contracts-check` też na tych runnerach. Job `deploy` buduje obraz Dockera i wdraża go na serwer
+`dellpromaxgb10`, na którym działa osobny runner `tuttitrip-deploy`. Podgląd
+gałęzi wdraża się od razu, `main` i `develop` czekają na zielone `lint` i
+`tests`. Nowy push do tej samej gałęzi anuluje niedokończone testy poprzedniego.
 
 | Gałąź | Adres | Baza danych |
 | --- | --- | --- |
@@ -255,7 +256,7 @@ i w plikach `~/tuttitrip/*.env` na serwerze, nigdy w repozytorium.
 ## Git flow
 
 - `main` to produkcja, `develop` to gałąź integracyjna. Zmiany wchodzą do nich
-  tylko przez PR z zielonymi jobami `checks` i `contracts-check`, bez
+  tylko przez PR z zielonymi jobami `lint`, `tests` i `contracts-check`, bez
   force-pusha i bez usuwania gałęzi. Nie wymagamy zatwierdzeń (0 approvals),
   bo w 5 osób na 24 godziny bramką jest CI.
 - GitHub nie pozwala wymusić tych reguł w prywatnym repozytorium organizacji

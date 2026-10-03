@@ -448,10 +448,16 @@ innym w drogę i żeby każda funkcja przeszła ten sam proces. Dotyczą też lu
      i uruchom `uv run alembic heads`,
    - `shared/config/settings.py` razem z `.env.example`,
    - `shared/jobs/contracts.py` i `contracts/jobs.schema.json` (najpierw worker, skill `sync-contracts`).
-6. Smoke test jest obowiązkowy dla KAŻDEGO zrealizowanego feature'a. Po pushu gałęzi poczekaj na
-   wdrożenie podglądu i przejdź na żywo scenariusz z kryteriów akceptacji issue:
-   - każdy push gałęzi wdraża API pod `https://tuttitrip-api-<slug>.gburek.app/api/v1/...`
-     (Swagger: `/api/v1/docs`); wołaj endpointy z tokenem konta testowego i sprawdź `/api/v1/health`,
+6. Smoke test jest obowiązkowy dla KAŻDEGO zrealizowanego feature'a. Podglądy gałęzi są domyślnie wyłączone (zmienna organizacji `PREVIEW_DEPLOYS=false`, oszczędzamy
+   moc obliczeniową): develop i main wdrażają się zawsze, gałąź tylko z etykietą `preview` na PR (albo gdy
+   zmienna ma wartość `true`). Użyj etykiety wyłącznie, gdy żywy podgląd jest niezbędny; w pozostałych
+   przypadkach smoke test robisz lokalnie, a po merge'u sprawdzasz develop. Pominięty podgląd zostawia
+   w podsumowaniu joba jedną linię "Preview disabled (PREVIEW_DEPLOYS=false); add label `preview` to deploy".
+   Przejdź scenariusz z kryteriów akceptacji issue:
+   - lokalnie: lokalny stos (`docker compose`, albo `uv run` na lokalnym PostgreSQL; README), Swagger pod
+     `/api/v1/docs`, endpointy z tokenem konta testowego i `/api/v1/health`; po merge'u to samo na API develop,
+   - tylko gdy podgląd jest niezbędny: etykieta `preview` na PR wdraża API pod
+     `https://tuttitrip-api-<slug>.gburek.app/api/v1/...`,
    - dla endpointów z uprawnieniami sprawdź też 401 bez tokenu, 403 bez uprawnienia i 404 dla cudzej
      podróży.
    Wynik (kroki, odpowiedzi albo zrzuty ekranu) wpisz w komentarzu w issue. Bez zielonego smoke testu
@@ -570,7 +576,7 @@ Wydania:
 ## Git flow
 
 - `main` is production; `develop` is integration. Both change only through
-  PRs with green `checks` and `contracts-check`, with no force-push and no
+  PRs with green `lint`, `tests` and `contracts-check`, with no force-push and no
   deletion (0 required approvals: a 5-person, 24 h team, so CI is the gate).
   GitHub cannot enforce this for a private repo on the org's free plan
   (branch protection and rulesets both return 403), so it is a team rule
@@ -593,8 +599,13 @@ Wydania:
 ## Deployment
 
 `/api/v1/openapi.json` and `/api/v1/docs` are public on every deployment (the
-frontend generates its client from them). Every push runs CI (`checks` on the org runners `[self-hosted, hackathon]`),
-then `deploy` on the runner installed on the host (`[self-hosted, tuttitrip-deploy]`).
+frontend generates its client from them). Every push runs CI once (checks run on push only): `lint` and
+`tests` and `contracts-check` in parallel on the org runners `[self-hosted, hackathon]`,
+then `deploy` on the runner installed on the host
+(`[self-hosted, tuttitrip-deploy]`). A branch preview deploys only when the org variable `PREVIEW_DEPLOYS` is `true`
+or the PR has the label `preview` (the `preview-gate` job decides and writes a
+summary line when it is off), without waiting for the checks; `main` and `develop` wait for `lint` and `tests`. A newer push cancels
+the unfinished checks of the same branch, never a deployment.
 
 | Branch | URL | Database |
 | --- | --- | --- |
