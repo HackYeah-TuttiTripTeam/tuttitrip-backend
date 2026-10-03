@@ -120,7 +120,11 @@ class SearchLinkRead(BaseModel):
 
 
 class NightlyPrice(BaseModel):
-    """Price per night used as the upper filter, and where it came from."""
+    """Upper price filter per night and where it came from.
+
+    Not a lodging price or an accommodation budget: it is the group's whole
+    daily budget used as a ceiling. Label it "group daily limit" in the UI.
+    """
 
     amount: int = Field(description="Whole units of `currency`, rounded down.")
     currency: str = Field(description="ISO 4217.")
@@ -128,7 +132,8 @@ class NightlyPrice(BaseModel):
         description=(
             "`budget_day_max`: the trip's daily limit. "
             "`budget_total_max_per_night`: the total limit divided by the nights. "
-            "Both cover the whole group's spending, so this is only a ceiling."
+            "Both are the group's whole budget for everything, used only as a "
+            "ceiling for the search, never as the price of a night."
         )
     )
 
@@ -143,7 +148,10 @@ class SearchLinksRead(BaseModel):
     child_ages: list[int] = Field(description="Ages of the people under 18.")
     area: str | None = Field(description="City or destination; null when unknown.")
     price_per_night: NightlyPrice | None = Field(
-        description="Null when the trip has no budget or no currency is known."
+        description=(
+            "Group daily limit used as a search ceiling (not a night price); "
+            "null when the trip has no budget or no currency is known."
+        )
     )
     platforms_restricted: bool = Field(
         description="True when a hard platform requirement removed some platforms."
@@ -164,7 +172,6 @@ class SearchOpeningRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    trip_id: UUID
     platform: Platform
     url: str
     params: list[SearchLinkParam]

@@ -58,9 +58,9 @@ class RequirementsVersion(Base):
 
 
 class SearchOpening(Base):
-    """A host approved opening a platform search (append-only, no UPDATE).
+    """A host approved opening a platform search.
 
-    A DELETE is allowed only so a deleted trip takes its rows along (cascade).
+    Append-only by API convention: no endpoint updates or deletes a row.
     """
 
     __tablename__ = "accommodation_search_openings"

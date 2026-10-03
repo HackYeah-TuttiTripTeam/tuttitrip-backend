@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tuttitrip.accommodation import db
 from tuttitrip.accommodation.logic.keys import Platform, RequirementKind
 from tuttitrip.accommodation.logic.search_links import (
-    LinkParam,
     SearchInput,
     build_links,
     nightly_cap,
@@ -35,10 +34,6 @@ class SearchLinksUnavailableError(Exception):
 
 class PlatformNotAllowedError(Exception):
     """The platform is not among the links the trip currently offers."""
-
-
-def _param(param: LinkParam) -> SearchLinkParam:
-    return SearchLinkParam(name=param.name, value=param.value, official=param.official)
 
 
 def _allowed_platforms(
@@ -129,7 +124,10 @@ async def get_search_links(
                 platform=link.platform,
                 url=link.url,
                 fallback_url=link.fallback_url,
-                params=[_param(p) for p in link.params],
+                params=[
+                    SearchLinkParam.model_validate(p, from_attributes=True)
+                    for p in link.params
+                ],
             )
             for link in build_links(search, platforms)
         ],

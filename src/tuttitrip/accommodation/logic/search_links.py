@@ -51,6 +51,7 @@ class SearchInput:
     check_in: date
     check_out: date
     ages: tuple[int, ...]
+    # Follow-up (#70): use the accommodation base instead of city or destination.
     area: str | None = None
     max_price_per_night: int | None = None
     currency: str | None = None
@@ -111,9 +112,10 @@ def nightly_cap(
         The amount and its basis (``budget_day_max`` or
         ``budget_total_max_per_night``), or ``(None, None)`` without a budget.
     """
-    if day_max is not None:
+    # B_max (the flex margin of E6) is deliberately ignored: the ceiling is B_do.
+    if day_max is not None and day_max > 0:
         return int(day_max.to_integral_value(ROUND_FLOOR)), "budget_day_max"
-    if total_max is not None:
+    if total_max is not None and total_max > 0 and nights > 0:
         per_night = (total_max / nights).to_integral_value(ROUND_FLOOR)
         return int(per_night), "budget_total_max_per_night"
     return None, None
@@ -135,7 +137,7 @@ def _booking(search: SearchInput) -> SearchLink:
         params.extend(
             LinkParam("age", str(a), official=False) for a in search.child_ages
         )
-    if search.max_price_per_night and search.currency:
+    if search.max_price_per_night is not None and search.currency:
         currency = search.currency
         params.append(LinkParam("selected_currency", currency, official=False))
         price = f"price={currency}-min-{search.max_price_per_night}-1"
@@ -161,7 +163,8 @@ def _airbnb(search: SearchInput) -> SearchLink:
         params.append(LinkParam("children", str(children), official=False))
     if infants:
         params.append(LinkParam("infants", str(infants), official=False))
-    if search.max_price_per_night and search.currency:
+    if search.max_price_per_night is not None and search.currency:
+        # Unofficial: for some users Airbnb reads price_max as the whole stay.
         params += [
             LinkParam("price_max", str(search.max_price_per_night), official=False),
             LinkParam("currency", search.currency, official=False),
