@@ -112,10 +112,9 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   FastAPI 0.142 includes routers lazily, so `app.routes` alone does not list them.
 - The deployed frontends call the API same-origin through their Worker proxy
   (`https://tuttitrip[-develop].gburek.app/api/...`), so a browser never needs CORS
-  there; CORS still matters for local and direct cross-origin use.
-- Rollout (temporary): the routers are also mounted unversioned, hidden from
-  OpenAPI and tagged `legacy-unversioned`, until the frontend proxy is on main.
-  Then remove that block from `create_app()` and the allowance in the test.
+  there; CORS still matters for direct cross-origin use. It allows no
+  credentials (the API takes bearer tokens, never cookies).
+- Old unversioned paths (`/health`, `/openapi.json`, `/docs`, `/trips`...) answer 404.
 
 ## Conventions
 
@@ -257,15 +256,15 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 ```
 
 - Bez tokenu 401, bez uprawnienia 403 `Missing permission trips.core:READ`.
-- `public()` (bez logowania) tylko dla `/health`, `/health/live` i smoke
-  testu `/jobs/ping*`. Lista jest w `tests/architecture/test_permissions.py`;
-  `/docs`, `/openapi.json` i `/redoc` są publiczne z definicji.
+- `public()` (bez logowania) tylko dla `/api/v1/health`, `/api/v1/health/live` i smoke
+  testu `/api/v1/jobs/ping*`. Lista jest w `tests/architecture/test_permissions.py`;
+  `/api/v1/docs`, `/api/v1/openapi.json` i `/api/v1/redoc` są publiczne z definicji.
 - `tests/architecture/test_permissions.py` przechodzi po `create_app().routes`
   (z zależnościami routerów) i nie przepuści trasy bez znacznika, z dwoma
   znacznikami, z grupą zamiast liścia ani ze stringiem zamiast `Feature.X`.
 - OpenAPI dostaje `x-required-permission: "trips.core:READ"` (albo
   `x-public: true`), linijkę „Wymagane uprawnienie” w opisie i odpowiedzi
-  401/403, więc widać to w `/docs` i w kliencie TS.
+  401/403, więc widać to w `/api/v1/docs` i w kliencie TS.
 - Gdy decyzja zależy od uprawnienia w środku logiki, `api.py` wstrzykuje
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
   `permissions.allows(Feature.X, Access.WRITE)`.

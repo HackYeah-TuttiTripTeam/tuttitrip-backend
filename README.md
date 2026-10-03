@@ -118,7 +118,7 @@ jako workflowy DBOS. Backend tylko dodaje zadania do kolejki i odczytuje ich
 stan przez `DBOSClient` (`src/tuttitrip/shared/jobs/`), a sam żadnych workflowów
 nie uruchamia.
 
-- `POST /planning/jobs` zleca wygenerowanie planu i zwraca `workflow_id`.
+- `POST /api/v1/planning/jobs` zleca wygenerowanie planu i zwraca `workflow_id`.
   Stan, wynik, błąd i postęp zwraca `GET /api/v1/jobs/{id}`, a `POST /api/v1/jobs/{id}/cancel` anuluje zadanie.
 - Kontrakt (nazwy workflowów i kolejek, payloady, `CONTRACT_VERSION`) jest
   w repozytorium workera. Tutaj trzymamy jego kopię w `shared/jobs/contracts.py`
@@ -152,13 +152,13 @@ Dalej ścieżki podajemy bez prefiksu `/api/v1`.
 - Rola `user` ma każdy zalogowany. Superadmini (claim Auth0 `admin`) mają
   `*:WRITE`, czyli wszystko. Pozostałe role i uprawnienia nadaje się przez
   `/admin/permissions/...`, a każda zmiana trafia do dziennika.
-- `GET /me` zwraca `access`, płaską mapę funkcjonalność → poziom (np.
+- `GET /api/v1/me` zwraca `access`, płaską mapę funkcjonalność → poziom (np.
   `{"trips.core": "WRITE", "search": "READ"}`). Frontend ukrywa na jej
   podstawie niedostępne elementy.
 - Uprawnienia do funkcjonalności są globalne. To, czy możesz zmienić *ten*
   wyjazd, zależy od twojej roli na nim (`host`, `co_host`, `member`;
   `my_role` w `TripRead`). Spoza wyjazdu dostajesz 404.
-- Wymagane uprawnienie widać w `/docs` i w `x-required-permission` w schemacie.
+- Wymagane uprawnienie widać w `/api/v1/docs` i w `x-required-permission` w schemacie.
 
 Szczegóły (dodawanie funkcjonalności, ochrona endpointu, role) są w
 [AGENTS.md](AGENTS.md#uprawnienia).

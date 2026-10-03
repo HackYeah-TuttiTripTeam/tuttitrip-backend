@@ -31,10 +31,6 @@ from tuttitrip.trips.api import router as trips_router
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
-# Rollout of API_PREFIX: the routers are also served unversioned, hidden from
-# OpenAPI, until the deployed frontends call /api/v1. TODO: remove after the
-# frontend release (with the allowance in tests/architecture/test_routes.py).
-LEGACY_UNVERSIONED_TAG = "legacy-unversioned"
 
 # Every `api.py` router must be listed here (a test checks it).
 ROUTERS: tuple[APIRouter, ...] = (
@@ -93,7 +89,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_origin_regex=settings.cors_origin_regex or None,
-        allow_credentials=True,
+        # Bearer tokens only: the API reads no cookies, so no credentialed CORS.
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -101,10 +98,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     for router in ROUTERS:
         api.include_router(router)
     app.include_router(api)
-    for router in ROUTERS:
-        app.include_router(
-            router, include_in_schema=False, tags=[LEGACY_UNVERSIONED_TAG]
-        )
     document_permissions(app)
     return app
 

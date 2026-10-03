@@ -6,19 +6,13 @@ or a FastAPI default (``/docs``, ``/openapi.json``) back at the root, fails here
 Other route-level tests (e.g. permission coverage) should iterate the same way.
 """
 
-from fastapi.routing import RouteContext, iter_route_contexts
+from fastapi.routing import iter_route_contexts
+from fastapi.testclient import TestClient
 
-from tuttitrip.main import API_PREFIX, LEGACY_UNVERSIONED_TAG, create_app
+from tuttitrip.main import API_PREFIX, create_app
 
 # Unversioned paths that are allowed on purpose (none: the API is all versioned).
 ALLOWED_UNVERSIONED = frozenset[str]()
-
-
-def _is_legacy_alias(route: RouteContext) -> bool:
-    # Temporary rollout aliases: hidden from OpenAPI and tagged in main.py.
-    return not getattr(
-        route, "include_in_schema", True
-    ) and LEGACY_UNVERSIONED_TAG in getattr(route, "tags", [])
 
 
 def test_prefix_is_versioned() -> None:
@@ -34,7 +28,6 @@ def test_every_route_is_under_the_versioned_prefix() -> None:
         for route in routes
         if not (route.path or "").startswith(f"{API_PREFIX}/")
         and route.path not in ALLOWED_UNVERSIONED
-        and not _is_legacy_alias(route)
     )
     assert unversioned == []
 
@@ -50,3 +43,9 @@ def test_openapi_lists_only_versioned_paths() -> None:
     paths = create_app().openapi()["paths"]
     assert paths
     assert [p for p in paths if not p.startswith(f"{API_PREFIX}/")] == []
+
+
+def test_old_unversioned_paths_are_gone() -> None:
+    with TestClient(create_app()) as client:
+        for path in ("/health/live", "/openapi.json", "/docs", "/"):
+            assert client.get(path).status_code == 404, path

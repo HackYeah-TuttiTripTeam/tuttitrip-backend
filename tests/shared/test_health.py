@@ -95,6 +95,8 @@ BLOCKED_ORIGINS = [
 def test_cors_allows_our_frontends(client: TestClient, origin: str) -> None:
     response = client.get("/api/v1/health/live", headers={"Origin": origin})
     assert response.headers.get("access-control-allow-origin") == origin
+    # Bearer tokens only, so no credentialed CORS.
+    assert "access-control-allow-credentials" not in response.headers
 
 
 @pytest.mark.parametrize("origin", BLOCKED_ORIGINS)
