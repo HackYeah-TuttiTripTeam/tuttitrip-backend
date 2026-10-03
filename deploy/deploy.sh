@@ -6,7 +6,7 @@
 #      CLOUDFLARE_ZONE_ID (optional), TUTTITRIP_AUTH0__DOMAIN/AUDIENCE and
 #      TUTTITRIP_CORS_ORIGINS/_ORIGIN_REGEX (optional; app defaults otherwise).
 # Host files (never committed), under $TT_STATE_DIR (~/tuttitrip):
-#      deploy.env  POSTGRES_PASSWORD (generated on first run)
+#      deploy.env  POSTGRES_PASSWORD, WORKER_DB_PASSWORD, DEMO_RESET_SECRET (generated on first run)
 #      app.env     optional extra app env for every branch (e.g. OPENAI_API_KEY)
 #      admin.env   admin tools (deploy/admin/setup.sh, run after a main deploy)
 set -euo pipefail
@@ -37,7 +37,7 @@ flock 9  # one deploy/cleanup at a time on this host
 gen_password() { head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32; }
 umask 077
 touch "$TT_STATE_DIR/deploy.env"
-for var in POSTGRES_PASSWORD WORKER_DB_PASSWORD; do
+for var in POSTGRES_PASSWORD WORKER_DB_PASSWORD DEMO_RESET_SECRET; do
   if ! grep -q "^$var=" "$TT_STATE_DIR/deploy.env"; then
     printf '%s=%s\n' "$var" "$(gen_password)" >>"$TT_STATE_DIR/deploy.env"
     tt_log "generated $var in $TT_STATE_DIR/deploy.env"
@@ -104,6 +104,7 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'TUTTITRIP_DATABASE__USER=tuttitrip\nTUTTITRIP_DATABASE__PASSWORD=%s\n' "$POSTGRES_PASSWORD"
   printf 'TUTTITRIP_DATABASE__NAME=%s\n' "$database"
   printf 'TUTTITRIP_DBOS__APPLICATION_VERSION=%s\n' "$env"
+  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$DEMO_RESET_SECRET"
   for var in TUTTITRIP_AUTH0__DOMAIN TUTTITRIP_AUTH0__AUDIENCE TUTTITRIP_CORS_ORIGINS \
     TUTTITRIP_CORS_ORIGIN_REGEX; do
     if [ -n "${!var:-}" ]; then printf '%s=%s\n' "$var" "${!var}"; fi
@@ -120,6 +121,7 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'DBOS_SYSTEM_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
   printf 'TUTTITRIP_WORKER_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
   printf 'DBOS__APPVERSION=%s\n' "$env"
+  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$DEMO_RESET_SECRET"
   if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
 } >"$workerenv"
 

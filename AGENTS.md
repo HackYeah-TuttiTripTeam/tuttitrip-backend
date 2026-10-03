@@ -466,7 +466,16 @@ adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login
   tylko savepointy, więc błąd w połowie cofa wszystko i poprzednie dane zostają.
   Jest idempotentny; `deploy/deploy.sh` uruchamia go po wdrożeniu i włączeniu routingu
   (`timeout 120`, log w `~/tuttitrip/demo-seed-<env>.log`, błąd nie psuje wdrożenia), a
-  codzienny reset robi harmonogram workera (osobne issue).
+  codzienny reset robi harmonogram workera (tuttitrip-worker#37), który woła wewnętrzny
+  `POST /api/v1/internal/demo/reset` z tym samym kodem (`demo/services/reset_service.py`).
+- Endpoint wewnętrzny: `public()` (na liście `PUBLIC_ENDPOINTS` jako `reset_demo`), poza
+  OpenAPI, chroniony sekretem `Authorization: Bearer $TUTTITRIP_DEMO__RESET_SECRET`; zły,
+  brakujący i nieustawiony sekret to to samo `404`. Gdy demo jest wyłączone (pusty
+  `TOKEN_SHA256`), odpowiada `{"status": "disabled"}` i niczego nie rusza. Gateway
+  (`deploy/gateway/nginx.conf`) zwraca `404` dla `/api/v1/internal/`, a worker woła
+  kontener API bezpośrednio w sieci Docker (`http://tuttitrip-api[-<env>]:8000`).
+  `deploy.sh` generuje sekret raz (`DEMO_RESET_SECRET` w `~/tuttitrip/deploy.env`) i
+  zapisuje go do obu plików env (API i workera); wpis w `app.env` ma pierwszeństwo.
 - Wszyscy jurorzy dzielą jedno konto: zmiany jednego widzą inni do następnego resetu.
 
 ## Design system

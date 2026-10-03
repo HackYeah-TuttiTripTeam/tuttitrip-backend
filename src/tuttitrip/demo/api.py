@@ -15,14 +15,19 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from tuttitrip.demo.logic.rate_limit import RateLimiter
-from tuttitrip.demo.logic.token import token_matches
-from tuttitrip.demo.schemas import DemoSession
-from tuttitrip.demo.services import auth0_login
+from tuttitrip.demo.logic.token import secret_matches, token_matches
+from tuttitrip.demo.schemas import DemoResetResult, DemoSession
+from tuttitrip.demo.services import auth0_login, reset_service
 from tuttitrip.demo.services.auth0_login import DemoLoginError
 from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.permissions.api import public
 
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[public()])
+# Not reachable from outside: the gateway answers 404 for /api/v1/internal/ and
+# the worker calls the API container directly on the Docker network.
+internal_router = APIRouter(
+    prefix="/internal/demo", tags=["internal"], dependencies=[public()]
+)
 log = logging.getLogger(__name__)
 
 NO_STORE = {"Cache-Control": "no-store"}
@@ -150,3 +155,50 @@ async def demo_login(
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Demo login unavailable", headers=NO_STORE
         ) from None
+
+
+def _bearer(request: Request) -> str:
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    return value if scheme.lower() == "bearer" else ""
+
+
+@internal_router.post("/reset", include_in_schema=False)
+async def reset_demo(
+    request: Request,
+    response: Response,
+    new_client: Annotated[Callable[[], httpx.AsyncClient], Depends(get_client_factory)],
+) -> DemoResetResult:
+    """Reset the demo account's data (called by the worker's daily schedule).
+
+    Guarded by the shared bearer secret ``TUTTITRIP_DEMO__RESET_SECRET``; a
+    missing or wrong secret and an unset one are the same 404. The reset is
+    the deploy command's: atomic, idempotent, serialized by an advisory lock.
+
+    Args:
+        request: The raw request (for the bearer secret).
+        response: Used to forbid caching.
+        new_client: Opens the HTTP client for Auth0.
+
+    Returns:
+        ``reset`` with the number of trips, or ``disabled`` when the demo is off.
+
+    Raises:
+        HTTPException: 404 for a wrong, missing or unconfigured secret, 502 when
+            Auth0 fails.
+    """
+    response.headers["Cache-Control"] = NO_STORE["Cache-Control"]
+    settings = get_settings()
+    if not secret_matches(
+        _bearer(request), settings.demo.reset_secret.get_secret_value()
+    ):
+        raise _not_found()
+    try:
+        trips = await reset_service.reset_demo(settings, new_client)
+    except DemoLoginError as exc:
+        log.warning("Demo reset failed: reason=%s", exc.reason)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Demo login unavailable", headers=NO_STORE
+        ) from None
+    if trips is None:
+        return DemoResetResult(status="disabled")
+    return DemoResetResult(status="reset", trips=trips)

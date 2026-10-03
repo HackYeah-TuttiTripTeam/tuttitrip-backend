@@ -100,6 +100,10 @@ class DemoSettings(BaseModel):
     offline_access: bool = False
     # Requests per minute from one IP (all outcomes count).
     rate_limit_per_minute: int = Field(default=10, ge=1)
+    # Shared secret of the internal reset endpoint the worker's daily schedule
+    # calls (the deploy generates it into the API and worker env files).
+    # Empty = that endpoint is off (404).
+    reset_secret: SecretStr = SecretStr("")
 
     @field_validator("token_sha256")
     @classmethod
