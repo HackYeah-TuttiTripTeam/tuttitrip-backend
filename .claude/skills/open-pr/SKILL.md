@@ -33,5 +33,8 @@ description: Create a correctly named branch, run local checks and open a pull r
    - [ ] `.env.example` zaktualizowany (jeśli zmieniły się Settings)
    MD
    ```
-5. Wait for the `checks` job (and `deploy` for the preview) to go green:
-   `gh pr checks --watch`.
+5. Wait for `checks`, `contracts-check` (and `deploy` for the preview) to go
+   green: `gh pr checks --watch`.
+6. After merging, delete the feature branch (`gh pr merge --merge --delete-branch`
+   for feature PRs). Never pass `--delete-branch` for a release PR
+   `develop` -> `main`.

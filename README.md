@@ -241,4 +241,7 @@ i w plikach `~/tuttitrip/*.env` na serwerze, nigdy w repozytorium.
   albo `chore/<nazwa>` i otwierasz PR do `develop`. Każda gałąź dostaje własny
   podgląd pod `https://tuttitrip-api-<slug>.gburek.app`.
 - Wydanie to PR z `develop` do `main`.
-- Gałęzie po scaleniu usuwają się same, a ich wdrożenie znika razem z nimi.
+- Po scaleniu PR usuń gałąź (GitHub proponuje to pod przyciskiem merge), a jej
+  wdrożenie zniknie razem z nią. Automatyczne usuwanie gałęzi jest wyłączone,
+  bo bez ochrony gałęzi GitHub skasowałby też `develop` po scaleniu PR wydania
+  (`develop` -> `main`).
