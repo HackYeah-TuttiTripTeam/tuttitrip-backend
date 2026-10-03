@@ -8,6 +8,7 @@
 # Host files (never committed), under $TT_STATE_DIR (~/tuttitrip):
 #      deploy.env  POSTGRES_PASSWORD (generated on first run)
 #      app.env     optional extra app env for every branch (e.g. OPENAI_API_KEY)
+#      admin.env   admin tools (deploy/admin/setup.sh, run after a main deploy)
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd "$here/.." && pwd)
@@ -197,3 +198,9 @@ fi
 flock -u 9
 # A failed cleanup never fails the deploy (the cleanup workflow reports it).
 "$here/cleanup.sh" || tt_log "WARNING: cleanup did not complete; deploy itself succeeded"
+
+# Admin tools (pgAdmin, DBOS dashboard behind Auth0) belong to production:
+# only main refreshes them, and only on hosts that have ~/tuttitrip/admin.env.
+if [ "$env" = main ]; then
+  "$here/admin/setup.sh" || tt_log "WARNING: admin tools setup failed; API deploy itself succeeded"
+fi

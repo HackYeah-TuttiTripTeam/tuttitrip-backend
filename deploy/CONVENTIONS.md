@@ -239,3 +239,98 @@ and env files.
    Locally the worker may use the owner role. The restricted role is enforced
    on the host.
 3. `curl -X POST localhost:8000/api/v1/jobs/ping`, then `GET /api/v1/jobs/ping/<id>`.
+
+## Admin tools: pgAdmin and the DBOS dashboard
+
+| URL | What | Container |
+| --- | --- | --- |
+| https://tuttitrip-pgadmin.gburek.app | pgAdmin 4, read-only servers for `tuttitrip_main` and `tuttitrip_develop` | `tuttitrip-pgadmin` (`dpage/pgadmin4`, volume `tuttitrip-pgadmin-data`) |
+| https://tuttitrip-dbos.gburek.app | read-only DBOS dashboard (workflows, queues, steps of main and develop) | `tuttitrip-dbos-dashboard` (`tuttitrip-worker:main`, command `tuttitrip-dbos-dashboard`) |
+
+Request path: tunnel (rule before the `*.gburek.app` wildcard, same API
+mechanism as the API hosts) -> `tuttitrip-admin-gateway` (nginx on
+`172.17.0.1:18081`) -> `auth_request` to `tuttitrip-oauth2-proxy` (OIDC with the
+Auth0 app "TuttiTrip Admin (oauth2-proxy)") -> pgAdmin or the dashboard. All of
+them sit on the private network `tuttitrip-admin`, and `tuttitrip-postgres` is
+attached to it too. Nothing else publishes a port. The admin gateway is
+separate from `tuttitrip-gateway` on purpose, because every API deploy, on any
+branch, rewrites `tuttitrip-gateway` from its own checkout.
+
+Who may log in (superadmins). One list, kept in three places, never in a repo:
+
+1. The Auth0 post-login Action "TuttiTrip superadmins" (node22, bound to the
+   post-login trigger). Its code lives in the Auth0 dashboard, which is the
+   source of truth. `deploy/admin/auth0-post-login.js` is a 1:1 copy. To change
+   it, edit the copy, run `node --test deploy/admin/test-auth0-action.mjs`,
+   paste it into the dashboard editor, Deploy, and commit the copy. The Auth0
+   MCP has no `actions` scopes. The Action has three comma-separated secrets,
+   whose values never go into a repo:
+   - `ALLOWED_EMAILS`: these match only on a Google login with a verified
+     email.
+   - `ALLOWED_DISCORD_IDS`: Discord accounts match by user id
+     (`oauth2|discord|<id>`), never by username.
+   - `ALLOWED_USER_IDS`: Auth0 database accounts (`auth0|...`), e.g. the
+     app's test superadmin.
+
+   On the admin client it denies everyone else and adds the id-token claims
+   `https://tuttitrip.gburek.app/admin_ids` (the matched identities) and
+   `.../admin_email` (the verified email, else
+   `discord-<id>@users.tuttitrip.invalid`, else
+   `<username>@users.tuttitrip.invalid`). On every other client it adds
+   `https://tuttitrip.gburek.app/roles: ["admin"]` to the access and id tokens
+   (the API's `AdminUser`). The admin app enables only the `google-oauth2` and
+   `discord` connections, so database accounts never reach the admin tools.
+2. oauth2-proxy `allowed_groups`, generated from `SUPERADMIN_ALLOW_LIST` in
+   `~/tuttitrip/admin.env` and matched against `admin_ids`. A token without the
+   claim is rejected, so this check fails closed.
+   It holds emails and Discord ids only, never `auth0|...` ids.
+3. The same `SUPERADMIN_ALLOW_LIST` locally in `~/tuttitrip.env` (the owner's
+   copy).
+
+Identity inside: the admin gateway overwrites `X-Auth-Request-Email` and
+`X-Auth-Request-User` with what oauth2-proxy returns. pgAdmin runs in webserver
+auth mode (`deploy/admin/pgadmin/config_local.py`). It accepts that header only:
+
+- from the `tuttitrip-admin` subnet (`WEBSERVER_TRUSTED_PROXIES`);
+- together with `X-Pgadmin-Webserver-Secret`, a host-generated secret that only
+  the admin gateway injects.
+
+pgAdmin creates users on first login. The DBOS dashboard only displays the
+header.
+
+Database access: role `tuttitrip_readonly` (LOGIN, `default_transaction_read_only`).
+It has SELECT on every table and sequence in `public` and `dbos` of main and
+develop, plus default privileges for tables the owner `tuttitrip` creates later
+(`deploy/admin/readonly-grants.sql`). pgAdmin's servers use libpq services, so
+nobody types a password: `servers.json` names a service, and
+`pg_service.conf` holds the read-only password.
+
+To write to a database, a superadmin adds a server by hand in pgAdmin:
+- Host `tuttitrip-postgres`, port 5432, user `tuttitrip`.
+- Password: `POSTGRES_PASSWORD` from `~/tuttitrip/deploy.env` on the host.
+- Ticking "Save password" works, because a host key (`MASTER_PASSWORD_HOOK`)
+  encrypts it.
+
+Remove the server when done. Never share the owner password.
+
+Files on the host:
+- `~/tuttitrip/admin.env` (600), created by hand with `OAUTH2_PROXY_CLIENT_ID`,
+  `OAUTH2_PROXY_CLIENT_SECRET` and `SUPERADMIN_ALLOW_LIST`.
+- `setup.sh` adds the generated secrets to the same file:
+  `READONLY_DB_PASSWORD`, `PGADMIN_DEFAULT_PASSWORD`, `PGADMIN_MASTER_PASSWORD`,
+  `PGADMIN_WEBSERVER_SECRET` and `OAUTH2_PROXY_COOKIE_SECRET`.
+- `~/tuttitrip/admin/` (700) holds the generated config and copies of the repo
+  files. Never edit it by hand.
+
+Lifecycle:
+- `deploy/admin/setup.sh` (idempotent) creates the network, role, grants,
+  config, containers (compose project `tuttitrip-admin`) and tunnel rules, then
+  checks that anonymous requests to both hosts are redirected to the login.
+- Every backend deploy of `main` runs it, and only when `admin.env` exists.
+- The worker deploy of `main` restarts `tuttitrip-dbos-dashboard` on the new
+  image.
+- To change the allow-list: edit `SUPERADMIN_ALLOW_LIST` in `admin.env` and run
+  `deploy/admin/setup.sh` on the host, then update the Action secrets in
+  Auth0.
+- To rotate a generated secret: delete its line from `admin.env` and run
+  `setup.sh`.
