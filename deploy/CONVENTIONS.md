@@ -258,23 +258,34 @@ branch, rewrites `tuttitrip-gateway` from its own checkout.
 
 Who may log in (superadmins). One list, kept in three places, never in a repo:
 
-1. The Auth0 post-login Action "TuttiTrip superadmins"
-   (`deploy/admin/auth0-post-login.js`, secrets `ALLOWED_EMAILS` and
-   `ALLOWED_DISCORD_IDS`):
-   - It denies everyone else on the admin client.
-   - It adds the id-token claims `https://tuttitrip.gburek.app/admin_ids` (the
-     matched identities) and `.../admin_email` (verified email, or
-     `discord-<id>@users.tuttitrip.invalid`).
-   - On every other client it adds `https://tuttitrip.gburek.app/roles: ["admin"]`
-     to the access token (the API's `AdminUser`).
+1. The Auth0 post-login Action "TuttiTrip superadmins" (node22, bound to the
+   post-login trigger). Its code lives in the Auth0 dashboard, which is the
+   source of truth. `deploy/admin/auth0-post-login.js` is a 1:1 copy. To change
+   it, edit the copy, run `node --test deploy/admin/test-auth0-action.mjs`,
+   paste it into the dashboard editor, Deploy, and commit the copy. The Auth0
+   MCP has no `actions` scopes. The Action has three comma-separated secrets,
+   whose values never go into a repo:
+   - `ALLOWED_EMAILS`: these match only on a Google login with a verified
+     email.
+   - `ALLOWED_DISCORD_IDS`: Discord accounts match by user id
+     (`oauth2|discord|<id>`), never by username.
+   - `ALLOWED_USER_IDS`: Auth0 database accounts (`auth0|...`), e.g. the
+     app's test superadmin.
+
+   On the admin client it denies everyone else and adds the id-token claims
+   `https://tuttitrip.gburek.app/admin_ids` (the matched identities) and
+   `.../admin_email` (the verified email, else
+   `discord-<id>@users.tuttitrip.invalid`, else
+   `<username>@users.tuttitrip.invalid`). On every other client it adds
+   `https://tuttitrip.gburek.app/roles: ["admin"]` to the access and id tokens
+   (the API's `AdminUser`). The admin app enables only the `google-oauth2` and
+   `discord` connections, so database accounts never reach the admin tools.
 2. oauth2-proxy `allowed_groups`, generated from `SUPERADMIN_ALLOW_LIST` in
    `~/tuttitrip/admin.env` and matched against `admin_ids`. A token without the
    claim is rejected, so this check fails closed.
+   It holds emails and Discord ids only, never `auth0|...` ids.
 3. The same `SUPERADMIN_ALLOW_LIST` locally in `~/tuttitrip.env` (the owner's
    copy).
-
-Emails match only when Auth0 marks them verified. Discord accounts match by
-user id (`sub` = `oauth2|discord|<id>`), never by username.
 
 Identity inside: the admin gateway overwrites `X-Auth-Request-Email` and
 `X-Auth-Request-User` with what oauth2-proxy returns. pgAdmin runs in webserver
@@ -319,7 +330,7 @@ Lifecycle:
 - The worker deploy of `main` restarts `tuttitrip-dbos-dashboard` on the new
   image.
 - To change the allow-list: edit `SUPERADMIN_ALLOW_LIST` in `admin.env` and run
-  `deploy/admin/setup.sh` on the host, then update the two Action secrets in
+  `deploy/admin/setup.sh` on the host, then update the Action secrets in
   Auth0.
 - To rotate a generated secret: delete its line from `admin.env` and run
   `setup.sh`.

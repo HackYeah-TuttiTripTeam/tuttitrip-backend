@@ -435,9 +435,13 @@ from tuttitrip-worker). Both sit behind their own nginx
 oauth2-proxy (Auth0 app "TuttiTrip Admin (oauth2-proxy)") and the superadmin
 allow-list. The list lives in the Auth0 Action secrets and
 `~/tuttitrip/admin.env`, never in a repo. `deploy/admin/setup.sh` (idempotent)
-sets everything up and runs after every deploy of `main`. The Action code is
-`deploy/admin/auth0-post-login.js`; test it with
-`node --test deploy/admin/test-auth0-action.mjs`.
+sets everything up and runs after every deploy of `main`. The Auth0 Action
+"TuttiTrip superadmins" is maintained in the Auth0 dashboard (the source of
+truth; the MCP has no `actions` scopes). `deploy/admin/auth0-post-login.js` is
+a 1:1 copy of it. To change it, edit the copy, run
+`node --test deploy/admin/test-auth0-action.mjs`, then paste it into the
+dashboard and deploy. Its secrets are `ALLOWED_EMAILS`, `ALLOWED_DISCORD_IDS`
+and `ALLOWED_USER_IDS`; only these names go into the repo.
 
 ## Powiadomienia (Discord)
 
