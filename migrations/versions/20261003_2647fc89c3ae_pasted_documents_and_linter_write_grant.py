@@ -3,7 +3,7 @@
 The text is deleted with the trip (ON DELETE CASCADE); the worker reads it by id.
 
 Revision ID: 2647fc89c3ae
-Revises: a42b7c1d9e03
+Revises: 213f4a329ce3
 Create Date: 2026-10-03 21:04:29.613225
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "2647fc89c3ae"
-down_revision: str | None = "a42b7c1d9e03"
+down_revision: str | None = "213f4a329ce3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
