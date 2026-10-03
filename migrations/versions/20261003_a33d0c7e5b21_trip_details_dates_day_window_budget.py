@@ -5,7 +5,7 @@ added to an existing table. New columns are nullable or have defaults, so
 existing trips stay valid.
 
 Revision ID: a33d0c7e5b21
-Revises: 1c3eca9c16c6
+Revises: 6801abbf6bbb
 Create Date: 2026-10-03 18:00:00.000000
 """
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a33d0c7e5b21"
-down_revision: str | None = "1c3eca9c16c6"
+down_revision: str | None = "6801abbf6bbb"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

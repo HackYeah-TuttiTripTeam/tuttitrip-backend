@@ -37,8 +37,8 @@ def _sql(direction: str, revisions: str) -> str:
 
 
 def test_trip_details_migration_names_its_checks_once_both_ways() -> None:
-    up = _sql("upgrade", "1c3eca9c16c6:a33d0c7e5b21")
-    down = _sql("downgrade", "a33d0c7e5b21:1c3eca9c16c6")
+    up = _sql("upgrade", "6801abbf6bbb:a33d0c7e5b21")
+    down = _sql("downgrade", "a33d0c7e5b21:6801abbf6bbb")
     for name in ("dates", "day_window", "budget_total", "budget_day"):
         assert f"ADD CONSTRAINT ck_trips_{name} CHECK" in up
         assert f"DROP CONSTRAINT ck_trips_{name};" in down
