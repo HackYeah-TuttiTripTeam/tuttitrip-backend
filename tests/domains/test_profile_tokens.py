@@ -65,6 +65,9 @@ def test_a_co_host_creates_a_token_and_sees_it_once(
     _role(monkeypatch, TripRole.CO_HOST)
     _profile(monkeypatch, Profile(id=PROFILE, trip_id=TRIP))
     inserted: list[AccessToken] = []
+    monkeypatch.setattr(
+        permission_db, "count_active_access_tokens", AsyncMock(return_value=0)
+    )
 
     def insert(_session: object, row: AccessToken) -> AccessToken:
         inserted.append(_stored(row))
@@ -84,6 +87,7 @@ def test_a_co_host_creates_a_token_and_sees_it_once(
     assert row.created_by == HOST.sub
     assert body["token"] not in {row.token_hash, str(row.id)}
     assert len(row.token_hash) == 64
+    assert response.headers["cache-control"] == "no-store"
 
 
 def test_a_plain_member_cannot_create_a_token(
@@ -147,3 +151,72 @@ def test_revoking_an_unknown_token_is_404(
         "revoke_access_token", trip_id=TRIP, profile_id=PROFILE, token_id=uuid.uuid4()
     )
     assert client.delete(url).status_code == 404
+
+
+def test_a_profile_with_an_account_gets_no_token(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _role(monkeypatch, TripRole.CO_HOST)
+    _profile(monkeypatch, Profile(id=PROFILE, trip_id=TRIP, user_sub="auth0|ann"))
+    response = client.post(
+        path("create_vote_token", trip_id=TRIP, profile_id=PROFILE), json={}
+    )
+    assert response.status_code == 409
+
+
+def test_the_sixth_active_token_is_409(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _role(monkeypatch, TripRole.CO_HOST)
+    _profile(monkeypatch, Profile(id=PROFILE, trip_id=TRIP))
+    monkeypatch.setattr(
+        permission_db, "count_active_access_tokens", AsyncMock(return_value=5)
+    )
+    response = client.post(
+        path("create_vote_token", trip_id=TRIP, profile_id=PROFILE), json={}
+    )
+    assert response.status_code == 409
+
+
+def test_a_co_host_lists_tokens_without_the_secret(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _role(monkeypatch, TripRole.CO_HOST)
+    _profile(monkeypatch, Profile(id=PROFILE, trip_id=TRIP))
+    row = _stored(
+        AccessToken(
+            token_hash="a" * 64,
+            scope=TokenScope.VOTE,
+            trip_id=TRIP,
+            profile_id=PROFILE,
+            expires_at=NOW,
+            revoked_at=None,
+            last_used_at=None,
+            created_by=HOST.sub,
+        )
+    )
+    monkeypatch.setattr(
+        permission_db, "select_access_tokens", AsyncMock(return_value=[row])
+    )
+    response = client.get(path("list_access_tokens", trip_id=TRIP, profile_id=PROFILE))
+    assert response.status_code == 200
+    (item,) = response.json()
+    assert set(item) == {
+        "id",
+        "scope",
+        "trip_id",
+        "profile_id",
+        "expires_at",
+        "revoked_at",
+        "created_at",
+        "last_used_at",
+    }
+    assert "a" * 64 not in response.text
+
+
+def test_a_plain_member_cannot_list_tokens(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _role(monkeypatch, TripRole.MEMBER)
+    response = client.get(path("list_access_tokens", trip_id=TRIP, profile_id=PROFILE))
+    assert response.status_code == 403

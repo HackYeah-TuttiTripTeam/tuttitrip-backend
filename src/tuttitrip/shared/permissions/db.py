@@ -1,9 +1,10 @@
 """Queries on roles, role grants, user roles and user grants."""
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, select, union_all
+from sqlalchemy import delete, func, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -340,3 +341,77 @@ async def select_access_token(
             AccessToken.profile_id == profile_id,
         )
     )
+
+
+async def update_last_used(
+    session: AsyncSession, token_id: UUID, now: datetime, stale_before: datetime
+) -> bool:
+    """Set ``last_used_at`` unless it is newer than ``stale_before``.
+
+    Args:
+        session: Open session (caller commits).
+        token_id: Token id.
+        now: New value.
+        stale_before: Only rows never used or last used before this change.
+
+    Returns:
+        Whether a row changed.
+    """
+    changed = await session.scalar(
+        update(AccessToken)
+        .where(
+            AccessToken.id == token_id,
+            (AccessToken.last_used_at.is_(None))
+            | (AccessToken.last_used_at < stale_before),
+        )
+        .values(last_used_at=now)
+        .returning(AccessToken.id)
+    )
+    return changed is not None
+
+
+async def count_active_access_tokens(
+    session: AsyncSession, profile_id: UUID, now: datetime
+) -> int:
+    """Count a profile's tokens that are neither revoked nor expired.
+
+    Args:
+        session: Open session.
+        profile_id: Profile.
+        now: Current time.
+
+    Returns:
+        The number of active tokens.
+    """
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(AccessToken)
+            .where(
+                AccessToken.profile_id == profile_id,
+                AccessToken.revoked_at.is_(None),
+                AccessToken.expires_at > now,
+            )
+        )
+    ) or 0
+
+
+async def select_access_tokens(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID
+) -> Sequence[AccessToken]:
+    """Tokens of one profile of one trip, newest first.
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        profile_id: Profile.
+
+    Returns:
+        Rows.
+    """
+    result = await session.scalars(
+        select(AccessToken)
+        .where(AccessToken.trip_id == trip_id, AccessToken.profile_id == profile_id)
+        .order_by(AccessToken.created_at.desc())
+    )
+    return result.all()

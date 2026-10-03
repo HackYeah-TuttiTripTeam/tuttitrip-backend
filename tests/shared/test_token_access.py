@@ -7,14 +7,16 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException, Response
 from fastapi.testclient import TestClient
 
 from tests.shared.paths import path
 from tuttitrip.main import create_app
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.permissions import db
+from tuttitrip.shared.permissions.api import TokenRequirement
 from tuttitrip.shared.permissions.models import AccessToken
-from tuttitrip.shared.permissions.schemas import TokenScope
+from tuttitrip.shared.permissions.schemas import TokenAccess, TokenScope
 from tuttitrip.shared.permissions.services import token_service
 from tuttitrip.shared.permissions.services.token_service import (
     InvalidTokenError,
@@ -111,30 +113,66 @@ def test_the_token_route_is_documented_in_openapi(client: TestClient) -> None:
     assert "x-required-permission" not in operation
 
 
-def test_authenticate_marks_the_last_use_at_most_once_a_minute(
-    session: AsyncMock, monkeypatch: pytest.MonkeyPatch
+def test_an_oversized_header_is_404_without_echoing_it_or_querying(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    row = _row()
-    _stored(monkeypatch, row)
-    asyncio.run(token_service.authenticate(session, TOKEN, NOW))
-    assert row.last_used_at == NOW
-    asyncio.run(token_service.authenticate(session, TOKEN, NOW + timedelta(seconds=30)))
-    assert row.last_used_at == NOW
+    lookup = _stored(monkeypatch, None)
+    secret = "s" * 500
+    response = client.get(path("read_vote_access"), headers={"X-Access-Token": secret})
+    assert response.status_code == 404
+    assert secret not in response.text
+    lookup.assert_not_awaited()
+
+
+def test_use_is_recorded_at_most_once_a_minute(session: AsyncMock) -> None:
+    token_id = uuid.uuid4()
+    update = AsyncMock(side_effect=[True, False])
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(db, "update_last_used", update)
+        asyncio.run(token_service.touch(session, token_id, NOW))
+        asyncio.run(token_service.touch(session, token_id, NOW))
+    assert update.call_args.args[3] == NOW - token_service.LAST_USED_RESOLUTION
     assert session.commit.await_count == 1
 
 
-def test_authenticate_rejects_the_boundary_and_a_wrong_hash(
+def test_a_wrong_scope_token_is_404_and_leaves_no_trace(
+    session: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    touch = AsyncMock()
+    monkeypatch.setattr(token_service, "touch", touch)
+    access = TokenAccess(
+        token_id=uuid.uuid4(),
+        trip_id=TRIP,
+        profile_id=PROFILE,
+        scope=TokenScope.VOTE,
+    )
+    requirement = TokenRequirement(MagicMock())  # a scope the token lacks
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(requirement(access, session, Response()))
+    assert caught.value.status_code == 404
+    touch.assert_not_awaited()
+
+
+def test_token_responses_are_not_cacheable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stored(monkeypatch, _row(expires_at=datetime.now(UTC) + timedelta(1)))
+    response = client.get(path("read_vote_access"), headers=HEADERS)
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_authenticate_rejects_the_boundary(
     session: AsyncMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stored(monkeypatch, _row(expires_at=NOW))
     with pytest.raises(InvalidTokenError):
         asyncio.run(token_service.authenticate(session, TOKEN, NOW))
-    _stored(monkeypatch, _row(token_hash="0" * 64))
-    with pytest.raises(InvalidTokenError):
-        asyncio.run(token_service.authenticate(session, TOKEN, NOW))
 
 
-def test_only_the_hash_is_stored_and_the_token_is_shown_once() -> None:
+def test_only_the_hash_is_stored_and_the_token_is_shown_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(db, "count_active_access_tokens", AsyncMock(return_value=0))
     session = MagicMock()
     session.flush = AsyncMock()
     session.commit = AsyncMock()
@@ -150,3 +188,10 @@ def test_only_the_hash_is_stored_and_the_token_is_shown_once() -> None:
     assert created.token not in {str(v) for v in vars(stored).values()}
     assert len(created.token) >= 43  # 32 random bytes, urlsafe base64
     assert "token" not in created.model_dump(exclude={"token"})
+
+
+def test_the_sixth_active_token_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(db, "count_active_access_tokens", AsyncMock(return_value=5))
+    new = NewToken(TokenScope.VOTE, TRIP, PROFILE, "auth0|host", timedelta(days=3))
+    with pytest.raises(token_service.TooManyTokensError):
+        asyncio.run(token_service.create_token(AsyncMock(), new))

@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.profiles import db
+from tuttitrip.profiles.models import Profile
 from tuttitrip.profiles.schemas import AccessTokenCreate
 from tuttitrip.profiles.services.profile_service import ProfileNotFoundError
 from tuttitrip.shared.permissions.schemas import (
@@ -21,11 +22,17 @@ from tuttitrip.shared.permissions.services.token_service import (
 from tuttitrip.trips.schemas import TripMembership
 
 
+class ProfileHasAccountError(Exception):
+    """The profile belongs to an account, which logs in instead of using a link."""
+
+
 async def _require_profile(
     session: AsyncSession, membership: TripMembership, profile_id: UUID
-) -> None:
-    if await db.select_profile(session, membership.trip_id, profile_id) is None:
+) -> Profile:
+    profile = await db.select_profile(session, membership.trip_id, profile_id)
+    if profile is None:
         raise ProfileNotFoundError(str(profile_id))
+    return profile
 
 
 async def create_vote_token(
@@ -44,8 +51,13 @@ async def create_vote_token(
 
     Returns:
         The token data and the plain token (shown once).
+
+    Raises:
+        ProfileHasAccountError: The profile is linked to an account.
     """
-    await _require_profile(session, membership, profile_id)
+    profile = await _require_profile(session, membership, profile_id)
+    if profile.user_sub is not None:
+        raise ProfileHasAccountError(str(profile_id))
     return await token_service.create_token(
         session,
         NewToken(
@@ -85,3 +97,20 @@ async def revoke_token(
         )
     except TokenNotFoundError as exc:
         raise ProfileNotFoundError(str(token_id)) from exc
+
+
+async def list_tokens(
+    session: AsyncSession, membership: TripMembership, profile_id: UUID
+) -> list[AccessTokenRead]:
+    """List a profile's tokens (never the secret).
+
+    Args:
+        session: Open session.
+        membership: The caller's checked (co-host) membership.
+        profile_id: Profile.
+
+    Returns:
+        Token data, newest first.
+    """
+    await _require_profile(session, membership, profile_id)
+    return await token_service.list_tokens(session, membership.trip_id, profile_id)

@@ -23,6 +23,7 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Response,
     params,
     status,
 )
@@ -145,7 +146,6 @@ async def get_token_access(
         str | None,
         Header(
             alias=ACCESS_TOKEN_HEADER,
-            max_length=token_service.MAX_TOKEN_LENGTH,
             description="Secret access token (from the link fragment).",
         ),
     ] = None,
@@ -160,7 +160,9 @@ async def get_token_access(
         Proof of access to one profile of one trip.
 
     Raises:
-        HTTPException: 401 without the header, 404 for any bad token.
+        HTTPException: 401 without the header, 404 for any bad token. The
+            length is checked in the service (not by FastAPI), because a
+            validation error would echo the secret back.
     """
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing access token")
@@ -171,6 +173,7 @@ async def get_token_access(
 
 
 TokenAccessDep = Annotated[TokenAccess, Depends(get_token_access)]
+NO_STORE = "no-store"
 TOKEN_NOT_FOUND = "Not found"  # ruff: ignore[hardcoded-password-string] a message, not a secret
 
 
@@ -184,14 +187,20 @@ class TokenRequirement:
     def __str__(self) -> str:
         return self.scope.value
 
-    async def __call__(self, access: TokenAccessDep) -> None:
-        """Raise 404 unless the token has the scope.
+    async def __call__(
+        self, access: TokenAccessDep, session: SessionDep, response: Response
+    ) -> None:
+        """Raise 404 unless the token has the scope; then record the use.
 
         Args:
             access: The checked token.
+            session: Database session.
+            response: The response (gets ``Cache-Control: no-store``).
         """
         if access.scope != self.scope:
             raise HTTPException(status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND)
+        response.headers["Cache-Control"] = NO_STORE
+        await token_service.touch(session, access.token_id)
 
 
 def requires(feature: Feature, level: Access) -> params.Depends:
@@ -218,6 +227,19 @@ def public() -> params.Depends:
         The dependency to put in ``dependencies=[...]``.
     """
     return params.Depends(PublicMarker())
+
+
+def _set_no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = NO_STORE
+
+
+def no_store() -> params.Depends:
+    """Not a marker: ``Cache-Control: no-store`` for responses that carry secrets.
+
+    Returns:
+        The dependency to put in ``dependencies=[...]`` next to the marker.
+    """
+    return params.Depends(_set_no_store)
 
 
 def token_access(scope: TokenScope) -> params.Depends:

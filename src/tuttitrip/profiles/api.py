@@ -16,6 +16,7 @@ from tuttitrip.profiles.schemas import (
     WeightsUpdate,
 )
 from tuttitrip.profiles.services import access_token_service, profile_service
+from tuttitrip.profiles.services.access_token_service import ProfileHasAccountError
 from tuttitrip.profiles.services.profile_service import (
     ProfileAccountError,
     ProfileComfortError,
@@ -23,9 +24,10 @@ from tuttitrip.profiles.services.profile_service import (
     ProfileNotFoundError,
 )
 from tuttitrip.shared.db.api import SessionDep
-from tuttitrip.shared.permissions.api import requires
+from tuttitrip.shared.permissions.api import no_store, requires
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.shared.permissions.schemas import AccessTokenCreated, AccessTokenRead
+from tuttitrip.shared.permissions.services.token_service import TooManyTokensError
 from tuttitrip.trips.api import TripCoHost, TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/profiles", tags=["profiles"])
@@ -160,7 +162,7 @@ async def delete_profile(
 
 @router.post(
     "/{profile_id}/access-tokens",
-    dependencies=[requires(Feature.PROFILES_CORE, Access.WRITE)],
+    dependencies=[requires(Feature.PROFILES_CORE, Access.WRITE), no_store()],
     status_code=status.HTTP_201_CREATED,
 )
 async def create_vote_token(
@@ -187,6 +189,38 @@ async def create_vote_token(
         return await access_token_service.create_vote_token(
             session, membership, profile_id, data
         )
+    except ProfileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND) from exc
+    except ProfileHasAccountError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Profile has an account; it logs in instead"
+        ) from exc
+    except TooManyTokensError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Too many active tokens (5); revoke one first",
+        ) from exc
+
+
+@router.get(
+    "/{profile_id}/access-tokens",
+    dependencies=[requires(Feature.PROFILES_CORE, Access.READ)],
+)
+async def list_access_tokens(
+    profile_id: UUID, membership: TripCoHost, session: SessionDep
+) -> list[AccessTokenRead]:
+    """List a person's link tokens (without the secret), newest first.
+
+    Args:
+        profile_id: The person's profile on this trip.
+        membership: The caller's (co-host) membership of ``{trip_id}``.
+        session: Database session.
+
+    Returns:
+        Token data: id, scope, dates of creation, expiry, last use, revocation.
+    """
+    try:
+        return await access_token_service.list_tokens(session, membership, profile_id)
     except ProfileNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND) from exc
 

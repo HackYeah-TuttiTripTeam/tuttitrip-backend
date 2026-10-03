@@ -1,12 +1,15 @@
 """Access tokens: create, check and revoke (access without an account).
 
 The token is 32 random bytes (``secrets.token_urlsafe``). Only its SHA-256 is
-stored and compared (in constant time); the token is never logged, never put
-in an exception message and never stored on a request-scoped object.
+stored, and looking the row up by that hash *is* the comparison: a timing
+attack is pointless against a 256-bit random token. The token is never logged,
+never put in an exception message and never stored on a request-scoped object.
+
+The scope column stores the ``TokenScope`` member *name* in a VARCHAR without a
+CHECK constraint, so a new scope needs no migration.
 """
 
 import hashlib
-import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -68,14 +71,22 @@ async def create_token(session: AsyncSession, new: NewToken) -> AccessTokenCreat
 
     Returns:
         The stored data plus the plain token (the only time it is available).
+
+    Raises:
+        TooManyTokensError: The profile already has 5 active tokens.
     """
+    now = datetime.now(UTC)
+    if await db.count_active_access_tokens(session, new.profile_id, now) >= (
+        MAX_ACTIVE_PER_PROFILE
+    ):
+        raise TooManyTokensError
     token = secrets.token_urlsafe(TOKEN_BYTES)
     row = AccessToken(
         token_hash=hash_token(token),
         scope=new.scope,
         trip_id=new.trip_id,
         profile_id=new.profile_id,
-        expires_at=datetime.now(UTC) + new.ttl,
+        expires_at=now + new.ttl,
         created_by=new.created_by,
     )
     await db.insert_access_token(session, row)
@@ -92,7 +103,7 @@ def _is_active(row: AccessToken, now: datetime) -> bool:
 async def authenticate(
     session: AsyncSession, token: str, now: datetime | None = None
 ) -> TokenAccess:
-    """Check a presented token.
+    """Check a presented token (read-only; see ``touch`` for the last use).
 
     Args:
         session: Open session.
@@ -103,26 +114,60 @@ async def authenticate(
         Proof bound to the token's trip and profile.
 
     Raises:
-        InvalidTokenError: Unknown, expired or revoked.
+        InvalidTokenError: Unknown, too long, expired or revoked.
     """
-    now = now or datetime.now(UTC)
-    digest = hash_token(token)
-    row = await db.select_access_token_by_hash(session, digest)
-    if (
-        row is None
-        or not hmac.compare_digest(row.token_hash, digest)
-        or not _is_active(row, now)
-    ):
+    if len(token) > MAX_TOKEN_LENGTH:
         raise InvalidTokenError
-    if row.last_used_at is None or now - row.last_used_at > LAST_USED_RESOLUTION:
-        row.last_used_at = now
-        await session.commit()
+    row = await db.select_access_token_by_hash(session, hash_token(token))
+    if row is None or not _is_active(row, now or datetime.now(UTC)):
+        raise InvalidTokenError
     return TokenAccess(
         token_id=row.id,
         trip_id=row.trip_id,
         profile_id=row.profile_id,
         scope=row.scope,
     )
+
+
+async def touch(
+    session: AsyncSession, token_id: UUID, now: datetime | None = None
+) -> None:
+    """Record the use of a token, at most once a minute.
+
+    Called only after the scope matched, so a wrong-scope token leaves no trace.
+
+    Args:
+        session: Open session.
+        token_id: Token id.
+        now: Current time (tests).
+    """
+    now = now or datetime.now(UTC)
+    if await db.update_last_used(session, token_id, now, now - LAST_USED_RESOLUTION):
+        await session.commit()
+
+
+MAX_ACTIVE_PER_PROFILE = 5
+
+
+class TooManyTokensError(Exception):
+    """The profile already has the maximum of active tokens."""
+
+
+async def list_tokens(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID
+) -> list[AccessTokenRead]:
+    """Tokens of a profile, newest first (never the secret).
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        profile_id: Profile.
+
+    Returns:
+        Token data.
+    """
+    rows = await db.select_access_tokens(session, trip_id, profile_id)
+    return [AccessTokenRead.model_validate(row) for row in rows]
 
 
 async def revoke_token(

@@ -282,15 +282,25 @@ from tuttitrip.shared.permissions.registry import Access, Feature
   babci). Trasa czyta nagłówek `X-Access-Token`, a dowód (`TokenAccessDep`, czyli
   `TokenAccess` z `trip_id` i `profile_id` z tokenu) przekazuje do serwisu jak `TripMembership`.
   Brak nagłówka to 401, token nieznany, wygasły, odwołany albo z innym zakresem to 404.
-  Trasa tokenowa nie ma `{trip_id}` w ścieżce (wyjazd bierze się z tokenu); test pilnuje i tego,
-  i listy takich tras (`TOKEN_ENDPOINTS` w `tests/architecture/test_permissions.py`).
-  OpenAPI dostaje `x-token-access: "vote"` i odpowiedzi 401/404.
-- Tokeny: 32 losowe bajty (`secrets.token_urlsafe`), w tabeli `access_tokens` tylko SHA-256,
-  porównanie przez `hmac.compare_digest`, token widać jeden raz w odpowiedzi tworzenia
-  (`POST /trips/{trip_id}/profiles/{profile_id}/access-tokens`, co-host; odwołanie `DELETE`
-  `.../access-tokens/{token_id}`). Nie logujemy go, nie wkładamy do wyjątków ani do URL-a
-  (frontend trzyma go we fragmencie `#t=...` i wysyła w nagłówku). Nowy zakres to nowy
-  członek `TokenScope`, a nowa trasa tokenowa trafia na listę w teście architektury.
+  Trasa tokenowa nie ma w ścieżce niczego o wyjeździe ani profilu (`{trip_id}`, `{profile_id}`:
+  wyjazd i profil biorą się z tokenu); test pilnuje i tego, i listy takich tras
+  (`TOKEN_ENDPOINTS` w `tests/architecture/test_permissions.py`). Odpowiedzi tras tokenowych
+  i utworzenia tokenu mają `Cache-Control: no-store`. OpenAPI dostaje `x-token-access: "vote"`
+  i odpowiedzi 401/404.
+- Tokeny: 32 losowe bajty (`secrets.token_urlsafe`), w tabeli `access_tokens` tylko SHA-256.
+  Wyszukanie po haszu SHA-256 jest porównaniem; atak czasowy nie ma sensu przy 256-bitowym
+  losowym tokenie. Długość nagłówka sprawdza kod (nie `Header(max_length=...)`: błąd walidacji
+  odbijałby sekret w odpowiedzi), za długi token to 404 bez zapytania do bazy. Token widać
+  jeden raz w odpowiedzi tworzenia (`POST /trips/{trip_id}/profiles/{profile_id}/access-tokens`,
+  co-host, tylko dla profilu bez konta, 409 przy koncie albo przy 5 aktywnych tokenach;
+  lista bez sekretu: `GET` na tej samej ścieżce; odwołanie: `DELETE .../access-tokens/{token_id}`).
+  Nie logujemy go, nie wkładamy do wyjątków, ścieżki ani query. Link z tokenem: token w
+  fragmencie URL (#), front przesyła go w nagłówku X-Access-Token; nigdy w ścieżce ani query.
+  `last_used_at` zapisujemy dopiero po sprawdzeniu zakresu, co najwyżej raz na minutę.
+  Zakres zapisany jest jako nazwa członka `TokenScope` w VARCHAR bez CHECK, więc nowy zakres
+  nie wymaga migracji; nowa trasa tokenowa trafia na listę w teście architektury.
+  Zaproszenia (#40) mają własny model, nie tę tabelę.
+  TODO: okresowo usuwać wygasłe i odwołane tokeny (dziś zostają w tabeli).
 - Gdy decyzja zależy od uprawnienia w środku logiki, `api.py` wstrzykuje
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
   `permissions.allows(Feature.X, Access.WRITE)`.
