@@ -216,37 +216,39 @@ async def _join(
     A use is taken only for a new member. An account that already has a profile
     on the trip (a member whose profile is missing is repaired the same way)
     keeps it instead of getting a second one (the chosen profile is ignored).
-    Without a profile, the named or chosen profile is taken over, else a new one is
-    created.
+    Without a profile, the named or chosen profile is taken over, else a new one
+    is created. Which profile that is gets decided first, so a bad request fails
+    before any write.
 
     Returns:
         The join result.
 
     Raises:
         InvitationNotFoundError: No free use was left.
-        ProfileNotFoundError: ``claim_id`` is not on this trip.
+        ProfileNotFoundError: The profile in ``body.profile_id`` is not on this trip.
         ProfileClaimedError: The profile has an account or was taken meanwhile.
         InvitationProfileMismatchError: Named invitation, another profile asked.
     """
     profile_id = await profile_service.find_account_profile(session, row.trip_id, sub)
+    claim_id = None
+    if profile_id is None:
+        if row.profile_id and body.profile_id and row.profile_id != body.profile_id:
+            raise InvitationProfileMismatchError
+        claim_id = row.profile_id or body.profile_id
     was_member = role is not None
     if role is None:
         if not await db.consume_use(session, row.id, datetime.now(UTC)):
             raise InvitationNotFoundError
         await trips_db.insert_member(session, row.trip_id, sub, TripRole.MEMBER)
         role = TripRole.MEMBER
-    claimed = False
-    if profile_id is None:
-        claim_id = row.profile_id or body.profile_id
-        if row.profile_id and body.profile_id and row.profile_id != body.profile_id:
-            raise InvitationProfileMismatchError
-        if claim_id is not None:
-            await profile_service.claim_profile(session, row.trip_id, claim_id, sub)
-            profile_id, claimed = claim_id, True
-        else:
-            profile_id = await profile_service.create_account_profile(
-                session, row.trip_id, sub, body.display_name or PLACEHOLDER_NAME
-            )
+    claimed = claim_id is not None
+    if claim_id is not None:
+        await profile_service.claim_profile(session, row.trip_id, claim_id, sub)
+        profile_id = claim_id
+    elif profile_id is None:
+        profile_id = await profile_service.create_account_profile(
+            session, row.trip_id, sub, body.display_name or PLACEHOLDER_NAME
+        )
     await session.commit()
     return JoinResult(
         trip_id=row.trip_id,

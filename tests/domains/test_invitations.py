@@ -545,7 +545,7 @@ def test_a_profile_of_another_trip_is_a_404(guest: TestClient, world: World) -> 
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_two_accounts_racing_for_one_profile_one_wins_and_one_gets_409(
+def test_a_second_claim_of_a_taken_profile_gets_409(
     session: AsyncMock, world: World
 ) -> None:
     world.invite()
@@ -563,6 +563,7 @@ def test_two_accounts_racing_for_one_profile_one_wins_and_one_gets_409(
 
 
 def test_the_claim_is_one_conditional_update() -> None:
+    """Guard the ``user_sub IS NULL`` condition; it does not prove the race."""
     session = AsyncMock()
     session.execute.return_value = MagicMock()
     asyncio.run(real_link_account(session, TRIP, uuid.uuid4(), GUEST.sub))
@@ -660,3 +661,13 @@ def test_a_member_with_a_profile_is_not_blocked_by_a_named_mismatch(
     assert response.status_code == 200
     assert response.json()["profile_id"] == str(mine.id)
     assert other.user_sub is None
+
+
+def test_a_mismatch_fails_before_any_write(guest: TestClient, world: World) -> None:
+    granny = world.person("Babcia")
+    grandpa = world.person("Dziadek")
+    row = world.invite(profile_id=granny.id)
+    response = guest.post(path(ACCEPT), json=BODY | {"profile_id": str(grandpa.id)})
+    assert response.status_code == 409
+    assert row.uses == 0  # no use was taken, not merely rolled back
+    inv_db.consume_use.assert_not_called()  # ty: ignore[unresolved-attribute]
