@@ -47,9 +47,9 @@ async def get_requirements(
     summary="Replace the lodging requirements of the trip",
     description=(
         "Replaces the whole set. Each requirement is an amenity, a platform or "
-        "a maximum distance, hard or soft, for all nights (empty `nights`) or "
-        "chosen ones. `version` moves only when the set really changes. An "
-        "outing (a single day) has no nights and gets 422."
+        "a maximum distance, hard or soft; they apply to the one lodging base of "
+        "the whole trip. `version` moves only when the set really changes. An "
+        "outing (a single day) has no lodging and gets 422."
     ),
     responses=NOT_FOUND,
     dependencies=[requires(Feature.ACCOMMODATION, Access.WRITE)],

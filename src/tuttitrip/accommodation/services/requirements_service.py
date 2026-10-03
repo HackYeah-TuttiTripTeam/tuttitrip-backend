@@ -21,7 +21,7 @@ from tuttitrip.trips.services import trip_service
 
 
 class RequirementsInvalidError(Exception):
-    """The requirements do not fit the trip (outing, night out of range)."""
+    """The requirements do not fit the trip (an outing has no lodging)."""
 
 
 def check_offer(
@@ -76,28 +76,21 @@ async def replace_requirements(
         The stored requirements with the new version.
 
     Raises:
-        RequirementsInvalidError: Outing without nights, or a night past the end.
+        RequirementsInvalidError: The trip is an outing (no overnight stays).
     """
     trip = await trip_service.get_trip(session, membership)
     if trip.kind == "outing" and data.requirements:
         msg = "An outing has no overnight stays, so it takes no lodging requirements"
         raise RequirementsInvalidError(msg)
-    if trip.start_date and trip.end_date:
-        nights = (trip.end_date - trip.start_date).days
-        late = sorted(
-            {n for item in data.requirements for n in item.nights if n > nights}
-        )
-        if late:
-            msg = f"The trip has {nights} nights, but nights {late} were given"
-            raise RequirementsInvalidError(msg)
     current = await get_requirements(session, membership.trip_id)
     changed = _ordered(current.requirements) != _ordered(data.requirements)
     rows = [
         AccommodationRequirement(trip_id=membership.trip_id, **item.model_dump())
         for item in data.requirements
     ]
-    version = await db.replace_requirements(
-        session, membership.trip_id, rows, bump=changed
-    )
+    if changed:
+        await db.replace_requirements(session, membership.trip_id, rows)
+        await db.bump_version(session, membership.trip_id)
+    version = await db.select_version(session, membership.trip_id)
     await session.commit()
     return RequirementsRead(requirements=_ordered(data.requirements), version=version)

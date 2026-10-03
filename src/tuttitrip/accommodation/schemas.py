@@ -40,8 +40,8 @@ class RequirementItem(BaseModel):
     """One lodging requirement of a trip (a switch the host turned on).
 
     ``hard`` requirements multiply into the lodging score and ``S_h`` of E2
-    (unmet means 0); soft ones are averaged. ``nights`` lists the 1-based nights
-    it applies to; empty means every night.
+    (unmet means 0); soft ones are averaged. A requirement applies to the one
+    lodging base for the whole trip (docs/algorytm.md, section 9).
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -49,10 +49,6 @@ class RequirementItem(BaseModel):
     kind: RequirementKind
     key: str = Field(min_length=1, max_length=64)
     hard: bool
-    nights: list[int] = Field(
-        default_factory=list,
-        description="1-based nights the requirement applies to; empty = all nights.",
-    )
     max_distance_m: int | None = Field(
         default=None, gt=0, description="Required for `distance`, forbidden otherwise."
     )
@@ -65,13 +61,6 @@ class RequirementItem(BaseModel):
         if (self.kind is RequirementKind.DISTANCE) != (self.max_distance_m is not None):
             msg = "max_distance_m is required for distance and only for distance"
             raise ValueError(msg)
-        if any(night < 1 for night in self.nights):
-            msg = "nights are numbered from 1"
-            raise ValueError(msg)
-        if len(set(self.nights)) != len(self.nights):
-            msg = "nights must not repeat"
-            raise ValueError(msg)
-        self.nights.sort()
         return self
 
 

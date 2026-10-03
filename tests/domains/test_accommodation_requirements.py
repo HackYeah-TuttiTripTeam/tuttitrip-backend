@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.accommodation import db
-from tuttitrip.accommodation.logic.keys import RequirementKind, is_known_key
+from tuttitrip.accommodation.logic.keys import KEYS, RequirementKind, is_known_key
 from tuttitrip.accommodation.schemas import (
     RequirementItem,
     RequirementsRead,
@@ -92,6 +92,7 @@ def _client(
 
 
 def test_amenity_keys_are_the_places_vocabulary() -> None:
+    assert KEYS[RequirementKind.AMENITY] is Amenity
     assert all(is_known_key(RequirementKind.AMENITY, a.value) for a in Amenity)
     assert is_known_key(RequirementKind.PLATFORM, "airbnb")
     assert is_known_key(RequirementKind.DISTANCE, "attractions")
@@ -114,14 +115,6 @@ def test_distance_needs_max_distance_and_only_distance_may_have_it() -> None:
         kind=RequirementKind.DISTANCE, key="attractions", hard=False, max_distance_m=800
     )
     assert item.max_distance_m == 800
-
-
-def test_nights_are_positive_unique_and_sorted() -> None:
-    item = RequirementItem.model_validate({**POOL, "nights": [3, 1]})
-    assert item.nights == [1, 3]
-    for bad in ([0], [1, 1]):
-        with pytest.raises(ValidationError):
-            RequirementItem.model_validate({**POOL, "nights": bad})
 
 
 def test_duplicate_kind_and_key_is_rejected() -> None:
@@ -185,12 +178,12 @@ class _Store:
         return self.version
 
     async def replace_requirements(
-        self, _s: object, _t: uuid.UUID, rows: list[Any], *, bump: bool
-    ) -> int:
-        if bump:
-            self.rows = rows
-            self.version += 1
-        return self.version
+        self, _s: object, _t: uuid.UUID, rows: list[Any]
+    ) -> None:
+        self.rows = rows
+
+    async def bump_version(self, _s: object, _t: uuid.UUID) -> None:
+        self.version += 1
 
 
 class _Session:
@@ -203,7 +196,12 @@ class _Session:
 @pytest.fixture
 def store(monkeypatch: pytest.MonkeyPatch) -> _Store:
     fake = _Store()
-    for name in ("select_requirements", "select_version", "replace_requirements"):
+    for name in (
+        "select_requirements",
+        "select_version",
+        "replace_requirements",
+        "bump_version",
+    ):
         monkeypatch.setattr(db, name, getattr(fake, name))
     return fake
 
@@ -238,18 +236,8 @@ def test_version_moves_only_on_a_real_change(
     trip = _trip(date(2026, 11, 1), date(2026, 11, 4))
     first = _put(monkeypatch, trip, [POOL])
     assert first.version == 1
-    store.rows = [type("Row", (), {**POOL, "nights": [], "max_distance_m": None})()]
+    store.rows = [type("Row", (), {**POOL, "max_distance_m": None})()]
     again = _put(monkeypatch, trip, [POOL])
     assert again.version == 1
     changed = _put(monkeypatch, trip, [{**POOL, "hard": False}])
     assert changed.version == 2
-
-
-def test_night_after_the_last_one_is_rejected(
-    monkeypatch: pytest.MonkeyPatch, store: _Store
-) -> None:
-    trip = _trip(date(2026, 11, 1), date(2026, 11, 3))
-    _put(monkeypatch, trip, [{**POOL, "nights": [1, 2]}])
-    with pytest.raises(RequirementsInvalidError, match="2 nights"):
-        _put(monkeypatch, trip, [{**POOL, "nights": [3]}])
-    assert store.version == 1

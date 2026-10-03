@@ -1,7 +1,8 @@
-"""Key dictionary of accommodation requirements, shared with tuttitrip-worker#25.
+"""Key dictionary of accommodation requirements.
 
-Amenity keys are the ``places`` catalog's ``Amenity`` values (one vocabulary
-for places and for requirements); platforms and the distance key live here.
+Amenity keys are intentionally the full ``places`` catalog ``Amenity`` set (one
+vocabulary for places and for requirements; a test pins it). Platforms and the
+distance key live here. The worker gets the keys it needs in the job payload.
 """
 
 from enum import StrEnum, unique
