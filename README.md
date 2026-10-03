@@ -218,8 +218,25 @@ i w plikach `~/tuttitrip/*.env` na serwerze, nigdy w repozytorium.
 
 ## Git flow
 
-- `main` to produkcja, `develop` to gałąź integracyjna. Obie są chronione:
-  zmiany wchodzą tylko przez PR z zielonym CI, bez force-pusha i bez usuwania.
+- `main` to produkcja, `develop` to gałąź integracyjna. Zmiany wchodzą do nich
+  tylko przez PR z zielonymi jobami `checks` i `contracts-check`, bez
+  force-pusha i bez usuwania gałęzi. Nie wymagamy zatwierdzeń (0 approvals),
+  bo w 5 osób na 24 godziny bramką jest CI.
+- GitHub nie pozwala wymusić tych reguł w prywatnym repozytorium organizacji
+  na darmowym planie (ochrona gałęzi i rulesety zwracają 403), więc na razie
+  pilnujemy ich sami. Po przejściu na płatny plan można je włączyć jednym
+  wywołaniem:
+
+  ```bash
+  for b in main develop; do
+    gh api -X PUT repos/HackYeah-TuttiTripTeam/tuttitrip-backend/branches/$b/protection --input - <<'JSON'
+  {"required_status_checks": {"strict": false, "contexts": ["checks", "contracts-check"]},
+   "enforce_admins": true,
+   "required_pull_request_reviews": {"required_approving_review_count": 0},
+   "restrictions": null, "allow_force_pushes": false, "allow_deletions": false}
+  JSON
+  done
+  ```
 - Nową pracę zaczynasz od `develop` na gałęzi `feature/<nazwa>`, `fix/<nazwa>`
   albo `chore/<nazwa>` i otwierasz PR do `develop`. Każda gałąź dostaje własny
   podgląd pod `https://tuttitrip-api-<slug>.gburek.app`.

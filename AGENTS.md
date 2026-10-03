@@ -177,8 +177,12 @@ through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
 
 ## Git flow
 
-- `main` is production; `develop` is integration. Both are protected
-  (PR + green `checks`, no force-push, no deletion).
+- `main` is production; `develop` is integration. Both change only through
+  PRs with green `checks` and `contracts-check`, with no force-push and no
+  deletion (0 required approvals: a 5-person, 24 h team, so CI is the gate).
+  GitHub cannot enforce this for a private repo on the org's free plan
+  (branch protection and rulesets both return 403), so it is a team rule
+  until the org upgrades. Then apply it with the API call in the README.
 - Branch from `develop`: `feature/<short-name>`, `fix/<short-name>`,
   `chore/<short-name>`. PR into `develop`; release = PR `develop` -> `main`.
 - Head branches are deleted automatically after merge.
