@@ -606,11 +606,16 @@ def test_a_host_creates_a_named_invitation_that_works_once(
     granny = world.person("Babcia")
     response = host.post(
         path("create_invitation", trip_id=TRIP),
-        json={"profile_id": str(granny.id), "max_uses": 50},
+        json={"profile_id": str(granny.id)},
     )
     assert response.status_code == 201
     body = response.json()
     assert (body["profile_id"], body["max_uses"]) == (str(granny.id), 1)
+    too_many = host.post(
+        path("create_invitation", trip_id=TRIP),
+        json={"profile_id": str(granny.id), "max_uses": 50},
+    )
+    assert too_many.status_code == 422
 
 
 @pytest.mark.parametrize(("make", "expected"), [("account", 409), ("foreign", 404)])
@@ -635,3 +640,23 @@ def test_a_removed_members_profile_can_be_taken_over(
     world.invite()
     left = world.person("Dawny uczestnik")  # unlink_account left user_sub empty
     assert _claimable(guest)[0]["profile_id"] == str(left.id)
+
+
+def test_a_dead_token_preview_is_404_with_no_store(guest: TestClient) -> None:
+    response = guest.post(path("preview_invitation"), json=BODY)
+    assert response.status_code == 404
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_a_member_with_a_profile_is_not_blocked_by_a_named_mismatch(
+    guest: TestClient, world: World
+) -> None:
+    granny = world.person("Babcia")
+    other = world.person("Dziadek")
+    world.invite(profile_id=granny.id)
+    mine = world.person("Ja", sub=GUEST.sub)
+    world.roles[GUEST.sub] = TripRole.MEMBER
+    response = guest.post(path(ACCEPT), json=BODY | {"profile_id": str(other.id)})
+    assert response.status_code == 200
+    assert response.json()["profile_id"] == str(mine.id)
+    assert other.user_sub is None

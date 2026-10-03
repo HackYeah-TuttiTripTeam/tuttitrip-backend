@@ -1,10 +1,16 @@
 """Invitation DTOs."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from tuttitrip.profiles.schemas import ClaimableProfile
 from tuttitrip.trips.schemas import TripRole
@@ -44,6 +50,15 @@ class InvitationCreate(BaseModel):
             "profile. It must be on the trip and have no account (404 / 409)."
         ),
     )
+
+    @model_validator(mode="after")
+    def _named_is_single_use(self) -> Self:
+        if self.profile_id is not None and self.max_uses != 1:
+            if "max_uses" in self.model_fields_set:
+                msg = "A named invitation works once: omit max_uses or send 1"
+                raise ValueError(msg)
+            self.max_uses = 1
+        return self
 
 
 class InvitationRead(BaseModel):

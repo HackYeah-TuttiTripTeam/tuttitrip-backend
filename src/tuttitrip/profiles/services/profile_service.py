@@ -313,9 +313,10 @@ async def claim_profile(
         ProfileNotFoundError: The profile is not on this trip.
         ProfileClaimedError: It has an account, or another claim won the race.
     """
-    await require_claimable(session, trip_id, profile_id)
-    if not await db.link_account(session, trip_id, profile_id, sub):
-        raise ProfileClaimedError(str(profile_id))
+    if await db.link_account(session, trip_id, profile_id, sub):
+        return
+    await require_claimable(session, trip_id, profile_id)  # 404 or 409
+    raise ProfileClaimedError(str(profile_id))
 
 
 async def _get(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> Profile:

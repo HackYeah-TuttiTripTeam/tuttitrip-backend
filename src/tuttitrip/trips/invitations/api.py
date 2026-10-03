@@ -64,6 +64,14 @@ ACCEPT_ERRORS: dict[int | str, dict[str, str]] = {
 @router.post(
     "/trips/{trip_id}/invitations",  # ruff: ignore[fast-api-unused-path-parameter]
     status_code=status.HTTP_201_CREATED,
+    responses={
+        404: {"description": "`profile_id` is not a profile of this trip."},
+        409: {
+            "description": (
+                "20 working invitations already, or `profile_id` has an account."
+            )
+        },
+    },
     dependencies=[requires(Feature.TRIPS_INVITATIONS, Access.WRITE), no_store()],
 )
 async def create_invitation(
@@ -206,10 +214,11 @@ async def accept_invitation(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND, headers=NO_STORE
         ) from exc
-    except (ProfileClaimedError, InvitationProfileMismatchError) as exc:
-        detail = (
-            PROFILE_MISMATCH
-            if isinstance(exc, InvitationProfileMismatchError)
-            else PROFILE_CLAIMED
-        )
-        raise HTTPException(status.HTTP_409_CONFLICT, detail, headers=NO_STORE) from exc
+    except ProfileClaimedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, PROFILE_CLAIMED, headers=NO_STORE
+        ) from exc
+    except InvitationProfileMismatchError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, PROFILE_MISMATCH, headers=NO_STORE
+        ) from exc

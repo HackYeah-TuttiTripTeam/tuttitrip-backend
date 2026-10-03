@@ -93,7 +93,7 @@ async def create_invitation(
             token_hash=hash_token(token),
             created_by_sub=membership.sub,
             expires_at=now + timedelta(days=data.expires_in_days),
-            max_uses=1 if data.profile_id is not None else data.max_uses,
+            max_uses=data.max_uses,
             profile_id=data.profile_id,
         ),
     )
@@ -225,9 +225,9 @@ async def _join(
     Raises:
         InvitationNotFoundError: No free use was left.
         ProfileNotFoundError: ``claim_id`` is not on this trip.
-        ProfileClaimedError: ``claim_id`` has an account or was taken meanwhile.
+        ProfileClaimedError: The profile has an account or was taken meanwhile.
+        InvitationProfileMismatchError: Named invitation, another profile asked.
     """
-    claim_id = row.profile_id or body.profile_id
     profile_id = await profile_service.find_account_profile(session, row.trip_id, sub)
     was_member = role is not None
     if role is None:
@@ -235,14 +235,18 @@ async def _join(
             raise InvitationNotFoundError
         await trips_db.insert_member(session, row.trip_id, sub, TripRole.MEMBER)
         role = TripRole.MEMBER
-    claimed = profile_id is None and claim_id is not None
-    if profile_id is None and claim_id is not None:
-        await profile_service.claim_profile(session, row.trip_id, claim_id, sub)
-        profile_id = claim_id
-    elif profile_id is None:
-        profile_id = await profile_service.create_account_profile(
-            session, row.trip_id, sub, body.display_name or PLACEHOLDER_NAME
-        )
+    claimed = False
+    if profile_id is None:
+        claim_id = row.profile_id or body.profile_id
+        if row.profile_id and body.profile_id and row.profile_id != body.profile_id:
+            raise InvitationProfileMismatchError
+        if claim_id is not None:
+            await profile_service.claim_profile(session, row.trip_id, claim_id, sub)
+            profile_id, claimed = claim_id, True
+        else:
+            profile_id = await profile_service.create_account_profile(
+                session, row.trip_id, sub, body.display_name or PLACEHOLDER_NAME
+            )
     await session.commit()
     return JoinResult(
         trip_id=row.trip_id,
@@ -300,13 +304,11 @@ async def accept(session: AsyncSession, sub: str, body: InvitationAccept) -> Joi
     """
     found, role = await _find(session, body, sub)
     row = found.invitation
-    if row.profile_id and body.profile_id and row.profile_id != body.profile_id:
-        raise InvitationProfileMismatchError
     try:
         return await _join(session, sub, row, role, body)
     except IntegrityError:
         await session.rollback()
         return await _settled(session, row.trip_id, sub)
-    except ProfileNotFoundError, ProfileClaimedError:
+    except ProfileNotFoundError, ProfileClaimedError, InvitationProfileMismatchError:
         await session.rollback()
         raise
