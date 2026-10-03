@@ -11,7 +11,7 @@ from decimal import Decimal
 
 SKIP_REASON = (
     "Czeka na demo_data.py z implementacji referencyjnej i solver (backend#50): "
-    "bez tych danych liczby z sekcji 7 nie dają się odtworzyć."
+    "bez tych danych liczby z sekcji 7 nie dają się odtworzyć. Zadanie: #152."
 )
 
 
@@ -43,10 +43,13 @@ REFERENCE_PLAN = (
     ("park_oliwski", "planszowki", "pizzeria"),
 )
 
+# Stałe poniżej czekają na pominięty test (#152); nie używa ich żaden aktywny test.
 SOLO_U = 82.1  # Ty, 2 dni, 500 do 800 zł; każdy ma r = 100%
-SOLO_UNVERIFIED_PRICE = (Decimal(500), Decimal(514))  # (jawna, zawyżona w planie)
+# Dosłowny cytat ze specyfikacji ("514 zł zamiast 500 zł"); relacja do δ = 0,15 jest
+# niejednoznaczna, więc nie wyprowadzamy z niej niczego.
+SOLO_UNVERIFIED_PRICE = (Decimal(500), Decimal(514))
 
 OVER_BUDGET_COST = Decimal(1198)
 OVER_BUDGET_EXCESS = Decimal(98)  # ponad B_do = 1100
+# c_strict ani ΔU nie ma w specyfikacji, więc κ porównujemy tylko z wyniku solvera.
 OVER_BUDGET_KAPPA = 18.7  # zł za punkt
-GAIN_POINTS = 8.0  # E6: próg silnej preferencji

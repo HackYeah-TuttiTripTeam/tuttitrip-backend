@@ -10,6 +10,7 @@ from tests.fixtures.city import (
     HOMESTAY,
     LODGING_KEYS,
     city,
+    key_of,
     lodging_offers,
     place_id,
     places,
@@ -42,7 +43,7 @@ from tuttitrip.places.schemas import (
 from tuttitrip.planning.plans.logic.metrics import jain_index
 from tuttitrip.profiles.feedback.schemas import RatingValue
 from tuttitrip.profiles.logic.weight_presets import validate_weights
-from tuttitrip.profiles.preferences.schemas import MinTag, PreferencesWrite
+from tuttitrip.profiles.preferences.schemas import MinTagDomain, PreferencesWrite
 from tuttitrip.profiles.schemas import ProfileCreate, comfort_problem
 from tuttitrip.trips.schemas import TripCreate
 
@@ -63,7 +64,7 @@ def _cosine(interests: dict[PlaceTag, float], tags: list[PlaceTag]) -> float | N
 def _match(person: Persona, place: PlaceRead) -> float:
     """``m_ip`` of E1 (0.5 when there is no data at all)."""
     cos = _cosine(person.preferences.interests, place.tags)
-    vote = person.rating_value((place.source_key or "").removeprefix("test:"))
+    vote = person.rating_value(key_of(place))
     if vote is RatingValue.NEUTRAL:
         return 0.5 if cos is None else cos
     score = 1.0 if vote is RatingValue.WANT else 0.0
@@ -151,8 +152,7 @@ def test_every_scenario_validates_against_the_schemas(scenario: Scenario) -> Non
             profile.nap_start,
             profile.nap_minutes or 0,
         )
-        for pool_total in (sum(person.pool.model_dump().values()),):
-            assert pool_total == 10
+        assert sum(person.pool.model_dump().values()) == 10
         for key in (*person.ratings, *person.vetoes):
             assert key in places()
 
@@ -162,8 +162,7 @@ def test_min_tags_point_at_real_places(scenario: Scenario) -> None:
     catalog = places().values()
     for person in scenario.group.people:
         for tag in person.preferences.min_tags:
-            assert isinstance(tag, MinTag)
-            if tag.domain.value == "food":
+            if tag.domain is MinTagDomain.FOOD:
                 assert any(p.cuisine and p.cuisine.value == tag.tag for p in catalog)
             else:
                 assert any(tag.tag in {t.value for t in p.tags} for p in catalog)
@@ -205,6 +204,12 @@ def test_reference_group_matches_the_issue() -> None:
     assert [p.weight for p in people.values()] == [1.0, CHILD_WEIGHT, CHILD_WEIGHT, 1.0]
     assert {p.profile.floor for p in people.values()} == {30, 35}
     assert people["babcia"].pool.food == 2
+
+
+def test_lodging_offers_agree_with_place_amenities() -> None:
+    for key, offer in lodging_offers().items():
+        assert offer.present == {a.value for a in places()[key].amenities}
+        assert not offer.present & offer.absent
 
 
 def test_reference_lodging_has_exactly_one_pool_offer() -> None:
@@ -305,15 +310,6 @@ def test_expected_table_is_consistent_with_the_floor_and_r_formulas() -> None:
     assert set(expected.REFERENCE_PLAN[0]) <= set(places())
     assert reference().b_do >= expected.REFERENCE_COST
     assert expected.REFERENCE_LODGING == HOMESTAY
-
-
-def test_expected_kappa_is_cost_gap_per_point() -> None:
-    # kappa = (c_flex - c_strict) / max dU, with the spec's P_strict of the sample plan.
-    strict = Decimal("1048.40")
-    gap = expected.OVER_BUDGET_COST - strict
-    assert float(gap) / expected.GAIN_POINTS == pytest.approx(
-        expected.OVER_BUDGET_KAPPA, abs=0.05
-    )
 
 
 @pytest.mark.skip(reason=expected.SKIP_REASON)

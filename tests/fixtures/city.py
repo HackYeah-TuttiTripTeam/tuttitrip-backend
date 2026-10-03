@@ -49,6 +49,11 @@ def place_id(key: str) -> UUID:
     return uuid5(_NAMESPACE, key)
 
 
+def key_of(place: PlaceRead) -> str:
+    """Klucz miejsca w fixtures (``source_key`` bez prefiksu ``test:``)."""
+    return (place.source_key or "").removeprefix("test:")
+
+
 def city() -> CityRead:
     return CityRead(
         slug=CITY_SLUG,
@@ -404,7 +409,7 @@ def places() -> dict[str, PlaceRead]:
             amenities=[Amenity.WIFI],
         ),
     ]
-    return {(row.source_key or "").removeprefix("test:"): row for row in rows}
+    return {key_of(row): row for row in rows}
 
 
 def lodging_offers() -> dict[str, OfferFeatures]:

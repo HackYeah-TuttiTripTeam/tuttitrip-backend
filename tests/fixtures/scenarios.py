@@ -4,7 +4,8 @@ Cztery grupy i pięć scenariuszy. ``reference`` i ``solo`` odtwarzają dane z
 sekcji 7 ``docs/algorytm.md``, ``over_budget`` to ta sama rodzina z budżetem
 900 do 1100 zł (test zgody na przekroczenie, E6), ``friends`` i ``accessible``
 dają rozbieżne gusty i twarde ograniczenia dostępności. ``flex`` wynosi 10%
-(15% u ``accessible``), czyli ``B_max = B_do · (1 + flex)``.
+(15% u ``accessible``; wartości wymyślone, spec ich nie podaje), czyli
+``B_max = B_do · (1 + flex)``.
 """
 
 import datetime as dt

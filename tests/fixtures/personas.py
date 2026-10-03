@@ -350,8 +350,7 @@ def clones(person: Persona, n: int) -> Group:
     Klony mają osobne id, tę samą wagę, komfort, preferencje i głosy.
     """
     people = tuple(
-        replace(person, key=f"{person.key}-klon-{i}", vetoes=person.vetoes)
-        for i in range(1, n + 1)
+        replace(person, key=f"{person.key}-klon-{i}") for i in range(1, n + 1)
     )
     return Group(f"klony-{person.key}-{n}", people)
 
