@@ -363,3 +363,16 @@ def test_a_concurrent_double_accept_ends_as_a_single_join(
     assert response.status_code == 200
     assert response.json()["already_member"] is True
     session.rollback.assert_awaited_once()
+
+
+def test_a_member_without_a_profile_gets_one_and_no_use_is_taken(
+    guest: TestClient, world: World
+) -> None:
+    row = world.invite()
+    world.roles[GUEST.sub] = TripRole.MEMBER  # joined before profiles were created
+    body = guest.post(path(ACCEPT), json=BODY).json()
+    assert body["already_member"] is True
+    assert [p.id for p in world.profiles if p.user_sub == GUEST.sub] == [
+        uuid.UUID(body["profile_id"])
+    ]
+    assert row.uses == 0

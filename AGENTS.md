@@ -306,7 +306,7 @@ from tuttitrip.shared.permissions.registry import Access, Feature
   `https://<front>/join#t=<token>`, a front wysyła token w ciele `POST /invitations/preview` (nazwa podróży)
   i `POST /invitations/accept` (ciało: `token`, opcjonalnie `display_name`). Tworzenie, lista i odwołanie
   (`POST/GET /trips/{trip_id}/invitations`, `DELETE .../{invitation_id}`): co-host i host, TTL domyślnie 7 dni
-  (max 30), `max_uses` domyślnie 10 (1 do 100), najwyżej 20 działających zaproszeń na wyjazd.
+  (max 30), `max_uses` domyślnie 10 (1 do 100), najwyżej 20 działających zaproszeń na wyjazd (limit miękki, bez blokady: równoległe tworzenie może go lekko przekroczyć).
   Dołączenie w jednej transakcji: `UPDATE ... SET uses = uses + 1 WHERE uses < max_uses AND ...`, potem wiersz
   `trip_members` (member) i profil dorosłego z kontem (`profile_service.create_account_profile`, imię z
   żądania albo "Uczestnik"). Ponowne przyjęcie przez członka daje 200 (`already_member: true`) bez nowego
