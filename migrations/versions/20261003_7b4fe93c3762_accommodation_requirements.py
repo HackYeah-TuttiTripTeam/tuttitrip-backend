@@ -1,6 +1,7 @@
-"""Accommodation requirements, their version and the user grant.
+"""Accommodation requirements and their version.
 
-The UNIQUE (trip_id, kind, key) index serves trip_id lookups.
+The UNIQUE (trip_id, kind, key) index serves trip_id lookups. The user role's
+``accommodation`` grant is already seeded by the permissions migration.
 
 Revision ID: 7b4fe93c3762
 Revises: a42b7c1d9e03
@@ -27,12 +28,6 @@ def upgrade() -> None:
         sa.Column("kind", sa.String(length=16), nullable=False),
         sa.Column("key", sa.String(length=64), nullable=False),
         sa.Column("hard", sa.Boolean(), nullable=False),
-        sa.Column(
-            "nights",
-            sa.ARRAY(sa.SmallInteger()),
-            server_default=sa.text("'{}'"),
-            nullable=False,
-        ),
         sa.Column("max_distance_m", sa.Integer(), nullable=True),
         sa.CheckConstraint(
             "(kind = 'distance') = (max_distance_m IS NOT NULL)",
@@ -41,10 +36,6 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "kind IN ('amenity', 'platform', 'distance')",
             name=op.f("ck_accommodation_requirements_kind"),
-        ),
-        sa.CheckConstraint(
-            "0 < ALL(nights)",
-            name=op.f("ck_accommodation_requirements_nights_positive"),
         ),
         sa.CheckConstraint(
             "max_distance_m > 0",
@@ -75,16 +66,9 @@ def upgrade() -> None:
             "trip_id", name=op.f("pk_accommodation_requirements_versions")
         ),
     )
-    op.execute(
-        "INSERT INTO role_grants (role_name, feature, level) "
-        "VALUES ('user', 'accommodation', 'WRITE') ON CONFLICT DO NOTHING"
-    )
 
 
 def downgrade() -> None:
     """Revert this revision."""
-    op.execute(
-        "DELETE FROM role_grants WHERE role_name = 'user' AND feature = 'accommodation'"
-    )
     op.drop_table("accommodation_requirements_versions")
     op.drop_table("accommodation_requirements")
