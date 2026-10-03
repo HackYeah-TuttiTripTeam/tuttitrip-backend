@@ -108,7 +108,7 @@ def test_only_the_allow_listed_routes_are_public() -> None:
     assert public_routes == PUBLIC_ENDPOINTS
 
 
-@pytest.mark.parametrize("route", API_ROUTES, ids=lambda r: f"{r.name}")
+@pytest.mark.parametrize("route", API_ROUTES, ids=lambda r: f"{r.name}@{r.path}")
 def test_requirements_name_leaf_features_from_the_registry(route: RouteContext) -> None:
     for marker in route_markers(route):
         if isinstance(marker, PermissionRequirement):
