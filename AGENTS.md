@@ -40,6 +40,7 @@ src/tuttitrip/
     permissions/       feature registry, roles/grants, requires(), GET /api/v1/me, admin API
     health/            GET /api/v1/health (DB + worker), GET /api/v1/health/live
     llm/               Pydantic AI model catalog (services/model_catalog.py)
+    pagination/        list contract: PageParams, Page[T], BulkSelection (paginate() is in db/pagination.py)
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
@@ -118,6 +119,29 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   there; CORS still matters for direct cross-origin use. It allows no
   credentials (the API takes bearer tokens, never cookies).
 - Old unversioned paths (`/health`, `/openapi.json`, `/docs`, `/trips`...) answer 404.
+
+## Lists
+
+Every endpoint that returns a collection is paginated, filterable and
+sortable on the server. No endpoint returns a bare list[...]; the legacy
+exceptions are listed in tests/architecture/test_lists.py and only shrink.
+
+- Query: page (from 1), size (default 20, max 100), sort (an enum per
+  endpoint, mapped to columns in db.py, with id as the last key), dir
+  (asc|desc), and typed filters declared once as a Pydantic model that the
+  query and any bulk operation share.
+- Response: Page[T] = items, total, page, size, pages. A page past the end
+  returns empty items and the real total, not 404.
+- Use shared.pagination and paginate(). Never sort by a client-provided
+  column name. Index what you filter and sort on.
+- A bulk operation on a list takes either ids (max 100) or the same filter
+  model, never both, and always scopes by the caller.
+
+How: subclass `PageParams` (`shared/pagination/schemas.py`) with `sort` and the
+filters, take it as `Annotated[MyQuery, Query()]`, build the scoped and filtered
+select in `db.py`, then `paginate(session, stmt, params, ordering(COLUMNS,
+params.sort, Model.id))` (`shared/db/pagination.py`) and return `Page[Read]`.
+`BulkSelection[MyFilters]` is the body shape for bulk operations.
 
 ## Conventions
 
