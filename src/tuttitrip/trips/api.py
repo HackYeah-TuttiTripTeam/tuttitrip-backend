@@ -17,13 +17,19 @@ from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.schemas import (
+    MemberRead,
+    MemberRoleUpdate,
     TripCreate,
     TripMembership,
     TripRead,
     TripRole,
     TripUpdate,
 )
-from tuttitrip.trips.services import trip_service
+from tuttitrip.trips.services import member_service, trip_service
+from tuttitrip.trips.services.member_service import (
+    MemberForbiddenError,
+    MemberNotFoundError,
+)
 from tuttitrip.trips.services.trip_service import (
     TripInvalidError,
     TripNotFoundError,
@@ -33,6 +39,7 @@ from tuttitrip.trips.services.trip_service import (
 router = APIRouter(prefix="/trips", tags=["trips"])
 
 TRIP_NOT_FOUND = "Trip not found"
+MEMBER_NOT_FOUND = "Member not found"
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,3 +173,75 @@ async def delete_trip(membership: TripHost, session: SessionDep) -> None:
         session: Database session.
     """
     await trip_service.delete_trip(session, membership)
+
+
+@router.get(
+    "/{trip_id}/members",  # ruff: ignore[fast-api-unused-path-parameter] TripAccess reads it
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.READ)],
+)
+async def list_members(membership: TripMember, session: SessionDep) -> list[MemberRead]:
+    """List the trip's members with their roles (name from their profile).
+
+    Args:
+        membership: The caller's membership (any role).
+        session: Database session.
+
+    Returns:
+        Members, highest role first.
+    """
+    return await member_service.list_members(session, membership)
+
+
+@router.patch(
+    "/{trip_id}/members/{profile_id}",  # ruff: ignore[fast-api-unused-path-parameter]
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE)],
+)
+async def update_member(
+    profile_id: UUID,
+    data: MemberRoleUpdate,
+    membership: TripHost,
+    session: SessionDep,
+) -> MemberRead:
+    """Make a member a co-host or a plain member (host only).
+
+    Args:
+        profile_id: Profile of the member.
+        data: The new role.
+        membership: The caller's membership (host).
+        session: Database session.
+
+    Returns:
+        The member after the change.
+    """
+    try:
+        return await member_service.set_role(session, membership, profile_id, data.role)
+    except MemberNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, MEMBER_NOT_FOUND) from exc
+    except MemberForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+
+@router.delete(
+    "/{trip_id}/members/{profile_id}",  # ruff: ignore[fast-api-unused-path-parameter]
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE)],
+)
+async def remove_member(
+    profile_id: UUID, membership: TripCoHost, session: SessionDep
+) -> None:
+    """Remove a member; their profile stays on the trip without an account.
+
+    A co-host removes members, the host removes members and co-hosts, nobody
+    removes the host.
+
+    Args:
+        profile_id: Profile of the member.
+        membership: The caller's membership (co-host or host).
+        session: Database session.
+    """
+    try:
+        await member_service.remove_member(session, membership, profile_id)
+    except MemberNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, MEMBER_NOT_FOUND) from exc
+    except MemberForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc

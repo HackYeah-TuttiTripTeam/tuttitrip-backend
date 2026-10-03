@@ -228,6 +228,42 @@ def _follow_new_group(profile: Profile, new_age: int) -> dict[str, Any]:
     return {k: v for k, v in now.items() if getattr(profile, k) == was[k]}
 
 
+async def get_profile(
+    session: AsyncSession, membership: TripMembership, profile_id: UUID
+) -> ProfileRead:
+    """Read one profile of the trip.
+
+    Args:
+        session: Open session.
+        membership: The caller's checked membership of the trip.
+        profile_id: Profile to read.
+
+    Returns:
+        The profile.
+    """
+    return ProfileRead.model_validate(
+        await _get(session, membership.trip_id, profile_id)
+    )
+
+
+async def unlink_account(
+    session: AsyncSession, membership: TripMembership, profile_id: UUID
+) -> None:
+    """Detach the account from a profile; the person stays as a profile without one.
+
+    Used when a member leaves the trip: the profile keeps counting in the plan.
+    Flushes, the caller commits.
+
+    Args:
+        session: Open session.
+        membership: The caller's checked (co-host) membership.
+        profile_id: Profile to detach.
+    """
+    profile = await _get(session, membership.trip_id, profile_id)
+    profile.user_sub = None
+    await session.flush()
+
+
 async def update_profile(
     session: AsyncSession,
     membership: TripMembership,

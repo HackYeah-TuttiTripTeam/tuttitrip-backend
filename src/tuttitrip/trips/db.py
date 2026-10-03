@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.trips.models import Trip, TripMember
@@ -95,3 +95,56 @@ async def delete_trip(session: AsyncSession, trip_id: UUID) -> None:
         trip_id: Trip id.
     """
     await session.execute(delete(Trip).where(Trip.id == trip_id))
+
+
+async def select_member_roles(
+    session: AsyncSession, trip_id: UUID
+) -> dict[str, TripRole]:
+    """Roles of all members of a trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+
+    Returns:
+        Role by Auth0 subject.
+    """
+    result = await session.execute(
+        select(TripMember.user_sub, TripMember.role).where(
+            TripMember.trip_id == trip_id
+        )
+    )
+    return dict(result.tuples().all())
+
+
+async def delete_member(session: AsyncSession, trip_id: UUID, sub: str) -> None:
+    """Remove a user from a trip.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+        sub: Auth0 subject.
+    """
+    await session.execute(
+        delete(TripMember).where(
+            TripMember.trip_id == trip_id, TripMember.user_sub == sub
+        )
+    )
+
+
+async def update_member_role(
+    session: AsyncSession, trip_id: UUID, sub: str, role: TripRole
+) -> None:
+    """Set a member's role.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+        sub: Auth0 subject.
+        role: The new role.
+    """
+    await session.execute(
+        update(TripMember)
+        .where(TripMember.trip_id == trip_id, TripMember.user_sub == sub)
+        .values(role=role)
+    )
