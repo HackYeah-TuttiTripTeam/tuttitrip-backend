@@ -168,6 +168,9 @@ How:
 - Tests never call real LLMs (`models.ALLOW_MODEL_REQUESTS = False` in
   `tests/conftest.py`); use `agent.override(model=TestModel(...))`.
 - Domain tests go in `tests/domains/`, shared infrastructure in `tests/shared/`.
+- Algorithm fixtures (test city, persona families, expected values of
+  `docs/algorytm.md` section 7) live in `tests/fixtures/` (`city`, `personas`,
+  `scenarios`, `expected`); reuse them instead of inventing data per test.
 - Services raise domain exceptions; `api.py` maps them to HTTP errors.
 - Validation errors (422) never echo request values: `shared/errors/api.py`
   strips `input` and `ctx` from every item. This protects secrets in headers
