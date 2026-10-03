@@ -15,6 +15,7 @@ from tuttitrip.accommodation.api import router as accommodation_router
 from tuttitrip.expenses.api import router as expenses_router
 from tuttitrip.expenses.settlement.api import router as settlement_router
 from tuttitrip.interview.api import router as interview_router
+from tuttitrip.places.api import router as places_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
@@ -47,6 +48,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     expenses_router,
     settlement_router,
     search_router,
+    places_router,
 )
 
 

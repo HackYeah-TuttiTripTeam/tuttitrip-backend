@@ -119,6 +119,9 @@ class Feature(StrEnum):
 
     JOBS = "jobs"
 
+    PLACES = "places"
+    PLACES_CATALOG = "places.catalog"
+
     @property
     def parent(self) -> Feature | None:
         """The enclosing group.
@@ -182,6 +185,8 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.EXPENSES_CORE: "Wydatki: lista i dodawanie",
     Feature.EXPENSES_SETTLEMENT: "Rozliczenie wydatków",
     Feature.JOBS: "Zadania w tle (stan i anulowanie)",
+    Feature.PLACES: "Katalog miejsc",
+    Feature.PLACES_CATALOG: "Katalog miejsc i miast: ceny i godziny ze źródłem",
 }
 
 
