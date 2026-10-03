@@ -158,9 +158,17 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$worker" 2>/dev/null || true)" !
     docker rm -f "$worker" >/dev/null 2>&1 || true
     extra=()
     if [ -f "$TT_STATE_DIR/worker.env" ]; then extra=(--env-file "$TT_STATE_DIR/worker.env"); fi
+    # Same flags as the worker repo's own deploy (tt_start_worker there).
     docker run -d --name "$worker" --network "$TT_NETWORK" --restart unless-stopped \
+      --stop-timeout 40 \
       --label tuttitrip.managed=true --label tuttitrip.env="$env" --label tuttitrip.role=worker \
       --env-file "$workerenv" "${extra[@]}" "$worker_image" >/dev/null
+    # Local models (Ollama embeddings) live on the host's ollama_net network.
+    for net in ${TT_WORKER_EXTRA_NETWORKS:-ollama_net}; do
+      if docker network inspect "$net" >/dev/null 2>&1; then
+        docker network connect "$net" "$worker" >/dev/null
+      fi
+    done
     tt_log "started $worker from fallback image $worker_image"
   else
     tt_log "WARNING: no tuttitrip-worker image (:$env, :develop, :main); jobs stay queued"

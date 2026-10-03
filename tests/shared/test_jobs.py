@@ -27,7 +27,7 @@ from tuttitrip.shared.jobs.contracts import (
 )
 from tuttitrip.shared.jobs.models import WorkerHeartbeat
 from tuttitrip.shared.jobs.services import worker_liveness
-from tuttitrip.shared.jobs.services.job_queue import workflow_id_for
+from tuttitrip.shared.jobs.services.job_queue import TIMEOUT_SECONDS, workflow_id_for
 from tuttitrip.shared.jobs.services.worker_liveness import (
     WorkerUnavailableError,
     get_worker_liveness,
@@ -66,7 +66,8 @@ def test_contract_lists_every_workflow_with_its_queue() -> None:
     document = json.loads(contracts.contract_json())
     assert document["contract_version"] == CONTRACT_VERSION
     assert set(document["workflows"]) == {w.value for w in Workflow}
-    assert document["workflows"]["ping"]["queue"] == "system"
+    assert document["workflows"]["ping"]["queue"] == "default"
+    assert document["queues"] == ["default", "local_llm", "openrouter"]
 
 
 def test_payloads_carry_the_contract_version() -> None:
@@ -112,6 +113,7 @@ def test_jobs_are_private_to_their_owner(
     workflow_id = first.json()["workflow_id"]
     assert again.json()["workflow_id"] == workflow_id  # idempotent
     assert len(queue.jobs) == 1
+    assert queue.queues[workflow_id] == "openrouter"
 
     assert client.get(f"/jobs/{workflow_id}").json()["owner"] == ALICE.sub
     assert client.get(f"/jobs/ping/{workflow_id}").status_code == 404
@@ -193,3 +195,18 @@ def test_incompatible_worker_blocks_enqueue(monkeypatch: pytest.MonkeyPatch) -> 
     )
     with pytest.raises(WorkerUnavailableError, match="contract versions"):
         asyncio.run(worker_liveness.ensure_worker_available(AsyncMock()))
+
+
+def test_local_provider_goes_to_the_local_llm_queue(
+    client: TestClient, queue: FakeJobQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plan_job_service.trip_service, "get_owned_trip", AsyncMock())
+    monkeypatch.setattr(plan_job_service, "ensure_worker_available", AsyncMock())
+    body = {"trip_id": str(uuid.uuid4()), "request": "Gdańsk", "provider": "local"}
+    workflow_id = client.post("/planning/jobs", json=body).json()["workflow_id"]
+    assert queue.queues[workflow_id] == "local_llm"
+    assert queue.payloads[workflow_id].model_dump()["provider"] == "local"
+
+
+def test_every_workflow_has_a_timeout() -> None:
+    assert set(TIMEOUT_SECONDS) == set(Workflow)
