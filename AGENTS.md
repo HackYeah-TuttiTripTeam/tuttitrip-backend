@@ -310,6 +310,70 @@ from tuttitrip.shared.permissions.registry import Access, Feature
   czyli tabela członkostwa albo `owner_sub`, serwis z `get_membership`
   i zależność w `api.py`. Bez ogólnych ACL per obiekt.
 
+## Design system
+
+Skill `tuttitrip-design-system` (`.claude/skills/tuttitrip-design-system`) jest wspólny dla wszystkich
+repozytoriów TuttiTrip; UI powstaje we frontendzie. W backendzie teksty, które czyta człowiek (komunikaty
+błędów pokazywane w aplikacji, opisy narzędzi MCP, eksport planu), piszemy według słownika UI z README
+skilla: „sprawdzenie planu” i „problemy”, a nie „linter” i „naruszenia”; werdykty „Obowiązkowo”, „Pasuje”,
+„Kultowe, ale nie Twoje”, „Pomiń”; powody „Za drogo”, „Za daleko” i tak dalej. Kody reguł i nazwy
+komponentów nie trafiają do tekstów dla ludzi.
+
+## Praca agentów nad issues
+
+Nad backlogiem pracuje równolegle kilku agentów AI i ludzi. Te zasady pilnują, żeby nikt nie wchodził
+innym w drogę i żeby każda funkcja przeszła ten sam proces. Dotyczą też ludzi.
+
+1. Wybór issue. Bierzesz tylko issue z tablicy
+   [TuttiTrip](https://github.com/orgs/HackYeah-TuttiTripTeam/projects/1) ze statusem Todo, bez etykiety
+   `in-progress` i bez przypisanej osoby. Linia „Zależy od:” w opisie wymienia issues, które muszą być
+   zmergowane do `develop`. Jeśli któreś nie jest, pracuj tylko na jego kontrakcie (np. stała odpowiedź z
+   OpenAPI) i napisz to w komentarzu. Kolejność: najpierw P0, potem P1, w obrębie milestone'u.
+2. Zajęcie issue, zanim napiszesz kod:
+   - `gh issue edit <nr> --add-label in-progress`,
+   - Status na tablicy: In Progress,
+   - komentarz „Start” z nazwą gałęzi, ścieżką worktree i krótkim planem (pliki, które zmienisz).
+   Etykieta `in-progress` znaczy „zajęte”. Nie bierz takiego issue i nie zmieniaj go bez zgody zespołu.
+3. Worktree i gałąź. Nigdy nie pracuj w głównym klonie repozytorium. Jedno issue to jeden worktree, jedna
+   gałąź i jeden PR do `develop`:
+
+   ```bash
+   git -C ~/Documents/GitHub/<repo> fetch origin
+   git -C ~/Documents/GitHub/<repo> worktree add -b feature/<nr>-<krotka-nazwa> \
+     ~/Documents/GitHub/worktrees/tuttitrip/<repo>-<nr>-<krotka-nazwa> origin/develop
+   ```
+
+   (`<repo>` to `tuttitrip-backend`, `tuttitrip-worker` albo `tuttitrip-frontend`; w repo zbiorczym
+   `tuttitrip` gałąź bierzesz z `origin/main`.)
+4. Komentarze ze statusem w issue po każdym etapie: plan, implementacja z testami, wynik smoke testu,
+   wynik review subagenta, link do PR. Krótko: co zrobione, co dalej, co blokuje. Gdy utkniesz: etykieta
+   `blocked` i komentarz z powodem i tym, czego potrzebujesz.
+5. Pliki wspólne, w których łatwo o konflikt, zmieniaj małymi krokami i przed PR rób
+   `git fetch origin && git rebase origin/develop`:
+   - `src/tuttitrip/main.py` (`ROUTERS`) i `shared/permissions/registry.py` (`Feature`, migracje z rolą `user`),
+   - migracje Alembic: jedna głowa; przed PR przepnij `down_revision` na aktualną głowę `develop`
+     i uruchom `uv run alembic heads`,
+   - `shared/config/settings.py` razem z `.env.example`,
+   - `shared/jobs/contracts.py` i `contracts/jobs.schema.json` (najpierw worker, skill `sync-contracts`).
+6. Smoke test jest obowiązkowy dla KAŻDEGO zrealizowanego feature'a. Po pushu gałęzi poczekaj na
+   wdrożenie podglądu i przejdź na żywo scenariusz z kryteriów akceptacji issue:
+   - każdy push gałęzi wdraża API pod `https://tuttitrip-api-<slug>.gburek.app/api/v1/...`
+     (Swagger: `/api/v1/docs`); wołaj endpointy z tokenem konta testowego i sprawdź `/api/v1/health`,
+   - dla endpointów z uprawnieniami sprawdź też 401 bez tokenu, 403 bez uprawnienia i 404 dla cudzej
+     podróży.
+   Wynik (kroki, odpowiedzi albo zrzuty ekranu) wpisz w komentarzu w issue. Bez zielonego smoke testu
+   nie ma PR.
+7. Review subagenta. Po zielonym smoke teście uruchom subagenta-recenzenta z diffem gałęzi, treścią
+   issue i story źródłową. Sprawdza:
+   - uproszczenie kodu i zbędną złożoność (skille `simplify` i `ponytail-review`),
+   - złożoność logiki,
+   - poprawność biznesową względem story, słownika z dokumentu architektonicznego i, przy logice
+     planowania, specyfikacji algorytmu (`docs/algorytm.md` w tuttitrip-backend).
+   Popraw to, co znalazł, i **powtórz smoke test**. Wynik review i drugiego smoke testu wpisz w komentarzu.
+8. PR. Dopiero po tym otwórz PR do `develop` skillem `open-pr` (`Closes #<nr>`) i ustaw Status: In
+   Review. Po merge'u zdejmij `in-progress`, usuń worktree
+   (`git -C ~/Documents/GitHub/<repo> worktree remove <ścieżka>`); issue zamyka `Closes`, Status: Done.
+
 ## Zgłoszenia, PR i wydania
 
 Zasady są wspólne dla całej organizacji, pełny opis jest w
