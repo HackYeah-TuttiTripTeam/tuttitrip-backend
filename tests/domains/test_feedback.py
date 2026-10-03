@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+from sqlalchemy import Index
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.schema import CreateIndex
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
@@ -28,6 +31,7 @@ from tuttitrip.profiles.feedback.schemas import (
 )
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.feedback.services.feedback_service import (
+    ACTIVE_VETO_INDEX,
     FeedbackForbiddenError,
     FeedbackPlaceNotFoundError,
     ProfileNotFoundError,
@@ -135,11 +139,6 @@ def test_every_reason_is_accepted_for_dont_want() -> None:
         assert RatingUpdate(value=RatingValue.DONT_WANT, reason_code=reason)
 
 
-def test_values_map_to_the_votes_of_the_algorithm() -> None:
-    assert [v.vote for v in (RatingValue.WANT, RatingValue.NEUTRAL)] == [1, 0]
-    assert RatingValue.DONT_WANT.vote == -1
-
-
 # --- ratings -------------------------------------------------------------
 
 
@@ -162,7 +161,7 @@ async def test_member_rates_their_own_profile(
     assert (saved.value, saved.reason_code) == ("dont_want", "too_far")
     assert saved.updated_by_sub == GRANNY
     assert read.value is RatingValue.DONT_WANT
-    assert read.value.vote == -1
+    assert read.value is RatingValue.DONT_WANT
     session.commit.assert_awaited_once()
 
 
@@ -199,7 +198,7 @@ async def test_co_host_rates_for_someone_without_an_account(
         PLACE,
         RatingUpdate(value=RatingValue.WANT),
     )
-    assert read.value.vote == 1
+    assert read.value is RatingValue.WANT
 
 
 @_sync
@@ -277,9 +276,7 @@ async def test_member_cannot_veto_for_someone_else(
 async def test_second_active_veto_is_a_conflict(
     monkeypatch: pytest.MonkeyPatch, session: AsyncMock, granny: Profile
 ) -> None:
-    monkeypatch.setattr(
-        db, "insert_veto", AsyncMock(side_effect=IntegrityError("x", {}, Exception()))
-    )
+    monkeypatch.setattr(db, "insert_veto", AsyncMock(side_effect=_unique_violation()))
     with pytest.raises(VetoExistsError):
         await feedback_service.create_veto(
             session,
@@ -333,12 +330,16 @@ async def test_list_for_trip_returns_ratings_and_only_active_vetoes(
     by_trip = AsyncMock(return_value=[active])
     monkeypatch.setattr(db, "select_active_vetoes_by_trip", by_trip)
     feedback = await feedback_service.list_for_trip(session, TRIP)
-    assert [r.value.vote for r in feedback.ratings] == [1]
+    assert [r.value for r in feedback.ratings] == [RatingValue.WANT]
     assert [v.id for v in feedback.vetoes] == [active.id]
     by_trip.assert_awaited_once_with(session, TRIP)
 
 
 # --- HTTP ----------------------------------------------------------------
+
+
+def _unique_violation(name: str = "uq_place_vetoes_active") -> IntegrityError:
+    return IntegrityError("insert", {}, Exception(f"duplicate key {name}"))
 
 
 def _mock_session() -> AsyncMock:
@@ -425,9 +426,7 @@ def test_unknown_place_gives_404_and_duplicate_veto_409(
     )
     assert client.post(url, json=body).status_code == 404
     monkeypatch.setattr(feedback_service, "_require_place", AsyncMock())
-    monkeypatch.setattr(
-        db, "insert_veto", AsyncMock(side_effect=IntegrityError("x", {}, Exception()))
-    )
+    monkeypatch.setattr(db, "insert_veto", AsyncMock(side_effect=_unique_violation()))
     assert client.post(url, json=body).status_code == 409
 
 
@@ -484,3 +483,49 @@ def test_read_permission_lists_but_cannot_write(
 def test_rating_read_dto_exposes_the_author() -> None:
     dto = RatingRead.model_validate(_rating(uuid.uuid4(), "want", None))
     assert dto.updated_by_sub == HOST
+
+
+def test_active_veto_index_is_partial_on_revoked_at() -> None:
+    index = next(
+        a
+        for a in PlaceVeto.__table_args__
+        if getattr(a, "name", "") == ACTIVE_VETO_INDEX
+    )
+    assert isinstance(index, Index)
+    ddl = str(CreateIndex(index).compile(dialect=postgresql.dialect()))
+    assert "UNIQUE INDEX" in ddl
+    assert "WHERE revoked_at IS NULL" in ddl
+
+
+@_sync
+async def test_other_integrity_errors_are_not_reported_as_a_duplicate(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncMock, granny: Profile
+) -> None:
+    error = _unique_violation("fk_place_vetoes_place_id_places")
+    monkeypatch.setattr(db, "insert_veto", AsyncMock(side_effect=error))
+    with pytest.raises(IntegrityError):
+        await feedback_service.create_veto(
+            session,
+            _membership(HOST, TripRole.HOST),
+            VetoCreate(profile_id=granny.id, place_id=PLACE),
+        )
+
+
+@_sync
+async def test_veto_again_after_a_revoke_is_created(
+    monkeypatch: pytest.MonkeyPatch, session: AsyncMock, granny: Profile
+) -> None:
+    first = _veto(granny, on_behalf=True)
+    monkeypatch.setattr(db, "select_veto", AsyncMock(return_value=first))
+    host = _membership(HOST, TripRole.HOST)
+    await feedback_service.revoke_veto(session, host, first.id)
+    assert (first.revoked_at is not None, first.revoked_by_sub) == (True, HOST)
+    monkeypatch.setattr(db, "insert_veto", AsyncMock(side_effect=lambda _s, v: v))
+    session.refresh.side_effect = lambda veto: (
+        setattr(veto, "id", uuid.uuid4()),
+        setattr(veto, "created_at", NOW),
+    )
+    read = await feedback_service.create_veto(
+        session, host, VetoCreate(profile_id=granny.id, place_id=PLACE)
+    )
+    assert read.revoked_at is None

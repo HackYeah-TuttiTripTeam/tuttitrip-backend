@@ -12,8 +12,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from tuttitrip.planning.plans.schemas import ReasonCode
-
 __all__ = [
     "RatingRead",
     "RatingUpdate",
@@ -26,21 +24,24 @@ __all__ = [
 
 
 @unique
+class ReasonCode(StrEnum):
+    """Why a person is against a place; shared with the plan verdict reasons."""
+
+    TOO_EXPENSIVE = "too_expensive"
+    TOO_FAR = "too_far"
+    NOT_MY_STYLE = "not_my_style"
+    TOO_CROWDED = "too_crowded"
+    TOO_HARD_FOR_CHILD = "too_hard_for_child"
+    OTHER = "other"
+
+
+@unique
 class RatingValue(StrEnum):
     """A person's vote on a place."""
 
     WANT = "want"
     DONT_WANT = "dont_want"
     NEUTRAL = "neutral"
-
-    @property
-    def vote(self) -> int:
-        """The vote ``v_ip`` in {-1, 0, +1} fed to E1.
-
-        Returns:
-            +1 for want, -1 for do not want, 0 for neutral.
-        """
-        return {"want": 1, "dont_want": -1, "neutral": 0}[self.value]
 
 
 class RatingUpdate(BaseModel):
@@ -96,6 +97,7 @@ class VetoRead(BaseModel):
     on_behalf: bool
     created_at: datetime
     revoked_at: datetime | None
+    revoked_by_sub: str | None
 
 
 class TripFeedback(BaseModel):

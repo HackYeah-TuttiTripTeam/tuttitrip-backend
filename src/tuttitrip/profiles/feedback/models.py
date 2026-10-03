@@ -14,8 +14,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from tuttitrip.planning.plans.schemas import ReasonCode
-from tuttitrip.profiles.feedback.schemas import RatingValue
+from tuttitrip.profiles.feedback.schemas import RatingValue, ReasonCode
 from tuttitrip.shared.db.base import Base
 
 
@@ -85,3 +84,4 @@ class PlaceVeto(Base):
     on_behalf: Mapped[bool]
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     revoked_at: Mapped[datetime | None]
+    revoked_by_sub: Mapped[str | None] = mapped_column(String(255))

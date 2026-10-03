@@ -43,3 +43,10 @@ def test_trip_details_migration_names_its_checks_once_both_ways() -> None:
         assert f"ADD CONSTRAINT ck_trips_{name} CHECK" in up
         assert f"DROP CONSTRAINT ck_trips_{name};" in down
     assert "ck_trips_ck_" not in up + down
+
+
+def test_feedback_migration_grants_and_removes_the_user_role_permission() -> None:
+    up = _sql("upgrade", "213f4a329ce3:f3ed8c494ca7")
+    down = _sql("downgrade", "f3ed8c494ca7:213f4a329ce3")
+    assert "VALUES ('user', 'profiles.feedback', 'WRITE') ON CONFLICT DO NOTHING" in up
+    assert "role_name = 'user' AND feature = 'profiles.feedback'" in down

@@ -25,6 +25,8 @@ from tuttitrip.profiles.feedback.schemas import (
 from tuttitrip.profiles.models import Profile
 from tuttitrip.trips.schemas import TripMembership, TripRole
 
+ACTIVE_VETO_INDEX = "uq_place_vetoes_active"
+
 
 class ProfileNotFoundError(Exception):
     """The profile is not on this trip."""
@@ -157,8 +159,10 @@ async def create_veto(
                 on_behalf=profile.user_sub != membership.sub,
             ),
         )
-    except IntegrityError as exc:  # the partial unique index of active vetoes
+    except IntegrityError as exc:
         await session.rollback()
+        if ACTIVE_VETO_INDEX not in str(exc.orig):
+            raise
         msg = "This person already has an active veto on the place"
         raise VetoExistsError(msg) from exc
     await session.refresh(veto)
@@ -202,6 +206,7 @@ async def revoke_veto(
     await _profile_for_author(session, membership, veto.profile_id)
     if veto.revoked_at is None:
         veto.revoked_at = datetime.now(UTC)
+        veto.revoked_by_sub = membership.sub
         await session.commit()
 
 
