@@ -18,6 +18,8 @@ from tuttitrip.accounts.api import router as accounts_router
 from tuttitrip.demo.api import internal_router as demo_internal_router
 from tuttitrip.demo.api import router as demo_router
 from tuttitrip.expenses.api import router as expenses_router
+from tuttitrip.expenses.logic.receipts import MAX_BYTES as RECEIPT_MAX_BYTES
+from tuttitrip.expenses.services.nbp_client import close_client as close_nbp_client
 from tuttitrip.expenses.settlement.api import router as settlement_router
 from tuttitrip.interview.api import router as interview_router
 from tuttitrip.mcp.api import create_mcp_app
@@ -39,6 +41,7 @@ from tuttitrip.shared.health.api import router as health_router
 from tuttitrip.shared.jobs.api import router as jobs_router
 from tuttitrip.shared.permissions.api import document_permissions
 from tuttitrip.shared.permissions.api import router as permissions_router
+from tuttitrip.shared.uploadlimit.middleware import UploadSizeLimit
 from tuttitrip.trips.api import router as trips_router
 from tuttitrip.trips.checkins.api import router as checkins_router
 from tuttitrip.trips.invitations.api import router as invitations_router
@@ -49,6 +52,7 @@ from tuttitrip.voting.api import router as voting_router
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
+RECEIPT_MULTIPART_SLACK = 256 * 1024
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +107,7 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     try:
         yield
     finally:
+        await close_nbp_client()
         await dispose_engine()
 
 
@@ -127,6 +132,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=f"{API_PREFIX}/redoc",
         swagger_ui_oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
         lifespan=combine_lifespans(lifespan, mcp_app.lifespan) if mcp_app else lifespan,
+    )
+    # Multipart overhead on top of the image; added first so CORS stays outermost.
+    app.add_middleware(
+        UploadSizeLimit,
+        limits=[
+            (
+                rf"{API_PREFIX}/trips/[^/]+/expenses/receipts",
+                RECEIPT_MAX_BYTES + RECEIPT_MULTIPART_SLACK,
+            )
+        ],
     )
     app.add_middleware(
         CORSMiddleware,

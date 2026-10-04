@@ -1,5 +1,6 @@
 """Settlement of a trip: balances, transfers, payments and closing."""
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -37,6 +38,21 @@ class SettlementClosedError(Exception):
     """The host closed the settlement; expenses and payments are frozen."""
 
 
+class SettlementHasDraftsError(Exception):
+    """Draft expenses are waiting for confirmation, so the settlement cannot close."""
+
+    def __init__(self, count: int) -> None:
+        """Keep the number of drafts for the message.
+
+        Args:
+            count: Draft expenses of the trip.
+        """
+        super().__init__(
+            f"{count} draft expense(s) must be confirmed or deleted before closing"
+        )
+        self.count = count
+
+
 class PaymentNotFoundError(Exception):
     """The payment is not on this trip."""
 
@@ -69,7 +85,7 @@ def _money(cents: int) -> Decimal:
 def _spending(expense: Expense) -> Spending:
     return Spending(
         payer=expense.payer_profile_id,
-        cents=to_cents(expense.trip_amount),
+        cents=to_cents(expense.trip_amount or expense.amount),  # confirmed: priced
         method=expense.split_method,
         shares=[Share(s.profile_id, s.value) for s in expense.shares],
     )
@@ -80,7 +96,10 @@ def _payment_read(payment: SettlementPayment) -> PaymentRead:
 
 
 async def ensure_open(session: AsyncSession, trip_id: UUID) -> None:
-    """Refuse a change to expenses or payments of a closed settlement.
+    """Lock the trip's settlement and refuse a change when it is closed.
+
+    Call it right before a write: the lock lasts until the transaction ends, so
+    a concurrent ``close`` either waits for the write or makes it fail.
 
     Args:
         session: Open session.
@@ -89,6 +108,7 @@ async def ensure_open(session: AsyncSession, trip_id: UUID) -> None:
     Raises:
         SettlementClosedError: The host closed the settlement.
     """
+    await db.lock_settlement(session, trip_id)
     if await db.select_closure(session, trip_id) is not None:
         msg = "The settlement is closed; ask the host to reopen it"
         raise SettlementClosedError(msg)
@@ -134,7 +154,7 @@ async def get_settlement(
                 to_profile_id=t.to_profile_id,
                 amount=_money(t.cents),
             )
-            for t in settle(balances)
+            for t in await asyncio.to_thread(settle, balances)
         ],
         closed_at=closure.closed_at if closure else None,
     )
@@ -260,8 +280,15 @@ async def close(session: AsyncSession, membership: TripMembership) -> Settlement
 
     Returns:
         The settlement with ``closed_at`` set (closing twice changes nothing).
+
+    Raises:
+        SettlementHasDraftsError: Draft expenses are still waiting.
     """
+    await db.lock_settlement(session, membership.trip_id)
     if await db.select_closure(session, membership.trip_id) is None:
+        drafts = await expense_db.count_drafts(session, membership.trip_id)
+        if drafts:
+            raise SettlementHasDraftsError(drafts)
         await db.insert_closure(
             session,
             TripSettlement(trip_id=membership.trip_id, closed_by_sub=membership.sub),
@@ -280,6 +307,7 @@ async def reopen(session: AsyncSession, membership: TripMembership) -> Settlemen
     Returns:
         The settlement with ``closed_at`` empty.
     """
+    await db.lock_settlement(session, membership.trip_id)
     closure = await db.select_closure(session, membership.trip_id)
     if closure is not None:
         await db.delete_closure(session, closure)

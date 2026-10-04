@@ -8,7 +8,8 @@ newest row. See https://api.nbp.pl/en.html.
 """
 
 import json
-from datetime import date, timedelta
+import time
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from functools import lru_cache
 from operator import itemgetter
@@ -20,6 +21,10 @@ from tuttitrip.expenses.logic.rates import PLN, Quote
 from tuttitrip.shared.config.settings import get_settings
 
 LOOKBACK_DAYS = {"a": 7, "b": 14}
+RECENT_TTL = 3600.0
+"""Seconds a quote is kept when the day may still get its own (today, or later)."""
+MISSING_TTL = 600.0
+"""Seconds "NBP has no rate for this currency" is remembered."""
 
 
 class RateNotFoundError(Exception):
@@ -52,10 +57,19 @@ class NbpClient:
             transport=transport,
             headers={"Accept": "application/json"},
         )
-        self._cache: dict[tuple[str, date], Quote] = {}
+        # key -> (quote or None for "not found", monotonic expiry or None = forever)
+        self._cache: dict[tuple[str, date], tuple[Quote | None, float | None]] = {}
+
+    async def aclose(self) -> None:
+        """Close the HTTP client."""
+        await self._client.aclose()
 
     async def quote(self, code: str, on: date) -> Quote:
         """Average rate of ``code`` for ``on`` or the last day before it.
+
+        Past days are cached for good. For today (or later) a quote dated
+        before the day may be replaced once NBP publishes, so it expires after
+        an hour; "not found" is remembered for ten minutes.
 
         Args:
             code: ISO 4217 code.
@@ -71,9 +85,24 @@ class NbpClient:
         if code == PLN:
             return Quote(PLN, Decimal(1), None, None)
         key = (code, on)
-        if key not in self._cache:
-            self._cache[key] = await self._fetch(code, on)
-        return self._cache[key]
+        hit = self._cache.get(key)
+        if hit is not None and (hit[1] is None or hit[1] > time.monotonic()):
+            if hit[0] is None:
+                raise RateNotFoundError(code)
+            return hit[0]
+        try:
+            quote = await self._fetch(code, on)
+        except RateNotFoundError:
+            self._cache[key] = (None, time.monotonic() + MISSING_TTL)
+            raise
+        provisional = on >= datetime.now(UTC).date() and (
+            quote.effective_date is None or quote.effective_date < on
+        )
+        self._cache[key] = (
+            quote,
+            time.monotonic() + RECENT_TTL if provisional else None,
+        )
+        return quote
 
     async def _fetch(self, code: str, on: date) -> Quote:
         for table, days in LOOKBACK_DAYS.items():
@@ -106,6 +135,13 @@ def _parse(code: str, body: str) -> Quote:
     except (ValueError, KeyError, TypeError) as exc:
         msg = "NBP answered with an unexpected body"
         raise RateUnavailableError(msg) from exc
+
+
+async def close_client() -> None:
+    """Close the shared client if one was created (application shutdown)."""
+    if get_client.cache_info().currsize:
+        await get_client().aclose()
+        get_client.cache_clear()
 
 
 @lru_cache(maxsize=1)

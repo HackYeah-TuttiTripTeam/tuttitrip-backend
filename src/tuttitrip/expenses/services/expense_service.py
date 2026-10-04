@@ -66,7 +66,7 @@ class ExpenseInvalidError(Exception):
 class Pricing:
     """An expense in the trip's currency and the rate that got it there."""
 
-    trip_amount: Decimal
+    trip_amount: Decimal | None
     rate: Decimal | None = None
     source: str | None = None
     table: str | None = None
@@ -75,7 +75,8 @@ class Pricing:
 
 def _read(expense: Expense) -> ExpenseRead:
     shares = [Share(s.profile_id, s.value) for s in expense.shares]
-    cents = allocate(to_cents(expense.trip_amount), expense.split_method, shares)
+    counted = expense.trip_amount if expense.trip_amount is not None else expense.amount
+    cents = allocate(to_cents(counted), expense.split_method, shares)
     rate = (
         ExchangeRateRead(
             rate=expense.rate,
@@ -256,8 +257,8 @@ async def create_expense(
         ExpenseInvalidError: A rule is broken.
         SettlementClosedError: The settlement is closed.
     """
-    await settlement_service.ensure_open(session, membership.trip_id)
     currency, trip_currency = await _check(session, membership, data)
+    await session.commit()  # end the read transaction: no DB tx held during NBP
     pricing = await price(
         amount=data.amount,
         currency=currency,
@@ -265,6 +266,7 @@ async def create_expense(
         spent_on=data.spent_on,
         manual_rate=data.manual_rate,
     )
+    await settlement_service.ensure_open(session, membership.trip_id)
     expense = Expense(
         trip_id=membership.trip_id,
         payer_profile_id=data.payer_profile_id,
@@ -383,7 +385,6 @@ async def _update(
     if confirm and expense.status != ExpenseStatus.DRAFT:
         msg = "Only a draft can be confirmed"
         raise ExpenseNotDraftError(msg)
-    await settlement_service.ensure_open(session, membership.trip_id)
     changes = data.model_dump(
         exclude_unset=True, exclude={"participants", "manual_rate"}
     )
@@ -409,7 +410,9 @@ async def _update(
         }
     )
     currency, trip_currency = await _check(session, membership, merged)
+    await session.commit()  # end the read transaction: no DB tx held during NBP
     # A description-only edit never reprices (the trip's currency may have changed).
+    pricing: Pricing | None = None
     if (
         confirm
         or data.manual_rate is not None
@@ -428,6 +431,8 @@ async def _update(
             manual_rate=data.manual_rate,
             stored=expense,
         )
+    await settlement_service.ensure_open(session, membership.trip_id)
+    if pricing is not None:
         expense.trip_amount = pricing.trip_amount
         expense.rate = pricing.rate
         expense.rate_source = pricing.source
@@ -456,7 +461,7 @@ async def create_draft(
 ) -> ExpenseRead:
     """Store an expense read from a receipt as a draft (no settlement effect).
 
-    A rate that cannot be fetched now leaves the amount unconverted; confirming
+    A rate that cannot be fetched now leaves ``trip_amount`` empty; confirming
     prices it again.
 
     Args:
@@ -472,6 +477,7 @@ async def create_draft(
         ExpenseInvalidError: The fields break a rule.
     """
     currency, trip_currency = await _check(session, membership, data)
+    await session.commit()  # end the read transaction: no DB tx held during NBP
     try:
         pricing = await price(
             amount=data.amount,
@@ -481,7 +487,7 @@ async def create_draft(
             manual_rate=None,
         )
     except ExpenseInvalidError:
-        pricing = Pricing(data.amount)
+        pricing = Pricing(None)  # unpriced draft: confirming fetches the rate
     expense = Expense(
         trip_id=membership.trip_id,
         payer_profile_id=data.payer_profile_id,

@@ -6,6 +6,7 @@ from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tests.shared.fakes import FakeJobQueue, authorize
@@ -250,3 +251,28 @@ def test_other_trips_and_other_users_jobs_are_404(
         ).status_code
         == 404
     )
+
+
+def test_two_members_typing_the_same_sentence_get_their_own_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeJobQueue()
+    client = _client(monkeypatch, queue)
+    first = client.post(
+        path("start_expense_draft", trip_id=TRIP), json=SENTENCE
+    ).json()["workflow_id"]
+    app = client.app
+    assert isinstance(app, FastAPI)
+    authorize(app, AuthenticatedUser(sub="auth0|ania"))
+    second = client.post(
+        path("start_expense_draft", trip_id=TRIP), json=SENTENCE
+    ).json()["workflow_id"]
+    assert first != second
+    # The second member polls their own job, not the first member's.
+    _finish(queue, second, {"amount_minor": 14200})
+    queue.jobs[second] = queue.jobs[second].model_copy(update={"owner": "auth0|ania"})
+    ok = client.get(path("get_expense_draft", trip_id=TRIP, workflow_id=second))
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "ready"
+    other = client.get(path("get_expense_draft", trip_id=TRIP, workflow_id=first))
+    assert other.status_code == 404

@@ -3,10 +3,11 @@
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tests.shared.fakes import FakeJobQueue, authorize
@@ -23,10 +24,20 @@ from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.jobs.api import get_job_queue
-from tuttitrip.shared.jobs.contracts import Queue, ReadReceiptInput, Workflow
+from tuttitrip.shared.jobs.contracts import (
+    ContractPayload,
+    Queue,
+    ReadReceiptInput,
+    Workflow,
+)
 from tuttitrip.shared.jobs.schemas import JobState
-from tuttitrip.shared.jobs.services.job_queue import workflow_id_for
+from tuttitrip.shared.jobs.services.job_queue import (
+    JobQueueUnavailableError,
+    workflow_id_for,
+)
 from tuttitrip.shared.jobs.services.worker_liveness import WorkerUnavailableError
+from tuttitrip.shared.permissions.logic.resolution import Grant
+from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.schemas import TripMembership, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
 
@@ -110,6 +121,9 @@ def _client(
         evidence.id = uuid.uuid4()
 
     monkeypatch.setattr(db, "insert_evidence", AsyncMock(side_effect=stored))
+    monkeypatch.setattr(db, "count_evidence", AsyncMock(return_value=0))
+    monkeypatch.setattr(db, "delete_expired_evidence", AsyncMock())
+    monkeypatch.setattr(db, "delete_evidence", AsyncMock())
     app = create_app()
     authorize(app, ME)
     app.dependency_overrides[get_session] = _session
@@ -189,6 +203,8 @@ def test_image_is_served_to_members_only_and_not_cached(
     assert ok.content == JPEG
     assert ok.headers["content-type"] == "image/jpeg"
     assert "no-store" in ok.headers["cache-control"]
+    assert ok.headers["content-security-policy"] == "default-src 'none'; sandbox"
+    assert ok.headers["x-content-type-options"] == "nosniff"
     assert (
         _client(monkeypatch, FakeJobQueue(), member=False).get(url).status_code == 404
     )
@@ -289,3 +305,47 @@ def test_confirm_makes_it_count_and_deletes_the_image(
     assert deleted.await_args.args[1] == evidence_id
     # Confirming twice is a conflict.
     assert client.post(url, json={}).status_code == 409
+
+
+def test_failed_enqueue_deletes_the_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Broken(FakeJobQueue):
+        @override
+        async def enqueue(
+            self,
+            workflow: Workflow,
+            payload: ContractPayload,
+            *,
+            user: str,
+            key: str,
+            queue: Queue | None = None,
+        ) -> str:
+            raise JobQueueUnavailableError
+
+    deleted = AsyncMock()
+    client = _client(monkeypatch, Broken())
+    monkeypatch.setattr(db, "delete_evidence", deleted)
+    assert _upload(client, JPEG, "image/jpeg")[0] == 503
+    deleted.assert_awaited_once()
+
+
+def test_a_trip_cannot_hold_more_unconfirmed_images_than_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeJobQueue()
+    client = _client(monkeypatch, queue)
+    monkeypatch.setattr(db, "count_evidence", AsyncMock(return_value=20))
+    assert _upload(client, JPEG, "image/jpeg")[0] == 429
+    assert not queue.jobs
+    monkeypatch.setattr(db, "count_evidence", AsyncMock(return_value=19))
+    assert _upload(client, JPEG, "image/jpeg")[0] == 202
+
+
+def test_the_receipt_poll_writes_so_it_needs_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(monkeypatch, FakeJobQueue())
+    app = client.app
+    assert isinstance(app, FastAPI)
+    authorize(app, ME, (Grant(Feature.EXPENSES_CORE, Access.READ),))
+    url = path("get_receipt", trip_id=TRIP, evidence_id=uuid.uuid4())
+    assert client.get(url).status_code == 403

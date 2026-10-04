@@ -1,5 +1,6 @@
 """Draft an expense from one typed sentence (the model runs in the worker)."""
 
+import hashlib
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -32,6 +33,16 @@ class DraftNotFoundError(Exception):
     """No such draft job for this trip and caller."""
 
 
+def _key(membership: TripMembership) -> str:
+    """Trip id and a hash of the caller, so two members never share a job.
+
+    Returns:
+        ``<trip_id>-<12 hex chars>``; the workflow id starts with it.
+    """
+    digest = hashlib.sha256(membership.sub.encode()).hexdigest()[:12]
+    return f"{membership.trip_id}-{digest}"
+
+
 async def start_draft(
     session: AsyncSession,
     queue: JobQueue,
@@ -47,7 +58,7 @@ async def start_draft(
         data: The sentence.
 
     Returns:
-        The workflow id (the same one for the same sentence).
+        The workflow id (the same one for the same member and sentence).
     """
     await ensure_worker_available(session)
     payload = ParseExpenseTextInput(trip_id=membership.trip_id, text=data.text)
@@ -55,7 +66,7 @@ async def start_draft(
         Workflow.PARSE_EXPENSE_TEXT,
         payload,
         user=membership.sub,
-        key=str(membership.trip_id),
+        key=_key(membership),
     )
 
 
@@ -79,7 +90,7 @@ async def get_draft(
     Raises:
         DraftNotFoundError: Not a draft job of this trip and caller.
     """
-    prefix = f"{Workflow.PARSE_EXPENSE_TEXT.value}-{membership.trip_id}-"
+    prefix = f"{Workflow.PARSE_EXPENSE_TEXT.value}-{_key(membership)}-"
     if not workflow_id.startswith(prefix):
         raise DraftNotFoundError(workflow_id)
     try:

@@ -1,6 +1,8 @@
 """Settlement: cent-exact balances, the smallest deterministic transfer list."""
 
 import random
+import threading
+import time
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -22,6 +24,7 @@ from tuttitrip.expenses.settlement.logic.balances import (
     net_balances,
     settle,
 )
+from tuttitrip.expenses.settlement.services import settlement_service
 from tuttitrip.main import create_app
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
@@ -230,3 +233,33 @@ def test_outsider_gets_404_and_settlement_needs_its_permission(
     assert outsider.get(path("get_settlement", trip_id=TRIP)).status_code == 404
     denied = _client(monkeypatch, grants=False)
     assert denied.get(path("get_settlement", trip_id=TRIP)).status_code == 403
+
+
+@pytest.mark.parametrize("n", [EXACT_LIMIT, EXACT_LIMIT + 1])
+def test_worst_cases_at_the_exact_limit_and_just_above(n: int) -> None:
+    # No subset sums to zero except the whole set: the DP finds no better split.
+    values = [2**i for i in range(n - 1)]
+    values.append(-sum(values))
+    balances = {uuid.UUID(int=i + 1): v for i, v in enumerate(values)}
+    started = time.monotonic()
+    transfers = settle(balances)
+    assert time.monotonic() - started < 5
+    assert len(transfers) <= n - 1
+    assert set(_applied(balances, transfers).values()) <= {0}
+    assert transfers == settle(dict(reversed(list(balances.items()))))  # stable
+
+
+def test_settlement_does_not_block_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    threads: list[str] = []
+    real = settle
+
+    def spy(balances: dict[uuid.UUID, int]) -> list[Transfer]:
+        threads.append(threading.current_thread().name)
+        return real(balances)
+
+    monkeypatch.setattr(settlement_service, "settle", spy)
+    _client(monkeypatch).get(path("get_settlement", trip_id=TRIP))
+    assert threads
+    assert threads[0] != threading.main_thread().name

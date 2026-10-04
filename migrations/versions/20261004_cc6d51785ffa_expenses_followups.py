@@ -25,7 +25,6 @@ def upgrade() -> None:
     )
     # Existing expenses were all in the trip currency.
     op.execute("UPDATE expenses SET trip_amount = amount")
-    op.alter_column("expenses", "trip_amount", nullable=False)
     op.add_column(
         "expenses", sa.Column("rate", sa.Numeric(precision=18, scale=8), nullable=True)
     )
@@ -130,6 +129,9 @@ def upgrade() -> None:
     op.create_index(
         op.f("ix_expense_evidence_trip_id"), "expense_evidence", ["trip_id"]
     )
+    op.create_index(
+        op.f("ix_expense_evidence_delete_after"), "expense_evidence", ["delete_after"]
+    )
     op.add_column(
         "expenses",
         sa.Column(
@@ -153,6 +155,11 @@ def upgrade() -> None:
     )
     op.create_check_constraint(
         op.f("ck_expenses_status"), "expenses", "status IN ('draft', 'confirmed')"
+    )
+    op.create_check_constraint(
+        op.f("ck_expenses_trip_amount_priced"),
+        "expenses",
+        "status = 'draft' OR trip_amount IS NOT NULL",
     )
 
     op.create_table(
@@ -178,6 +185,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Revert this revision."""
     op.drop_table("trip_settlements")
+    op.drop_constraint(
+        op.f("ck_expenses_trip_amount_priced"), "expenses", type_="check"
+    )
     op.drop_constraint(op.f("ck_expenses_status"), "expenses", type_="check")
     op.drop_constraint(
         op.f("fk_expenses_evidence_id_expense_evidence"), "expenses", type_="foreignkey"
@@ -185,6 +195,7 @@ def downgrade() -> None:
     op.drop_constraint(op.f("uq_expenses_evidence_id"), "expenses", type_="unique")
     op.drop_column("expenses", "evidence_id")
     op.drop_column("expenses", "status")
+    op.drop_index(op.f("ix_expense_evidence_delete_after"), "expense_evidence")
     op.drop_index(op.f("ix_expense_evidence_trip_id"), "expense_evidence")
     op.drop_table("expense_evidence")
     op.drop_index("ix_settlement_payments_trip_id_paid_on", "settlement_payments")

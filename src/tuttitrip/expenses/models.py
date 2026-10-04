@@ -33,6 +33,9 @@ class Expense(Base):
     __table_args__ = (
         CheckConstraint("amount > 0", name="amount_positive"),
         CheckConstraint("trip_amount > 0", name="trip_amount_positive"),
+        CheckConstraint(
+            "status = 'draft' OR trip_amount IS NOT NULL", name="trip_amount_priced"
+        ),
         CheckConstraint("rate_source IN ('nbp', 'manual')", name="rate_source"),
         CheckConstraint(_in("split_method", SplitMethod), name="split_method"),
         CheckConstraint(_in("status", ExpenseStatus), name="status"),
@@ -58,7 +61,8 @@ class Expense(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3))
     # `amount` converted to the trip's currency (equal to `amount` when the same).
-    trip_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # Empty only on a draft whose rate could not be fetched; confirming prices it.
+    trip_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     # Set only for a foreign currency; frozen at save (see `rates.py`).
     rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
     rate_source: Mapped[str | None] = mapped_column(String(8))
@@ -118,4 +122,4 @@ class ExpenseEvidence(Base):
     created_by_sub: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     # Unconfirmed images are removed after this time (a periodic cleanup).
-    delete_after: Mapped[datetime]
+    delete_after: Mapped[datetime] = mapped_column(index=True)

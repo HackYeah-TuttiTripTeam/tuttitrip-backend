@@ -142,10 +142,13 @@ class ExpenseUpdate(BaseModel):
     payer_profile_id: UUID | None = None
     amount: Money | None = None
     currency: Currency | None = Field(
-        default=None, description="Only checked against the trip when sent."
+        default=None,
+        description="Currency of `amount`; changing it fetches the NBP rate again.",
     )
     description: str | None = Field(default=None, max_length=500)
-    spent_on: date | None = None
+    spent_on: date | None = Field(
+        default=None, description="Changing the day fetches the NBP rate again."
+    )
     category: ExpenseCategory | None = None
     split_method: SplitMethod | None = None
     participants: list[ShareInput] | None = Field(default=None, min_length=1)
@@ -210,8 +213,12 @@ class ExpenseRead(BaseModel):
     payer_profile_id: UUID
     amount: Decimal = Field(description="In `currency`, as paid.")
     currency: str
-    trip_amount: Decimal = Field(
-        description="`amount` in the trip's currency; settlement uses this."
+    trip_amount: Decimal | None = Field(
+        description=(
+            "`amount` in the trip's currency; settlement uses this. Empty only on a "
+            "draft whose rate could not be fetched (confirming prices it); its "
+            "participants' parts are then in `currency`."
+        )
     )
     exchange_rate: ExchangeRateRead | None = Field(
         description="Set when `currency` differs from the trip's."
@@ -321,6 +328,7 @@ class ReceiptErrorCode(StrEnum):
     EMPTY = "receipt.empty"
     TOO_LARGE = "receipt.too_large"
     TYPE_NOT_ALLOWED = "receipt.type_not_allowed"
+    TOO_MANY = "receipt.too_many"
 
 
 class ReceiptValidationError(BaseModel):

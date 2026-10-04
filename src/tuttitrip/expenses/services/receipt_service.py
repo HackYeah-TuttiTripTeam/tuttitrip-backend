@@ -23,6 +23,7 @@ from tuttitrip.expenses.schemas import (
 )
 from tuttitrip.expenses.services import expense_service
 from tuttitrip.profiles.services import profile_service
+from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.jobs.contracts import (
     ReadReceiptInput,
     ReadReceiptOutput,
@@ -55,6 +56,10 @@ class ReceiptRejectedError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class ReceiptLimitError(Exception):
+    """The trip already holds the most unconfirmed receipt images it may."""
 
 
 class ReceiptNotFoundError(Exception):
@@ -107,25 +112,41 @@ async def upload(
 
     Raises:
         ReceiptRejectedError: The file is refused.
+        ReceiptLimitError: The trip holds too many unconfirmed images.
     """
     media_type = check_upload(content, claimed_type)
     await ensure_worker_available(session)
+    now = datetime.now(UTC)
+    await db.delete_expired_evidence(session, now)  # opportunistic sweep
+    if (
+        await db.count_evidence(session, membership.trip_id)
+        >= get_settings().expenses.max_unconfirmed_receipts
+    ):
+        await session.commit()
+        msg = "Too many unconfirmed receipts on this trip; confirm or delete some"
+        raise ReceiptLimitError(msg)
     evidence = ExpenseEvidence(
         trip_id=membership.trip_id,
         data=content,
         media_type=media_type,
         size=len(content),
         created_by_sub=membership.sub,
-        delete_after=datetime.now(UTC) + KEEP_UNCONFIRMED,
+        delete_after=now + KEEP_UNCONFIRMED,
     )
     await db.insert_evidence(session, evidence)
     await session.commit()
-    workflow_id = await queue.enqueue(
-        Workflow.READ_RECEIPT,
-        _payload(evidence),
-        user=membership.sub,
-        key=str(evidence.id),
-    )
+    try:
+        workflow_id = await queue.enqueue(
+            Workflow.READ_RECEIPT,
+            _payload(evidence),
+            user=membership.sub,
+            key=str(evidence.id),
+        )
+    except BaseException:
+        # Nobody will read or confirm this image: do not keep it.
+        await db.delete_evidence(session, evidence.id)
+        await session.commit()
+        raise
     return ReceiptAccepted(workflow_id=workflow_id, evidence_id=evidence.id)
 
 
@@ -248,6 +269,9 @@ async def _expense_from(
     profiles = sorted(
         await profile_service.list_profiles(session, membership), key=lambda p: p.id.int
     )
+    if not profiles:
+        msg = "The trip has no people"
+        raise ValueError(msg)
     payer = next((p.id for p in profiles if p.user_sub == membership.sub), None)
     return ExpenseCreate(
         payer_profile_id=payer or profiles[0].id,

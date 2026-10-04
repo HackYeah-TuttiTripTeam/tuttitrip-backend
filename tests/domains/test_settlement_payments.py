@@ -88,13 +88,14 @@ def _session() -> AsyncMock:
     return AsyncMock()
 
 
-def _client(
+def _client(  # ruff: ignore[too-many-arguments] test helper
     monkeypatch: pytest.MonkeyPatch,
     role: TripRole = TripRole.MEMBER,
     *,
     sub: str = USER.sub,
     paid: tuple[SettlementPayment, ...] = (),
     closed: bool = False,
+    drafts: int = 0,
 ) -> TestClient:
     def membership(
         _s: object, _t: uuid.UUID, who: str, min_role: TripRole
@@ -134,6 +135,7 @@ def _client(
         payment.id = uuid.uuid4()
         payment.created_at = datetime(2026, 11, 8, tzinfo=UTC)
 
+    monkeypatch.setattr(expense_db, "count_drafts", AsyncMock(return_value=drafts))
     monkeypatch.setattr(db, "insert_payment", AsyncMock(side_effect=stored))
     monkeypatch.setattr(db, "insert_closure", AsyncMock())
     monkeypatch.setattr(db, "delete_closure", AsyncMock())
@@ -231,3 +233,10 @@ def test_closed_settlement_refuses_expenses_and_payments_with_409(
     assert created.status_code == 409
     assert "host" in created.json()["detail"]
     assert client.post(path("mark_paid", trip_id=TRIP), json=BODY).status_code == 409
+
+
+def test_close_is_refused_while_drafts_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    host = _client(monkeypatch, TripRole.HOST, sub=HOST_SUB, drafts=2)
+    response = host.post(path("close_settlement", trip_id=TRIP))
+    assert response.status_code == 409
+    assert "2 draft" in response.json()["detail"]

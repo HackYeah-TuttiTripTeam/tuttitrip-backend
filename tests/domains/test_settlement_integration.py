@@ -54,6 +54,9 @@ async def _scenario(session: AsyncSession) -> None:
             host,
             PaymentCreate(from_profile_id=b, to_profile_id=a, amount=Decimal("33.00")),
         )
+        # A person in a payment cannot be removed (409 in the API, not a 500).
+        assert await expense_service.profile_in_use(session, host, b)
+        assert await expense_service.profile_in_use(session, host, a)
         after = await settlement_service.get_settlement(session, host)
         assert [(t.from_profile_id, t.to_profile_id) for t in after.transfers] == [
             (c, a)

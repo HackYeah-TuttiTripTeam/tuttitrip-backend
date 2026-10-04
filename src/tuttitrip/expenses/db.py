@@ -1,8 +1,9 @@
 """Expense queries on PostgreSQL."""
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Select, delete, exists, select
+from sqlalchemy import Select, delete, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.expenses.models import Expense, ExpenseEvidence, ExpenseShare
@@ -12,6 +13,7 @@ from tuttitrip.expenses.schemas import (
     ExpenseSort,
     ExpenseStatus,
 )
+from tuttitrip.expenses.settlement.models import SettlementPayment
 from tuttitrip.shared.db.pagination import Column, ordering, paginate
 from tuttitrip.shared.pagination.schemas import Page
 
@@ -140,7 +142,7 @@ async def delete_expense(session: AsyncSession, expense: Expense) -> None:
 async def profile_has_expenses(
     session: AsyncSession, trip_id: UUID, profile_id: UUID
 ) -> bool:
-    """Tell whether a person paid or shares any expense of the trip.
+    """Tell whether a person paid or shares an expense, or is in a settlement payment.
 
     Args:
         session: Open session.
@@ -148,10 +150,15 @@ async def profile_has_expenses(
         profile_id: Profile id.
 
     Returns:
-        True when removing the profile would orphan an expense.
+        True when removing the profile would orphan an expense or a payment.
     """
     shared = exists().where(
         ExpenseShare.expense_id == Expense.id, ExpenseShare.profile_id == profile_id
+    )
+    paid = exists().where(
+        SettlementPayment.trip_id == trip_id,
+        (SettlementPayment.from_profile_id == profile_id)
+        | (SettlementPayment.to_profile_id == profile_id),
     )
     found = await session.scalar(
         select(
@@ -159,6 +166,7 @@ async def profile_has_expenses(
                 Expense.trip_id == trip_id,
                 (Expense.payer_profile_id == profile_id) | shared,
             )
+            | paid
         )
     )
     return bool(found)
@@ -240,5 +248,58 @@ async def delete_evidence(session: AsyncSession, evidence_id: UUID) -> None:
     """
     await session.execute(
         delete(ExpenseEvidence).where(ExpenseEvidence.id == evidence_id)
+    )
+    await session.flush()
+
+
+async def count_drafts(session: AsyncSession, trip_id: UUID) -> int:
+    """Number of draft expenses of a trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+
+    Returns:
+        How many are waiting for confirmation.
+    """
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(Expense)
+            .where(Expense.trip_id == trip_id, Expense.status == ExpenseStatus.DRAFT)
+        )
+        or 0
+    )
+
+
+async def count_evidence(session: AsyncSession, trip_id: UUID) -> int:
+    """Number of stored receipt images of a trip (all are unconfirmed).
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+
+    Returns:
+        The count.
+    """
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(ExpenseEvidence)
+            .where(ExpenseEvidence.trip_id == trip_id)
+        )
+        or 0
+    )
+
+
+async def delete_expired_evidence(session: AsyncSession, now: datetime) -> None:
+    """Delete receipt images past their ``delete_after`` (all trips) and flush.
+
+    Args:
+        session: Open session (caller commits).
+        now: The current time.
+    """
+    await session.execute(
+        delete(ExpenseEvidence).where(ExpenseEvidence.delete_after < now)
     )
     await session.flush()

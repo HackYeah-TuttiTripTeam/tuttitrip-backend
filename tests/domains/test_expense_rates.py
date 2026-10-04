@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+import time
 from collections.abc import Awaitable, Callable
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from functools import wraps
 from pathlib import Path
@@ -256,3 +257,54 @@ async def test_stored_rate_survives_edits_but_not_a_new_day(
             manual_rate=None,
             stored=stored,
         )
+
+
+@sync
+async def test_not_found_is_remembered_for_a_while() -> None:
+    calls = 0
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(404)
+
+    client = _client(httpx.MockTransport(handle))
+    for _ in range(2):
+        with pytest.raises(RateNotFoundError):
+            await client.quote("XYZ", SUNDAY)
+    assert calls == 2  # table A and B once; the second ask hit the cache
+
+
+@sync
+async def test_a_quote_older_than_today_is_not_kept_forever(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    today = datetime.now(UTC).date()
+    old = json.dumps(
+        {
+            "rates": [
+                {
+                    "no": "1/A/NBP/2026",
+                    "effectiveDate": str(today - timedelta(days=1)),
+                    "mid": 4.0,
+                }
+            ]
+        }
+    )
+    calls = 0
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, text=old)
+
+    client = _client(httpx.MockTransport(handle))
+    past = today - timedelta(days=30)
+    await client.quote("EUR", today)
+    await client.quote("EUR", past)
+    assert calls == 2
+    later = time.monotonic() + 2 * 3600
+    monkeypatch.setattr(nbp_client.time, "monotonic", lambda: later)
+    await client.quote("EUR", today)  # today's quote expired: asked again
+    await client.quote("EUR", past)  # a past day never changes
+    assert calls == 3

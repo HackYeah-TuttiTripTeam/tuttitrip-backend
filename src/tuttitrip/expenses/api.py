@@ -260,6 +260,7 @@ async def get_expense_draft(
 
 RECEIPT_REJECTED: dict[int | str, dict[str, Any]] = {
     422: {"model": ReceiptValidationErrors, "description": "The file is refused."},
+    429: {"description": "Too many unconfirmed receipts on the trip."},
     503: {"description": "No worker or job queue available."},
 }
 
@@ -281,7 +282,10 @@ async def upload_receipt(
     Multipart field `file`: `image/jpeg`, `image/png` or `image/webp`, at most
     5 MB (checked on the content, not only on the declared type); anything else
     answers 422 with a `ReceiptErrorCode`. The image stays in the database and
-    never goes into the job payload. Poll `GET .../receipts/{evidence_id}`.
+    never goes into the job payload. The image is kept as uploaded (EXIF/XMP
+    metadata included) as evidence until the draft is confirmed, then deleted;
+    unconfirmed images expire after 7 days and a trip holds at most a set
+    number of them (429 above it). Poll `GET .../receipts/{evidence_id}`.
 
     Args:
         file: The image.
@@ -300,20 +304,24 @@ async def upload_receipt(
     except receipt_service.ReceiptRejectedError as exc:
         detail = [{"type": exc.code.value, "loc": ["body", "file"], "msg": exc.message}]
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail) from exc
+    except receipt_service.ReceiptLimitError as exc:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, str(exc)) from exc
     except (WorkerUnavailableError, JobQueueUnavailableError) as exc:
         raise _unavailable(exc) from exc
 
 
 @router.get(
     "/receipts/{evidence_id}",
-    dependencies=[requires(Feature.EXPENSES_CORE, Access.READ)],
+    dependencies=[requires(Feature.EXPENSES_CORE, Access.WRITE)],
 )
 async def get_receipt(
     evidence_id: UUID, membership: TripMember, session: SessionDep, queue: JobQueueDep
 ) -> ReceiptState:
     """Progress of reading a receipt; when done, the `draft` expense to confirm.
 
-    The draft has `status: draft` and is left out of the settlement until
+    The first poll after the job succeeded creates the `draft` expense (this GET
+    writes, so it needs the write permission). The draft has `status: draft`
+    and is left out of the settlement until
     `POST /expenses/{expense_id}/confirm`.
 
     Args:
@@ -363,6 +371,7 @@ async def get_receipt_image(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
             "Content-Disposition": "inline",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
         },
     )
 

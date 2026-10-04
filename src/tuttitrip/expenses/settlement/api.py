@@ -18,6 +18,7 @@ from tuttitrip.expenses.settlement.services.settlement_service import (
     PaymentInvalidError,
     PaymentNotFoundError,
     SettlementClosedError,
+    SettlementHasDraftsError,
 )
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.pagination.schemas import Page
@@ -148,12 +149,17 @@ async def remove_payment(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/close", dependencies=[requires(Feature.EXPENSES_CORE, Access.WRITE)])
+@router.post(
+    "/close",
+    responses={409: {"description": "Draft expenses are still waiting."}},
+    dependencies=[requires(Feature.EXPENSES_CORE, Access.WRITE)],
+)
 async def close_settlement(membership: TripHost, session: SessionDep) -> SettlementRead:
-    """Close the settlement after checking the expenses (host only).
+    """Close the settlement (host only), once every draft is confirmed or deleted.
 
     From then on adding, changing or deleting an expense, and marking or
-    removing a payment, answers 409. Closing again changes nothing.
+    removing a payment, answers 409. Closing again changes nothing. While
+    receipt drafts exist it answers 409 with their number.
 
     Args:
         membership: The caller's membership, checked to be the host.
@@ -162,7 +168,10 @@ async def close_settlement(membership: TripHost, session: SessionDep) -> Settlem
     Returns:
         The settlement with `closed_at` set.
     """
-    return await settlement_service.close(session, membership)
+    try:
+        return await settlement_service.close(session, membership)
+    except SettlementHasDraftsError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.post("/reopen", dependencies=[requires(Feature.EXPENSES_CORE, Access.WRITE)])

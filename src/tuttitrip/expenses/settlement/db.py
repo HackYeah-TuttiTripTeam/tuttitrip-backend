@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.expenses.settlement.models import SettlementPayment, TripSettlement
@@ -162,3 +162,18 @@ async def delete_closure(session: AsyncSession, closure: TripSettlement) -> None
     """
     await session.delete(closure)
     await session.flush()
+
+
+async def lock_settlement(session: AsyncSession, trip_id: UUID) -> None:
+    """Serialise writers of one trip's settlement until the transaction ends.
+
+    A transaction-level advisory lock on the trip: expense and payment writes
+    and close/reopen all take it, so a write cannot slip past a closing.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+    """
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(str(trip_id), 0)))
+    )
