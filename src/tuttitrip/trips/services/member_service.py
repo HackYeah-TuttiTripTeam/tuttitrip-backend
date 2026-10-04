@@ -15,6 +15,7 @@ from tuttitrip.profiles.services import profile_service
 from tuttitrip.profiles.services.profile_service import ProfileNotFoundError
 from tuttitrip.trips import db
 from tuttitrip.trips.checkins.services import checkin_service
+from tuttitrip.trips.locations.services import location_service
 from tuttitrip.trips.logic import member_rules
 from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.schemas import MemberRead, MemberStatus, TripMembership, TripRole
@@ -85,6 +86,7 @@ async def member_left(
         sub: Auth0 subject of the account that left.
     """
     await checkin_service.clear_profile(session, trip_id, profile_id)
+    await location_service.clear_profile(session, trip_id, profile_id)
     await photo_service.author_left(session, trip_id, sub)
 
 
@@ -148,7 +150,8 @@ async def remove_member(
 
     The account loses access (the trip is a 404 for it). The profile stays on
     the trip without an account, so the person still counts in the plan. Their
-    check-in (room number) is deleted and their photos stay, unattributed.
+    check-in (room number) and shared location are deleted, their photos stay,
+    unattributed.
 
     Args:
         session: Open session.

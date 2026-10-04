@@ -84,6 +84,24 @@ async def clear_profile(session: AsyncSession, trip_id: UUID, profile_id: UUID) 
     await db.delete_checkin(session, trip_id, profile_id)
 
 
+async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
+    """Delete the check-ins of a deleted account's profiles, without committing.
+
+    Must run before the profiles lose their link to the account.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject of the deleted account.
+
+    Returns:
+        ``checkins_removed``.
+    """
+    profile_ids = await profile_service.account_profile_ids(session, sub)
+    if not profile_ids:
+        return {"checkins_removed": 0}
+    return {"checkins_removed": await db.delete_for_profiles(session, profile_ids)}
+
+
 async def list_checkins(
     session: AsyncSession, membership: TripMembership, query: CheckinQuery
 ) -> Page[CheckinRead]:

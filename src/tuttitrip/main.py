@@ -19,6 +19,8 @@ from tuttitrip.accounts.api import router as accounts_router
 from tuttitrip.demo.api import internal_router as demo_internal_router
 from tuttitrip.demo.api import router as demo_router
 from tuttitrip.expenses.api import router as expenses_router
+from tuttitrip.expenses.logic.receipts import MAX_BYTES as RECEIPT_MAX_BYTES
+from tuttitrip.expenses.services.nbp_client import close_client as close_nbp_client
 from tuttitrip.expenses.settlement.api import router as settlement_router
 from tuttitrip.interview.api import router as interview_router
 from tuttitrip.mcp.api import create_mcp_app
@@ -44,10 +46,14 @@ from tuttitrip.shared.health.api import router as health_router
 from tuttitrip.shared.jobs.api import router as jobs_router
 from tuttitrip.shared.permissions.api import document_permissions
 from tuttitrip.shared.permissions.api import router as permissions_router
+from tuttitrip.shared.uploadlimit.middleware import UploadSizeLimit
 from tuttitrip.trips.api import router as trips_router
 from tuttitrip.trips.checkins.api import router as checkins_router
+from tuttitrip.trips.checkins.services import checkin_service
 from tuttitrip.trips.invitations.api import router as invitations_router
 from tuttitrip.trips.invitations.services import invitation_service
+from tuttitrip.trips.locations.api import router as locations_router
+from tuttitrip.trips.locations.services import location_service
 from tuttitrip.trips.photos.api import router as photos_router
 from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.services import trip_service
@@ -56,6 +62,7 @@ from tuttitrip.voting.api import router as voting_router
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
+RECEIPT_MULTIPART_SLACK = 256 * 1024
 # Room for the multipart boundaries and part headers around the two photo files.
 MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
@@ -73,6 +80,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     trips_router,
     invitations_router,
     checkins_router,
+    locations_router,
     voting_router,
     photos_router,
     profiles_router,
@@ -93,6 +101,9 @@ ROUTERS: tuple[APIRouter, ...] = (
 )
 
 # Domain data cleared when an administrator deletes an account.
+# Profile-keyed data first: trip_service.erase_account unlinks the profiles.
+erasure.register(checkin_service.erase_account)
+erasure.register(location_service.erase_account)
 erasure.register(trip_service.erase_account)
 erasure.register(invitation_service.erase_account)
 erasure.register(notification_service.erase_account)
@@ -117,6 +128,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     try:
         yield
     finally:
+        await close_nbp_client()
         hub = getattr(app.state, "notification_hub", None)
         if hub is not None:
             await hub.stop()
@@ -144,6 +156,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=f"{API_PREFIX}/redoc",
         swagger_ui_oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
         lifespan=combine_lifespans(lifespan, mcp_app.lifespan) if mcp_app else lifespan,
+    )
+    # Multipart overhead on top of the image; added first so CORS stays outermost.
+    app.add_middleware(
+        UploadSizeLimit,
+        limits=[
+            (
+                rf"{API_PREFIX}/trips/[^/]+/expenses/receipts",
+                RECEIPT_MAX_BYTES + RECEIPT_MULTIPART_SLACK,
+            )
+        ],
     )
     photos = settings.photos
     app.add_middleware(

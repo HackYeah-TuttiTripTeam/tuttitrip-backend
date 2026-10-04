@@ -40,6 +40,8 @@ class Workflow(StrEnum):
     EXTRACT_OFFER_EVIDENCE = "extract_offer_evidence"
     FETCH_PLACE_CANDIDATES = "fetch_place_candidates"
     WRITE_JUSTIFICATIONS = "write_justifications"
+    PARSE_EXPENSE_TEXT = "parse_expense_text"
+    READ_RECEIPT = "read_receipt"
 
 
 ProviderName = Literal["openrouter", "local"]
@@ -367,6 +369,67 @@ class WriteJustificationsOutput(ContractPayload):
     justifications: list[Justification] = Field(max_length=600)
 
 
+# --- parse_expense_text and read_receipt (expenses) --------------------------------
+
+CURRENCY_PATTERN: Final = r"^[A-Z]{3}$"
+
+
+class ParseExpenseTextInput(ContractPayload):
+    """Input of ``parse_expense_text``: one sentence typed by a trip member.
+
+    The text is untrusted. The worker only extracts fields; the backend matches
+    names to the trip's profiles and never saves a draft.
+    """
+
+    trip_id: UUID
+    text: str = Field(min_length=1, max_length=500)
+    locale: Locale = "pl"
+
+
+class ParseExpenseTextOutput(ContractPayload):
+    """Output of ``parse_expense_text`` (names exactly as written in the text).
+
+    ``amount_minor`` is in minor units (grosze, cents). ``included_names`` lists
+    people the text says took part; empty means everybody except
+    ``excluded_names``.
+    """
+
+    amount_minor: int = Field(gt=0)
+    currency: str | None = Field(default=None, pattern=CURRENCY_PATTERN)
+    description: str = Field(default="", max_length=500)
+    payer_name: str | None = Field(default=None, max_length=100)
+    included_names: list[str] = Field(default_factory=list, max_length=50)
+    excluded_names: list[str] = Field(default_factory=list, max_length=50)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+ExpenseCategoryName = Literal[
+    "food", "transport", "lodging", "activities", "shopping", "other"
+]
+
+
+class ReadReceiptInput(ContractPayload):
+    """Input of ``read_receipt``: the image is read from ``expense_evidence``.
+
+    The image never travels in the payload or the logs.
+    """
+
+    trip_id: UUID
+    evidence_id: UUID
+
+
+class ReadReceiptOutput(ContractPayload):
+    """Output of ``read_receipt``: settlement fields only, never the image."""
+
+    amount_minor: int = Field(gt=0)
+    currency: str | None = Field(default=None, pattern=CURRENCY_PATTERN)
+    spent_on: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+    merchant: str | None = Field(default=None, max_length=200)
+    category: ExpenseCategoryName | None = None
+    needs_confirmation: bool
+    reasons: list[str] = Field(default_factory=list, max_length=10)
+
+
 class Progress(BaseModel):
     """Value of the ``progress`` event."""
 
@@ -400,6 +463,13 @@ WORKFLOWS: dict[Workflow, WorkflowSpec] = {
     ),
     Workflow.WRITE_JUSTIFICATIONS: WorkflowSpec(
         Queue.OPENROUTER, WriteJustificationsInput, WriteJustificationsOutput
+    ),
+    # Expenses: the local model on the GB10 reads the text or the image.
+    Workflow.PARSE_EXPENSE_TEXT: WorkflowSpec(
+        Queue.LOCAL_LLM, ParseExpenseTextInput, ParseExpenseTextOutput
+    ),
+    Workflow.READ_RECEIPT: WorkflowSpec(
+        Queue.LOCAL_LLM, ReadReceiptInput, ReadReceiptOutput
     ),
     # Open data (OSM), no LLM.
     Workflow.FETCH_PLACE_CANDIDATES: WorkflowSpec(

@@ -371,6 +371,106 @@
       },
       "queue": "openrouter"
     },
+    "parse_expense_text": {
+      "input": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "locale": {
+            "default": "pl",
+            "enum": [
+              "pl",
+              "en"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "trip_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trip_id",
+          "text"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "amount_minor": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z]{3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "excluded_names": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "included_names": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "payer_name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "amount_minor"
+        ],
+        "type": "object"
+      },
+      "queue": "local_llm"
+    },
     "parse_pasted_plan": {
       "input": {
         "properties": {
@@ -730,6 +830,112 @@
         "type": "object"
       },
       "queue": "default"
+    },
+    "read_receipt": {
+      "input": {
+        "properties": {
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "evidence_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "trip_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trip_id",
+          "evidence_id"
+        ],
+        "type": "object"
+      },
+      "output": {
+        "properties": {
+          "amount_minor": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "enum": [
+                  "food",
+                  "transport",
+                  "lodging",
+                  "activities",
+                  "shopping",
+                  "other"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "contract_version": {
+            "default": 1,
+            "type": "integer"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z]{3}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "merchant": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "needs_confirmation": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 10,
+            "type": "array"
+          },
+          "spent_on": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "amount_minor",
+          "needs_confirmation"
+        ],
+        "type": "object"
+      },
+      "queue": "local_llm"
     },
     "write_justifications": {
       "input": {

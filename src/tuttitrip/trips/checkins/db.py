@@ -1,5 +1,6 @@
 """Check-in queries on PostgreSQL."""
 
+from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import Select, delete, func, select
@@ -112,3 +113,23 @@ async def delete_trip_checkins(session: AsyncSession, trip_id: UUID) -> None:
         trip_id: Trip id.
     """
     await session.execute(delete(TripCheckin).where(TripCheckin.trip_id == trip_id))
+
+
+async def delete_for_profiles(
+    session: AsyncSession, profile_ids: Sequence[UUID]
+) -> int:
+    """Delete the check-ins of some profiles, on every trip.
+
+    Args:
+        session: Open session (caller commits).
+        profile_ids: The profiles.
+
+    Returns:
+        How many check-ins were deleted.
+    """
+    result = await session.execute(
+        delete(TripCheckin)
+        .where(TripCheckin.profile_id.in_(profile_ids))
+        .returning(TripCheckin.profile_id)
+    )
+    return len(result.all())

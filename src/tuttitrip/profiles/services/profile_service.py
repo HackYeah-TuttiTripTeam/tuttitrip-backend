@@ -571,3 +571,16 @@ async def detach_account(session: AsyncSession, sub: str) -> None:
         sub: Auth0 subject of the deleted account.
     """
     await db.detach_account_everywhere(session, sub)
+
+
+async def account_profile_ids(session: AsyncSession, sub: str) -> list[UUID]:
+    """Ids of the profiles an account is linked to, on every trip.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        The profile ids (read this before ``detach_account`` clears the link).
+    """
+    return list(await db.select_profile_ids_of_account(session, sub))

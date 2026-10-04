@@ -25,10 +25,12 @@ from tuttitrip.expenses.models import Expense, ExpenseShare
 from tuttitrip.expenses.schemas import (
     ExpenseCreate,
     ExpenseErrorCode,
+    ExpenseStatus,
     ExpenseUpdate,
     SplitMethod,
 )
 from tuttitrip.expenses.services import expense_service
+from tuttitrip.expenses.settlement import db as settlement_db
 from tuttitrip.main import create_app
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
@@ -113,7 +115,8 @@ def test_people_must_be_on_the_trip_and_listed_once() -> None:
     ("amount", "currency", "trip_currency", "codes"),
     [
         ("0", "PLN", "PLN", [ExpenseErrorCode.AMOUNT_NOT_POSITIVE]),
-        ("10", "EUR", "PLN", [ExpenseErrorCode.CURRENCY_MISMATCH]),
+        ("10", "EUR", "PLN", []),
+        ("10", "JPY", "PLN", [ExpenseErrorCode.CURRENCY_UNSUPPORTED]),
         ("10", None, None, [ExpenseErrorCode.CURRENCY_REQUIRED]),
         ("10", "EUR", None, []),
         ("10", None, "PLN", []),
@@ -192,6 +195,8 @@ def _expense() -> Expense:
         payer_profile_id=KASIA,
         amount=Decimal("142.00"),
         currency="PLN",
+        trip_amount=Decimal("142.00"),
+        status=ExpenseStatus.CONFIRMED,
         description="Kolacja",
         spent_on=date(2026, 11, 7),
         category=None,
@@ -217,6 +222,7 @@ def _patch_service(
     monkeypatch.setattr(
         profile_service, "list_profiles", AsyncMock(return_value=_profiles())
     )
+    monkeypatch.setattr(settlement_db, "select_closure", AsyncMock(return_value=None))
     monkeypatch.setattr(db, "select_expense", AsyncMock(return_value=expense))
     monkeypatch.setattr(db, "insert_expense", AsyncMock())
     monkeypatch.setattr(db, "replace_shares", AsyncMock())
@@ -443,7 +449,8 @@ def test_writes_need_the_write_permission(monkeypatch: pytest.MonkeyPatch) -> No
 def test_editing_after_the_trip_currency_changed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_service(monkeypatch, _expense())
+    expense = _expense()
+    _patch_service(monkeypatch, expense)
     monkeypatch.setattr(trip_service, "get_trip", AsyncMock(return_value=_trip("EUR")))
     host = _membership(TripRole.HOST)
 
@@ -452,9 +459,5 @@ def test_editing_after_the_trip_currency_changed(
             _session(), host, uuid.uuid4(), data
         )
 
-    asyncio.run(update(ExpenseUpdate(description="Obiad")))  # no currency check
-    with pytest.raises(expense_service.ExpenseInvalidError) as caught:
-        asyncio.run(update(ExpenseUpdate(amount=Decimal(10))))
-    assert [v.code for v in caught.value.violations] == [
-        ExpenseErrorCode.CURRENCY_MISMATCH
-    ]
+    asyncio.run(update(ExpenseUpdate(description="Obiad")))  # never reprices
+    assert (expense.trip_amount, expense.rate) == (Decimal("142.00"), None)
