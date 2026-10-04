@@ -20,12 +20,12 @@ from sqlalchemy.dialects import postgresql
 from tests.shared.paths import path
 from tuttitrip.demo import api as demo_api
 from tuttitrip.demo.api import get_client_factory, get_rate_limiter
-from tuttitrip.demo.logic.dataset import DEMO_TRIPS
+from tuttitrip.demo.logic.dataset import DEMO_ACCOUNT_NAME, DEMO_TRIPS
 from tuttitrip.demo.logic.rate_limit import RateLimiter
 from tuttitrip.demo.logic.token import secret_matches, token_matches
 from tuttitrip.demo.services import demo_service, reset_service, seed_command
 from tuttitrip.main import create_app
-from tuttitrip.shared.config.settings import DemoSettings, Settings
+from tuttitrip.shared.config.settings import Auth0Settings, DemoSettings, Settings
 from tuttitrip.trips import db as trips_db
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -591,3 +591,71 @@ def test_the_secret_comparison_is_exact_and_empty_never_matches() -> None:
     assert not secret_matches("abd", "abc")
     assert not secret_matches("", "")
     assert not secret_matches("x", "")
+
+
+# --- the demo account's Auth0 name is restored by the reset ---------------------
+
+
+class ManagementStub:
+    """Fake Auth0 for the reset's name restore: M2M token and user update."""
+
+    def __init__(self, update_status: int = 200) -> None:
+        self.update_status = update_status
+        self.updates: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oauth/token":
+            return httpx.Response(
+                200, json={"access_token": "mgmt-jwt", "expires_in": 86400}
+            )
+        self.updates.append(request)
+        return httpx.Response(self.update_status, json={})
+
+    def factory(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(self))
+
+
+def _with_management() -> Settings:
+    auth0 = Auth0Settings.model_validate(
+        {
+            "management_client_id": "cid",
+            "management_client_secret": "m2m-secret-for-tests",
+        }
+    )
+    return Settings(demo=_demo(), auth0=auth0)
+
+
+def test_the_reset_restores_the_demo_account_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spy = ResetSpy(monkeypatch)
+    auth0 = ManagementStub()
+    trips = asyncio.run(reset_service.reset_demo(_with_management(), auth0.factory))
+    assert trips == len(DEMO_TRIPS)
+    assert spy.subs == ["auth0|demo"]
+    (sent,) = auth0.updates
+    assert sent.method == "PATCH"
+    assert sent.url.raw_path == b"/api/v2/users/auth0%7Cdemo"
+    assert json.loads(sent.content) == {"name": DEMO_ACCOUNT_NAME}
+
+
+def test_a_failed_name_restore_does_not_break_the_reset(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    ResetSpy(monkeypatch)
+    auth0 = ManagementStub(update_status=403)
+    with caplog.at_level("WARNING"):
+        trips = asyncio.run(reset_service.reset_demo(_with_management(), auth0.factory))
+    assert trips == len(DEMO_TRIPS)
+    assert "Demo account name not restored: reason=status_403" in caplog.text
+    assert "m2m-secret-for-tests" not in caplog.text
+
+
+def test_without_management_credentials_the_name_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ResetSpy(monkeypatch)
+    auth0 = ManagementStub()
+    trips = asyncio.run(reset_service.reset_demo(Settings(demo=_demo()), auth0.factory))
+    assert trips == len(DEMO_TRIPS)
+    assert auth0.updates == []

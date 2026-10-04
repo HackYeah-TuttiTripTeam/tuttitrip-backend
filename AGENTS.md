@@ -53,6 +53,7 @@ src/tuttitrip/
     llm/               Pydantic AI model catalog (services/model_catalog.py)
     pagination/        list contract: PageParams, Page[T], BulkSelection (paginate()/selected() are in db/pagination.py)
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
+  accounts/            own Auth0 account: PATCH /api/v1/me/account (name, e-mail+password accounts only)
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
   voting/              vote links for people without an account, host's vote summary
@@ -201,6 +202,10 @@ How:
   through the 422 model of `POST`/`PATCH /trips`. Clients map errors by `type`,
   never by `msg`. New rule = new enum member plus a test. `POST /trips` takes
   the same fields as `PATCH` and validates them with `check_trip(complete=True)`.
+- A domain error other than 422 that a client must tell apart carries
+  `detail.code` from a per-domain `StrEnum` in `schemas.py` (e.g.
+  `AccountErrorCode` in `accounts/schemas.py`, `account.provider_managed`),
+  with a response model in OpenAPI; `detail.message` is for developers.
 
 ## Settings and secrets
 

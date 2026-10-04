@@ -277,6 +277,7 @@ src/tuttitrip/
 │   ├── permissions/   # uprawnienia READ/WRITE, role, GET /api/v1/me, API admina
 │   ├── health/        # GET /api/v1/health, GET /api/v1/health/live
 │   └── jobs/          # klient DBOS: zlecanie zadań workerowi, kontrakt
+├── accounts/          # własne konto Auth0: zmiana nazwy (PATCH /api/v1/me/account)
 ├── trips/             # wyjazdy (wzorcowa domena: api -> services -> db)
 ├── profiles/          # uczestnicy wyjazdu (wagi, grupy wiekowe)
 ├── interview/         # wywiad prowadzony przez AI

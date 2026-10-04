@@ -165,7 +165,7 @@ class Feature(StrEnum):
 DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.ROOT: "Wszystkie funkcjonalności aplikacji",
     Feature.ACCOUNTS: "Konto użytkownika",
-    Feature.ACCOUNTS_PROFILE: "Własne konto: tożsamość i uprawnienia (GET /me)",
+    Feature.ACCOUNTS_PROFILE: "Własne konto: tożsamość, uprawnienia i zmiana nazwy",
     Feature.ADMIN: "Administracja (tylko dla administratorów)",
     Feature.ADMIN_PERMISSIONS: "Role, uprawnienia, ich przydział i dziennik zmian",
     Feature.ADMIN_USERS: "Zarządzanie kontami innych użytkowników",

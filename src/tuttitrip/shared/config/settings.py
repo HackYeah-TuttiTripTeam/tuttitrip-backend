@@ -38,8 +38,9 @@ class Auth0Settings(BaseModel):
     # Namespaced access-token claim with the user's roles, set by the Auth0
     # post-login Action ("admin" for the superadmin allow-list).
     roles_claim: str = "https://tuttitrip.gburek.app/roles"
-    # M2M application with `read:users` on the Management API; empty = the
-    # admin user list answers 503. Set in host env files / CI secrets only.
+    # M2M application with `read:users` and `update:users` on the Management
+    # API; empty = the admin user list and PATCH /me/account answer 503.
+    # Set in host env files / CI secrets only.
     management_client_id: str = ""
     management_client_secret: SecretStr = SecretStr("")
 
