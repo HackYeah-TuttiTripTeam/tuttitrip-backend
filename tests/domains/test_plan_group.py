@@ -191,5 +191,6 @@ def test_clones_with_a_proportional_budget_get_the_solo_plan() -> None:
         ]
 
     assert per_day(group) == per_day(alone)
+    assert group.plan.plan_hash == alone.plan.plan_hash  # section 4, test 5
     assert {round(r.u, 4) for r in group.people} == {round(alone.people[0].u, 4)}
     assert {round(r.r, 6) for r in group.people} == {1.0}
