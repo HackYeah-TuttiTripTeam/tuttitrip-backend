@@ -13,6 +13,7 @@ from uuid import UUID
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.planning.fairness.logic.violations import days_without_own_place
 from tuttitrip.planning.fairness.schemas import ConflictCode as FairnessConflict
+from tuttitrip.planning.logic.budget_consent import BudgetDecision
 from tuttitrip.planning.logic.cost import place_cost
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 from tuttitrip.planning.logic.plan_group import GroupPlan, PersonReference
@@ -37,6 +38,7 @@ from tuttitrip.planning.plans.schemas import (
     PlanFairness,
     PlanStop,
     PlanTelemetry,
+    PlanVerdict,
     StopTransfer,
     TransferMode,
 )
@@ -267,10 +269,16 @@ def _conflicts(
     return found
 
 
-def _budget(data: PlanningInput, plan: PlanResult) -> PlanBudget:
+def _budget(
+    data: PlanningInput,
+    plan: PlanResult,
+    decision: BudgetDecision | None,
+    strict_plan_id: UUID | None,
+) -> PlanBudget:
     trip = data.trip
     cost = plan.cost.total
     unlimited = _unlimited(data)
+    consent = decision is not None and decision.needs_approval
     if cost <= trip.budget_from:
         zone = BudgetZone.BELOW_B_FROM
     elif unlimited or cost <= trip.budget_to:
@@ -288,31 +296,47 @@ def _budget(data: PlanningInput, plan: PlanResult) -> PlanBudget:
         over_budget=Decimal(0)
         if unlimited
         else max(Decimal(0), cost - _money(trip.budget_to)),
-        needs_approval=False,
-        kappa=None,
-        approval_status=ApprovalStatus.NOT_NEEDED,
+        needs_approval=consent,
+        kappa=decision.kappa if decision and consent else None,
+        gain_profile_id=decision.gain_person_id if decision and consent else None,
+        gain_points=decision.gain_points if decision and consent else None,
+        strict_plan_id=strict_plan_id if consent else None,
+        strict_cost=_money(decision.alternative.plan.cost.total)
+        if decision and consent and decision.alternative
+        else None,
+        approval_status=ApprovalStatus.PENDING
+        if consent
+        else ApprovalStatus.NOT_NEEDED,
     )
 
 
-def build_content(
+def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
     data: PlanningInput,
     group: GroupPlan,
     names: Mapping[UUID, str],
     *,
-    solo_elapsed_ms: int | None = None,
+    decision: BudgetDecision | None = None,
+    strict_plan_id: UUID | None = None,
+    verdicts: Sequence[PlanVerdict] | None = None,
+    elapsed_ms: int | None = None,
 ) -> dict[str, object]:
     """The part of ``PlanRead`` that the solver determines.
 
     The caller adds ``id``, ``trip_id``, ``version``, ``input_hash``,
-    ``plan_hash``, ``created_at`` and ``params``. ``needs_approval`` of the budget
-    stays False: the consent to go over ``B_do`` with its price per point is
-    backend#53; unpriced places are reported as ``unknown_price`` conflicts.
+    ``plan_hash``, ``created_at`` and ``params``. The budget carries the consent of
+    E6 (``needs_approval``, ``kappa``, the person who gains most, ``P_strict``) when
+    ``decision`` asks for it; unpriced places are reported as ``unknown_price``
+    conflicts.
 
     Args:
         data: The planning input the plan was computed from.
         group: The result of ``plan_group``.
         names: Display names by profile id.
-        solo_elapsed_ms: Override of the solo runs' time (default from ``group``).
+        decision: The E6 decision when the plan went through the consent check.
+        strict_plan_id: Id of the stored ``P_strict`` alternative.
+        verdicts: Verdicts of the candidate places (backend#51), or None.
+        elapsed_ms: Wall time of the whole computation; default the sum of the
+            group and solo runs.
 
     Returns:
         JSON-ready content (``mode="json"`` dump).
@@ -332,8 +356,10 @@ def build_content(
         for person in sorted(people.values(), key=lambda p: str(p.id))
         for card in [explain(person, places[pid], has_lodging=data.trip.has_lodging)]
     ]
-    elapsed = plan.telemetry.elapsed_ms + (
-        group.solo_elapsed_ms if solo_elapsed_ms is None else solo_elapsed_ms
+    elapsed = (
+        plan.telemetry.elapsed_ms + group.solo_elapsed_ms
+        if elapsed_ms is None
+        else elapsed_ms
     )
     telemetry = PlanTelemetry(
         solver=plan.telemetry.solver,
@@ -351,7 +377,9 @@ def build_content(
         "violation": plan.objective.violation,
         "conflicts": [c.model_dump(mode="json") for c in _conflicts(data, group, plan)],
         "explain": [e.model_dump(mode="json") for e in explain_entries],
-        "verdicts": None,
-        "budget": _budget(data, plan).model_dump(mode="json"),
+        "verdicts": None
+        if verdicts is None
+        else [v.model_dump(mode="json") for v in verdicts],
+        "budget": _budget(data, plan, decision, strict_plan_id).model_dump(mode="json"),
         "telemetry": telemetry.model_dump(mode="json"),
     }

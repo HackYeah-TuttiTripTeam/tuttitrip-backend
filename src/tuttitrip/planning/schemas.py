@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tuttitrip.places.schemas import PlaceRead, PlaceTag
+from tuttitrip.profiles.feedback.schemas import ReasonCode
 from tuttitrip.profiles.preferences.schemas import ImportancePool, MinTag
 from tuttitrip.shared.jobs.contracts import ProviderName
 
@@ -69,6 +70,9 @@ class PlanningPerson(_Frozen):
     votes: dict[UUID, Vote] = Field(
         default_factory=dict, description="v_ip by place id."
     )
+    vote_reasons: dict[UUID, ReasonCode] = Field(
+        default_factory=dict, description="Why the person is against a place."
+    )
     vetoes: frozenset[UUID] = frozenset()
     min_tags: tuple[MinTag, ...] = ()
 
@@ -116,6 +120,9 @@ class PlanningInput(_Frozen):
     people: tuple[PlanningPerson, ...] = Field(min_length=1)
     places: tuple[PlaceRead, ...]
     must: frozenset[UUID] = frozenset()
+    blocked: frozenset[UUID] = Field(
+        default=frozenset(), description="Places the host blocked (E0, like a veto)."
+    )
 
     @model_validator(mode="after")
     def _valid_people(self) -> Self:

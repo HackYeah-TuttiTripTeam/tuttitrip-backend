@@ -34,6 +34,7 @@ class RejectionCode(StrEnum):
     """Why a place is not a candidate."""
 
     VETO = "veto"
+    BLOCKED = "blocked"
     CLOSED = "closed"
     NO_FIT = "no_fit"
     SEGMENT = "segment"
@@ -136,6 +137,8 @@ def filter_places(
             for person in data.people
             for r in _person_rejections(person, place, params)
         ]
+        if place.id in data.blocked:
+            found.append(Rejection(place.id, RejectionCode.BLOCKED))
         time_reason = _time_rejection(place, data.trip, zone)
         if time_reason is not None:
             found.append(time_reason)
