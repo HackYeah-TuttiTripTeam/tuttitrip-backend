@@ -177,6 +177,32 @@ async def mark(
     return MarkResult(updated=updated)
 
 
+class NotificationNotFoundError(Exception):
+    """No such notification for this user (unknown or someone else's)."""
+
+
+async def get_notification(
+    session: AsyncSession, caller: str, notification_id: uuid.UUID
+) -> NotificationRead:
+    """Read one of the caller's notifications (for ``?open=<id>`` deep links).
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user.
+        notification_id: The notification.
+
+    Returns:
+        The notification, read as tolerantly as the list.
+
+    Raises:
+        NotificationNotFoundError: Unknown id, or someone else's (not told apart).
+    """
+    row = await db.select_one(session, caller, notification_id)
+    if row is None:
+        raise NotificationNotFoundError(str(notification_id))
+    return to_read(row)
+
+
 async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
     """Delete the notifications of a deleted account, without committing.
 

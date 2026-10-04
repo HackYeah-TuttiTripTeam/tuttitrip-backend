@@ -3,8 +3,9 @@
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from tuttitrip.notifications.schemas import (
@@ -16,6 +17,9 @@ from tuttitrip.notifications.schemas import (
 )
 from tuttitrip.notifications.services import notification_service, stream_service
 from tuttitrip.notifications.services.hub import NotificationHub
+from tuttitrip.notifications.services.notification_service import (
+    NotificationNotFoundError,
+)
 from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.pagination.schemas import Page
@@ -152,3 +156,32 @@ async def stream_notifications(
         yield ServerSentEvent(
             event=item.event, id=item.id, data=item.data.model_dump(mode="json")
         )
+
+
+@router.get(
+    "/{notification_id}", dependencies=[requires(Feature.NOTIFICATIONS, Access.READ)]
+)
+async def get_notification(
+    notification_id: UUID, user: CurrentUser, session: SessionDep
+) -> NotificationRead:
+    """Read one of the caller's notifications, however old.
+
+    Args:
+        notification_id: The notification.
+        user: The signed-in user.
+        session: Database session.
+
+    Returns:
+        The notification.
+
+    Raises:
+        HTTPException: 404 when it does not exist or belongs to someone else.
+    """
+    try:
+        return await notification_service.get_notification(
+            session, user.sub, notification_id
+        )
+    except NotificationNotFoundError as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Notification not found"
+        ) from exc

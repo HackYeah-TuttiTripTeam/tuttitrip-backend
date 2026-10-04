@@ -44,8 +44,10 @@ def new_engine():  # ruff: ignore[missing-return-type-undocumented-public-functi
     )
 
 
-def seed(sub: str, count: int, trip_id: uuid.UUID | None = None) -> None:
+def seed(sub: str, count: int, trip_id: uuid.UUID | None = None) -> list[uuid.UUID]:
     """Insert `count` notifications: types rotate, one per hour, every 3rd read."""
+
+    ids = [uuid.uuid4() for _ in range(count)]
 
     async def go() -> None:
         engine = new_engine()
@@ -55,6 +57,7 @@ def seed(sub: str, count: int, trip_id: uuid.UUID | None = None) -> None:
                 await session.flush()
             session.add_all(
                 Notification(
+                    id=ids[i],
                     user_sub=sub,
                     type=TYPES[i % 3],
                     trip_id=trip_id if i % 2 else None,
@@ -68,6 +71,7 @@ def seed(sub: str, count: int, trip_id: uuid.UUID | None = None) -> None:
         await engine.dispose()
 
     asyncio.run(go())
+    return ids
 
 
 def wipe() -> None:
@@ -187,3 +191,16 @@ def test_unread_count_counts_only_unread(client: TestClient) -> None:
     seed(sub, 10)  # i = 0, 3, 6, 9 are read
     response = client.get(path("unread_count"), headers=bearer(sub=sub))
     assert response.json() == {"count": 6}
+
+
+def test_one_notification_is_found_by_id_but_not_for_others(
+    client: TestClient,
+) -> None:
+    first, second = mine()
+    (older,) = seed(first, 1)
+    seed(first, 60)  # pushes it far off the first pages
+    target = path("get_notification", notification_id=older)
+    found = client.get(target, headers=bearer(sub=first))
+    assert found.status_code == 200
+    assert found.json()["id"] == str(older)
+    assert client.get(target, headers=bearer(sub=second)).status_code == 404

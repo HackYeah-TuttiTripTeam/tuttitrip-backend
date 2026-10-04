@@ -214,3 +214,52 @@ def test_a_row_from_a_newer_producer_does_not_break_the_list(
     assert [a.code for a in read.actions] == [NotificationActionCode.OPEN_PLAN]
     assert read.params == {"name": "Ola", "count": "3"}
     assert "teleport" in caplog.text
+
+
+def test_one_notification_is_returned_to_its_owner(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = Notification(
+        id=uuid.uuid4(),
+        user_sub=SUB,
+        type="plan_ready",
+        trip_id=None,
+        params={},
+        actions=[{"code": "teleport"}],
+        read_at=None,
+        created_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    select = AsyncMock(return_value=row)
+    monkeypatch.setattr(db, "select_one", select)
+    response = client.get(
+        path("get_notification", notification_id=row.id), headers=bearer()
+    )
+    assert response.status_code == 200
+    assert response.json()["id"] == str(row.id)
+    assert response.json()["actions"] == []  # tolerant like the list
+    assert call_args(select)[1] == SUB
+
+
+def test_an_unknown_or_foreign_notification_is_404(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(db, "select_one", AsyncMock(return_value=None))
+    response = client.get(
+        path("get_notification", notification_id=uuid.uuid4()), headers=bearer()
+    )
+    assert response.status_code == 404
+
+
+def test_a_bad_id_is_422_and_the_fixed_routes_still_win(client: TestClient) -> None:
+    assert client.get("/api/v1/notifications/nope", headers=bearer()).status_code == 422
+    assert path("unread_count").endswith("/unread-count")
+    assert path("stream_notifications").endswith("/stream")
+
+
+def test_getting_one_needs_a_token_and_the_permission(app: FastAPI) -> None:
+    target = path("get_notification", notification_id=uuid.uuid4())
+    assert TestClient(app).get(target).status_code == 401
+    app.dependency_overrides[get_user_grants] = lambda: [
+        Grant(Feature.TRIPS_CORE, Access.READ)
+    ]
+    assert TestClient(app).get(target, headers=bearer()).status_code == 403

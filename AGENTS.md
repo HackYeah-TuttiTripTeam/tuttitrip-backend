@@ -763,6 +763,8 @@ read (an approved request disappears from the basket).
   "filters": NotificationFilter | null}`, exactly one of `ids` (1 to 100, else 422) and `filters`
   (`{}` = all); answers `{"updated": n}`, counting only rows that changed state. One `UPDATE`
   scoped to the caller (foreign ids are skipped silently).
+- `GET /notifications/{id}` (`notifications:READ`): one notification of the caller, read as tolerantly
+  as the list; 404 for an unknown id and for someone else's (not told apart). For `?open=<id>` links.
 - `GET /notifications/stream` (SSE, `notifications:READ`, `Authorization: Bearer`, so read it with
   `fetch`). Events: `ready` (`{"unread": n}`), `notification` (SSE `id` = notification id, data =
   `NotificationRead`), `resync` (`{"reason"}`: reload list and counter). FastAPI sends a `ping`
