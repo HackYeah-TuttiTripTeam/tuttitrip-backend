@@ -162,3 +162,25 @@ async def consume_use(
     """
     result = await session.execute(consume_stmt(invitation_id, now))
     return result.scalar_one_or_none() is not None
+
+
+async def revoke_created_by(session: AsyncSession, sub: str, now: datetime) -> int:
+    """Revoke the user's invitations that are still open (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject of the creator.
+        now: Revocation time.
+
+    Returns:
+        How many invitations were revoked.
+    """
+    result = await session.execute(
+        update(TripInvitation)
+        .where(
+            TripInvitation.created_by_sub == sub, TripInvitation.revoked_at.is_(None)
+        )
+        .values(revoked_at=now)
+        .returning(TripInvitation.id)
+    )
+    return len(result.all())

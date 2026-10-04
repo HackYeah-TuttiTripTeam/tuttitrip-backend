@@ -40,7 +40,7 @@ person with ``1/N`` of the budget and the lodging, ``floors={id: 0}`` and no
 """
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -185,6 +185,7 @@ class PlanEvaluator:
         cost_cap: Decimal | None = None,
         lodging: LodgingStay | None = None,
         lodging_outcomes: Sequence[RequirementOutcome] | None = None,
+        floors: Mapping[UUID, float] | None = None,
     ) -> None:
         """Precompute utilities, prices and the E0 candidates.
 
@@ -195,6 +196,7 @@ class PlanEvaluator:
             cost_cap: Hard cost limit; default ``B_max``.
             lodging: The lodging base, exactly when the trip has nights.
             lodging_outcomes: Requirements checked against it (default none).
+            floors: ``f_i^eff`` by person id (E4); default each person's ``f_i``.
 
         Raises:
             ValueError: When ``lodging`` and ``trip.has_lodging`` disagree.
@@ -204,6 +206,7 @@ class PlanEvaluator:
             msg = "lodging must be given exactly when the trip has nights"
             raise ValueError(msg)
         self.trip = trip
+        self.floors = floors or {}
         self.params = params
         self.alpha = alpha
         self.lodging = lodging
@@ -318,7 +321,9 @@ class PlanEvaluator:
         )
         objective = group_objective(
             [
-                PersonOutcome(person, s.welfare, person.floor)
+                PersonOutcome(
+                    person, s.welfare, self.floors.get(person.id, person.floor)
+                )
                 for person, s in zip(self.people, scores, strict=True)
             ],
             days=days,
@@ -456,6 +461,7 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
     cost_cap: Decimal | None = None,
     lodging: LodgingStay | None = None,
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
+    floors: Mapping[UUID, float] | None = None,
     max_evaluations: int | None = None,
 ) -> PlanResult:
     """Compute the plan that maximises ``J`` under the hard constraints.
@@ -467,6 +473,7 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
         cost_cap: Hard cost limit; default ``B_max``.
         lodging: The lodging base, given exactly when the trip has nights.
         lodging_outcomes: The trip's lodging requirements checked against it.
+        floors: ``f_i^eff`` by person id (E4); default each person's ``f_i``.
         max_evaluations: Work limit in evaluated plans; default scales with
             candidates x days (never below ``DEFAULT_MAX_EVALUATIONS``).
 
@@ -482,6 +489,7 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
         cost_cap=cost_cap,
         lodging=lodging,
         lodging_outcomes=lodging_outcomes,
+        floors=floors,
     )
     conflicts: list[tuple[SolverConflict, UUID | None]] = [
         (SolverConflict.MUST_REJECTED, pid) for pid in evaluator.filtered.must_blocked

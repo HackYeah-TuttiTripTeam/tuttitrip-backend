@@ -10,7 +10,11 @@ from tuttitrip.mcp.schemas import WhoAmI
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.session import get_sessionmaker
 from tuttitrip.shared.pagination.schemas import Page, PageParams
-from tuttitrip.shared.permissions.logic.resolution import EffectivePermissions, resolve
+from tuttitrip.shared.permissions.logic.resolution import (
+    EffectivePermissions,
+    Grant,
+    resolve,
+)
 from tuttitrip.shared.permissions.services import permission_service
 from tuttitrip.trips.schemas import TripListQuery, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
@@ -37,11 +41,13 @@ async def load_permissions(
         user: The caller.
 
     Returns:
-        Effective permissions, never read from the token itself.
+        Effective permissions, never read from the token itself; none at all
+        for a blocked or deleted account.
     """
-    grants = (
-        [] if user.is_admin else await permission_service.load_grants(session, user.sub)
-    )
+    grants: list[Grant] = []
+    if not user.is_admin:
+        loaded, blocked = await permission_service.load_access(session, user.sub)
+        grants = [] if blocked else loaded  # a blocked account holds nothing
     return resolve(grants, superadmin=user.is_admin)
 
 
