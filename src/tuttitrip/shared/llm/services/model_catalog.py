@@ -11,6 +11,7 @@ at all raises ``UserError``. Tests swap every id for a ``TestModel`` or
 | Id | Model |
 | --- | --- |
 | ``tuttitrip:agent`` | Qwen ``gb10_agent_model`` (thinking, tools), then OpenRouter |
+| ``tuttitrip:interview`` | ``interview.agent_model`` on OpenRouter, else ``agent`` |
 | ``tuttitrip:chat`` | Qwen ``gb10_chat_model``, then OpenRouter |
 | ``tuttitrip:decide`` | basal, escalates to the Qwen chat model |
 | ``tuttitrip:decide-laya`` | Laya, escalates to the Qwen chat model |
@@ -29,7 +30,7 @@ from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import Model, ModelResolutionContext
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.models.system_one import SystemOneModel
 from pydantic_ai.profiles.decision import DecisionModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -47,6 +48,7 @@ class ModelKey(StrEnum):
     """Catalog entries; the value is the part after ``tuttitrip:``."""
 
     AGENT = "agent"
+    INTERVIEW = "interview"
     CHAT = "chat"
     DECIDE = "decide"
     DECIDE_LAYA = "decide-laya"
@@ -97,6 +99,25 @@ def _openrouter(settings: LlmSettings) -> Model | None:
     )
 
 
+def _interview(settings: LlmSettings) -> list[Model | None]:
+    interview = get_settings().interview
+    name = interview.agent_model
+    if not name:
+        return _qwen_then_openrouter(settings.gb10_agent_model, settings)
+    key = _openrouter_key(settings)
+    if key is None:
+        return []
+    return [
+        OpenRouterModel(
+            name.removeprefix("openrouter:"),
+            provider=OpenRouterProvider(api_key=key),
+            settings=None
+            if interview.agent_thinking
+            else OpenRouterModelSettings(openrouter_reasoning={"effort": "none"}),
+        )
+    ]
+
+
 def _decision(name: str, base_url: str, api_key: str | None) -> Model | None:
     if api_key is None:
         return None
@@ -113,11 +134,14 @@ def _qwen_then_openrouter(model: str, settings: LlmSettings) -> list[Model | Non
     return [_qwen(model, settings), _openrouter(settings)]
 
 
+# ruff: ignore[too-many-return-statements]
 def _links(key: ModelKey, settings: LlmSettings) -> list[Model | None]:
     gb10 = _gb10_key(settings)
     match key:
         case ModelKey.AGENT:
             return _qwen_then_openrouter(settings.gb10_agent_model, settings)
+        case ModelKey.INTERVIEW:
+            return _interview(settings)
         case ModelKey.CHAT:
             return _qwen_then_openrouter(settings.gb10_chat_model, settings)
         # A decision model hands off (DecisionHandOff is a ModelAPIError) and the

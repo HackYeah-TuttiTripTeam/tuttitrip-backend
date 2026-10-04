@@ -132,7 +132,7 @@ def base_instructions(ctx: RunContext[InterviewDeps]) -> str:
 
 
 interview_agent: Agent[InterviewDeps, str] = Agent(
-    model_id(ModelKey.AGENT),
+    model_id(ModelKey.INTERVIEW),
     deps_type=InterviewDeps,
     instructions=base_instructions,
     toolsets=[

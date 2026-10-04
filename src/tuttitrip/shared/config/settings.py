@@ -121,6 +121,25 @@ class InterviewSettings(BaseModel):
         gt=0,
         description="One text turn is cut off after this long (gateway: 300 s).",
     )
+    agent_model: str | None = Field(
+        default=None,
+        description=(
+            "Model of the interview agent; None = the catalog route tuttitrip:agent"
+        ),
+    )
+
+    @field_validator("agent_model", "voice_reasoning_effort", mode="before")
+    @classmethod
+    def _empty_is_none(cls, value: object) -> object:
+        return value or None
+
+    agent_thinking: bool = Field(
+        default=False,
+        description=(
+            "Whether the OpenRouter interview agent (agent_model) may reason; "
+            "off by default for the fastest answers."
+        ),
+    )
     trip_budget_usd: Decimal = Field(
         default=Decimal(2),
         gt=0,
@@ -162,6 +181,13 @@ class InterviewSettings(BaseModel):
     voice_model: str = Field(
         default="openai:gpt-realtime-2.1-mini",
         description="Pydantic AI realtime model of the voice interview.",
+    )
+    voice_reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = Field(
+        default=None,
+        description=(
+            "Reasoning effort of the realtime model (minimal, low, medium, high); "
+            "None = reasoning off ('none'). Only gpt-realtime-2* models take it."
+        ),
     )
     voice_max_seconds: float = Field(
         default=300.0, gt=0, description="A voice conversation is closed after this."

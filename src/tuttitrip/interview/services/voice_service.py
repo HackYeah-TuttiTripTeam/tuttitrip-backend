@@ -130,7 +130,11 @@ def realtime_for(
     return interview_agent.realtime(
         model or voice_model(locale),
         deps=deps,
-        model_settings=OpenAIRealtimeModelSettings(input_transcription_model="auto"),
+        model_settings=OpenAIRealtimeModelSettings(
+            input_transcription_model="auto",
+            # False = effort "none"; ignored by models without reasoning.
+            thinking=interview.voice_reasoning_effort or False,
+        ),
         instructions=constants.VOICE_INSTRUCTIONS.format(language=language),
         usage_limits=UsageLimits(cost_limit=interview.voice_budget_usd),
     )

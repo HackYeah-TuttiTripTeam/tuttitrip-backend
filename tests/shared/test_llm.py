@@ -20,7 +20,7 @@ from pydantic_ai.models.test import TestModel
 
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.planning.services.planner_agent import planner_agent
-from tuttitrip.shared.config.settings import LlmSettings
+from tuttitrip.shared.config.settings import LlmSettings, get_settings
 from tuttitrip.shared.llm.services import model_catalog
 from tuttitrip.shared.llm.services.model_catalog import (
     ModelCatalog,
@@ -41,6 +41,7 @@ ELEVEN = ("o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11")
 def test_model_ids_use_the_shared_prefix() -> None:
     assert [model_id(key) for key in ModelKey] == [
         "tuttitrip:agent",
+        "tuttitrip:interview",
         "tuttitrip:chat",
         "tuttitrip:decide",
         "tuttitrip:decide-laya",
@@ -57,7 +58,7 @@ def test_agents_import_and_run_without_any_provider_key(
     fresh = ModelCatalog()
     with fresh.override(TestModel()):
         assert fresh.get(ModelKey.DECIDE) is fresh.get(ModelKey.AGENT)
-    assert interview_agent.model == "tuttitrip:agent"
+    assert interview_agent.model == "tuttitrip:interview"
     assert planner_agent.model == "tuttitrip:agent"
     assert catalog.resolve(None, "openai:gpt-5.2") is None  # ty: ignore[invalid-argument-type]
 
@@ -168,3 +169,52 @@ def test_unfillable_route_escalates_to_the_chat_model() -> None:
     decide.models = [FunctionModel(basal), FunctionModel(qwen)]
     result = asyncio.run(Agent(decide).run("Zrób coś"))
     assert result.output == "odpowiada Qwen"
+
+
+def test_interview_entry_defaults_to_the_agent_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TUTTITRIP_INTERVIEW__AGENT_MODEL", raising=False)
+    get_settings.cache_clear()
+    try:
+        interview = build_model(ModelKey.INTERVIEW, FAKE_KEYS)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(interview, FallbackModel)
+    assert isinstance(interview.models[0], OpenAIChatModel)
+    assert interview.models[0].model_name == "qwen3.8-27b"
+
+
+def test_interview_agent_model_setting_uses_openrouter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TUTTITRIP_INTERVIEW__AGENT_MODEL", "openrouter:anthropic/claude-opus-5.5"
+    )
+    get_settings.cache_clear()
+    try:
+        interview = build_model(ModelKey.INTERVIEW, FAKE_KEYS)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(interview, OpenRouterModel)
+    assert interview.model_name == "anthropic/claude-opus-5.5"
+
+
+@pytest.mark.parametrize(
+    ("thinking", "expected"), [("", {"effort": "none"}), ("1", None)]
+)
+def test_interview_openrouter_agent_reasoning_is_off_by_default(
+    monkeypatch: pytest.MonkeyPatch, thinking: str, expected: object
+) -> None:
+    monkeypatch.setenv(
+        "TUTTITRIP_INTERVIEW__AGENT_MODEL", "anthropic/claude-sonnet-5.5"
+    )
+    if thinking:
+        monkeypatch.setenv("TUTTITRIP_INTERVIEW__AGENT_THINKING", thinking)
+    get_settings.cache_clear()
+    try:
+        interview = build_model(ModelKey.INTERVIEW, FAKE_KEYS)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(interview, OpenRouterModel)
+    assert (interview.settings or {}).get("openrouter_reasoning") == expected
