@@ -16,6 +16,11 @@ kod (solver, linter, reguły cenowe, rozliczenie), a testy architektury pilnują
 Frontend (React) jest w osobnym repozytorium `tuttitrip-frontend` i generuje
 klienta TypeScript z `/api/v1/openapi.json` tego API.
 
+![Plansza „Kod liczy, model tylko pisze”: po lewej solver sprawiedliwości, sprawdzenie planu, kontrakt noclegu i rozliczenie, po prawej to, co robi model językowy: pytania, rozumienie odpowiedzi, uzasadnienia i odczyt wklejonych planów.](docs/readme/09-code.webp)
+
+> [!NOTE]
+> Opis całego projektu, plansze, zrzuty aplikacji i instrukcja uruchomienia wszystkich części są w repozytorium zbiorczym [tuttitrip](https://github.com/HackYeah-TuttiTripTeam/tuttitrip). TuttiTrip powstał z pomocą asystentów kodowania (Claude Code, Codex). Ludzie z zespołu odpowiadali za architekturę rozwiązania, rozplanowanie funkcji, działanie aplikacji i to, jak się z niej korzysta.
+
 ## Stack
 
 | Obszar | Narzędzie |
@@ -383,6 +388,17 @@ src/tuttitrip/
 └── search/            # embeddingi w pgvector (zapisuje je worker)
 ```
 
+![Diagram architektury w czterech kolumnach: ludzie, aplikacja, backend oraz worker i modele, połączone kropkowanymi liniami, pod nim lista technologii.](docs/readme/14-stack.webp)
+
+Co liczy czysty kod z `planning/` (plansze na danych przykładowych):
+
+<table>
+  <tr>
+    <td width="50%"><img width="100%" src="docs/readme/04-fairness.webp" alt="Wykres zadowolenia pięciu osób w skali 0–100 z podłogą 40 punktów. W planie TuttiTrip najniższy wynik ma Kuba, 58; w planie z czatbota babcia miała 22."><br><sub>Solver sprawiedliwości: najmniej zadowolona osoba ma 58 punktów zamiast 22.</sub></td>
+    <td width="50%"><img width="100%" src="docs/readme/02-problem.webp" alt="Plan poniedziałku z czatbota z trzema problemami: muzeum zamknięte w poniedziałek, 9 km pieszo z babcią, budżet przekroczony o 240 zł. Obok wynik sprawdzenia: 3 problemy kontra 0 w planie TuttiTrip."><br><sub>Linter planu: 3 problemy w planie z czatbota, 0 w planie TuttiTrip.</sub></td>
+  </tr>
+</table>
+
 Algorytm planu i miary sprawiedliwości (równania E0 do E6, parametry, testy) jest opisany w
 [docs/algorytm.md](docs/algorytm.md). To kanoniczna specyfikacja dla `planning/**/logic`.
 
@@ -445,10 +461,9 @@ i w plikach `~/tuttitrip/*.env` na serwerze, nigdy w repozytorium.
   tylko przez PR z zielonymi jobami `lint`, `tests` i `contracts-check`, bez
   force-pusha i bez usuwania gałęzi. Nie wymagamy zatwierdzeń (0 approvals),
   bo w 5 osób na 24 godziny bramką jest CI.
-- GitHub nie pozwala wymusić tych reguł w prywatnym repozytorium organizacji
-  na darmowym planie (ochrona gałęzi i rulesety zwracają 403), więc na razie
-  pilnujemy ich sami. Po przejściu na płatny plan można je włączyć jednym
-  wywołaniem:
+- Ochrona gałęzi nie jest jeszcze włączona (gdy repozytorium było prywatne,
+  darmowy plan zwracał 403), więc na razie pilnujemy tych reguł sami.
+  Repozytorium jest już publiczne, więc można je włączyć jednym wywołaniem:
 
   ```bash
   for b in main develop; do
