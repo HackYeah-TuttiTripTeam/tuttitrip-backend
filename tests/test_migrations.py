@@ -53,8 +53,8 @@ def test_feedback_migration_grants_and_removes_the_user_role_permission() -> Non
 
 
 def test_sheet_rules_migration_adds_reduced_and_protects_sheet_rows_both_ways() -> None:
-    up = _sql("upgrade", "a7bad57ce3b3:28a40fb2f40e")
-    down = _sql("downgrade", "28a40fb2f40e:a7bad57ce3b3")
+    up = _sql("upgrade", "9c1f5a7d3b20:28a40fb2f40e")
+    down = _sql("downgrade", "28a40fb2f40e:9c1f5a7d3b20")
     assert "'family', 'reduced')" in up
     assert "current_user = 'tuttitrip_worker' AND OLD.source = 'sheet'" in up
     for trigger in ("places_keep_sheet_rows", "place_prices_keep_sheet_rows"):

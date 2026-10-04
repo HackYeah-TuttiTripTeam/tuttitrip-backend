@@ -12,6 +12,7 @@
 #   TT_CITIES_DIR               host directory instead of the volume (tests,
 #                               local use); then no image is needed
 #   TT_CITIES_URL               export URL override (tests); default Google's
+#   TT_CITIES_PROTO             curl --proto for the first request (tests: =https,http)
 #   TT_CITIES_MAX_TIME          seconds per attempt (default 60)
 # Google's export URL is not a documented contract, so we check the file (ZIP
 # signature, size, the five sheets), not just the HTTP status: a sheet that
@@ -45,7 +46,7 @@ chmod 755 "$tmp"
 
 # --fail: HTTP errors; --max-time and few retries: a slow Google must not hold
 # the deploy lock for long.
-if ! curl --fail --silent --show-error --location --max-time "${TT_CITIES_MAX_TIME:-60}" \
+if ! curl --fail --silent --show-error --location --proto "${TT_CITIES_PROTO:-=https}" --proto-redir =https --max-filesize 20000000 --max-time "${TT_CITIES_MAX_TIME:-60}" \
     --retry 2 --retry-delay 2 --user-agent "tuttitrip-deploy" \
     --output "$tmp/$file" "$url" 2>"$tmp/curl.err"; then
   warn "download failed ($(tr '\n' ' ' <"$tmp/curl.err" | cut -c1-200))"; exit 0

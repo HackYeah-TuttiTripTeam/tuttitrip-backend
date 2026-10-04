@@ -233,3 +233,48 @@ def test_reading_xlsx_round_trips_cells(tmp_path: Path) -> None:
     assert set(sheets) == {"miasta", "miejsca", "noclegi", "komunikacja", "slownik"}
     assert sheets["miejsca"].rows[0].number == 2
     assert parse_workbook(sheets) == parse()
+
+
+def test_text_in_a_numeric_column_is_unknown_with_a_warning_not_a_rejection() -> None:
+    rows = [
+        fx.place(
+            cena_normalna="niezweryfikowane",
+            cena_senior="2O",
+            schody="brak",
+            czas_wizyty_min="ok. godzina",
+        )
+    ]
+    catalog = parse(miejsca=rows)
+    place = next(p for p in catalog.places if p.source_key == "warszawa:muzeum")
+    assert {p.ticket_category for p in place.prices} == {"reduced", "family"}
+    assert place.stairs is None
+    assert place.typical_visit_min is None
+    warnings = [w for w in catalog.warnings if w.startswith("miejsca, wiersz 2")]
+    assert [w.split(":")[0] for w in warnings] == [
+        "miejsca, wiersz 2, kolumna cena_normalna",
+        "miejsca, wiersz 2, kolumna cena_senior",
+        "miejsca, wiersz 2, kolumna schody",
+        "miejsca, wiersz 2, kolumna czas_wizyty_min",
+    ]
+
+
+def test_text_in_a_coordinate_is_still_a_rejection() -> None:
+    [message] = errors(miejsca=[fx.place(szerokosc="tu")])
+    assert "brak współrzędnych" in message
+
+
+def test_closure_dates_dropped_with_unknown_hours_are_reported() -> None:
+    catalog = parse(
+        miejsca=[
+            fx.place(
+                godziny_osm=None,
+                godziny_zweryfikowane="nie",
+                dni_zamkniecia="2026-12-24",
+            )
+        ]
+    )
+    assert any("dni_zamkniecia" in w and "pominięte" in w for w in catalog.warnings)
+
+
+def test_an_empty_cities_sheet_is_an_explicit_error() -> None:
+    assert "miasta: arkusz jest pusty, brak miast do importu" in errors(miasta=[])

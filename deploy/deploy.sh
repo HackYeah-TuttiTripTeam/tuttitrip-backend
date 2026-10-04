@@ -156,11 +156,14 @@ tt_log "migrations, DBOS schema and worker grants applied"
 # deploy, so a bad edit in the sheet cannot block a release.
 citieslog="$TT_STATE_DIR/cities-import-$env.log"
 set +e
-timeout -k 5 300 docker run --rm --network "$TT_NETWORK" --env-file "$envfile" \
+cities_name="tuttitrip-cities-import-$env"
+timeout -k 5 300 docker run --rm --name "$cities_name" --network "$TT_NETWORK" --env-file "$envfile" \
   -v "$TT_CITIES_VOLUME:/data/cities:ro" "$image" \
   python -m tuttitrip.places.services.import_command >"$citieslog" 2>&1
 cities_rc=$?
 set -e
+# timeout kills the docker client, not the container: remove it explicitly.
+docker rm -f "$cities_name" >/dev/null 2>&1 || true
 case "$cities_rc" in
   0) tt_log "cities sheet imported"; grep -E ': [0-9]+ places|inserted' "$citieslog" >&2 || true ;;
   2) tt_log "WARNING: no cities sheet in volume $TT_CITIES_VOLUME; the catalog keeps its data" ;;

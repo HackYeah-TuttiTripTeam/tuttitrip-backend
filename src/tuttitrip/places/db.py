@@ -204,10 +204,25 @@ async def adopt_osm_rows(session: AsyncSession, places: Sequence[PlaceValues]) -
         .values(source=_SHEET, source_key=bindparam("b_key"))
     )
     refs = [(p.osm_type, p.osm_id) for p in taken]
-    count = await session.scalar(
-        select(func.count()).where(
+    # Rows that will change hands: OSM rows for these objects whose key is new.
+    held = set(
+        await session.scalars(
+            select(Place.source_key).where(
+                Place.source == _SHEET,
+                Place.source_key.in_([p.source_key for p in taken]),
+            )
+        )
+    )
+    osm_rows = await session.execute(
+        select(Place.osm_type, Place.osm_id).where(
             tuple_(Place.osm_type, Place.osm_id).in_(refs), Place.source != _SHEET
         )
+    )
+    adoptable = {(row.osm_type, row.osm_id) for row in osm_rows}
+    count = sum(
+        1
+        for p in taken
+        if (p.osm_type, p.osm_id) in adoptable and p.source_key not in held
     )
     await session.execute(
         statement,
@@ -216,7 +231,7 @@ async def adopt_osm_rows(session: AsyncSession, places: Sequence[PlaceValues]) -
             for p in taken
         ],
     )
-    return count or 0
+    return count
 
 
 async def upsert_places(

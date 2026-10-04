@@ -59,6 +59,7 @@ def fetch(
         "TT_CITIES_URL": url,
         "TT_CITIES_DIR": str(target),
         "TT_CITIES_MAX_TIME": "5",
+        "TT_CITIES_PROTO": "=https,http",
     }
     return subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
         [BASH, str(SCRIPT)], env=env, capture_output=True, text=True, check=False

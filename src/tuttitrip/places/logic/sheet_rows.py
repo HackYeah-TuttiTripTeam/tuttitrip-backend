@@ -364,8 +364,12 @@ class Catalog:
 class _Reader:
     """Typed access to the cells of one row; raises ``_RowProblem``."""
 
-    def __init__(self, cells: Mapping[str, Cell]) -> None:
+    def __init__(
+        self, cells: Mapping[str, Cell], label: str, warnings: list[str]
+    ) -> None:
         self.cells = cells
+        self.label = label
+        self.warnings = warnings
 
     def text(self, column: str) -> str | None:
         value = self.cells.get(column)
@@ -392,8 +396,12 @@ class _Reader:
             try:
                 return float(value.replace(",", "."))
             except ValueError:
-                msg = f"{column}: oczekiwano liczby, jest {value!r}"
-                raise _RowProblem(msg) from None
+                # "niezweryfikowane" or a typo: unknown, not a reason to drop the sheet.
+                self.warnings.append(
+                    f"{self.label}, kolumna {column}: tekst {value!r} zamiast liczby,"
+                    " wartość zostaje nieznana"
+                )
+                return None
         return float(value)
 
     def integer(self, column: str) -> int | None:
@@ -564,6 +572,21 @@ def _identity(reader: _Reader, city_by_name: Mapping[str, CityValues]) -> _Ident
     return _Identity(key, city, name, *coords, osm_type, osm_id)
 
 
+def _warn_ignored_closures(reader: _Reader, warnings: list[str], where: str) -> None:
+    """Warn that closure dates are dropped together with unknown hours.
+
+    Args:
+        reader: The row.
+        warnings: Collects the warning.
+        where: Row label.
+    """
+    closures = reader.text("dni_zamkniecia")
+    if closures and re.search(r"\d{4}-\d{2}-\d{2}", closures):
+        warnings.append(
+            f"{where}: dni_zamkniecia {closures!r} pominięte, bo godziny są nieznane"
+        )
+
+
 def _hours(
     reader: _Reader,
     source_url: str,
@@ -592,6 +615,7 @@ def _hours(
         if claimed:
             msg = "godziny_zweryfikowane = tak, ale godziny_osm jest puste"
             raise _RowProblem(msg)
+        _warn_ignored_closures(reader, warnings, where)
         return None, False, None, None
     try:
         hours = parse_osm_hours(raw)
@@ -601,6 +625,7 @@ def _hours(
         raise _RowProblem(msg) from exc
     if hours is None:
         warnings.append(f"{where}: godziny sezonowe {raw!r} zostają nieznane")
+        _warn_ignored_closures(reader, warnings, where)
         return None, False, None, None
     hours = OpeningHours(weekly=hours.weekly, closed_dates=closed)
     return hours, claimed, source_url, checked_at
@@ -911,13 +936,17 @@ def _duplicates(
 
 
 def _collect[T](
-    sheet: Sheet, errors: list[RowError], parse: Callable[[_Reader], T]
+    sheet: Sheet,
+    errors: list[RowError],
+    warnings: list[str],
+    parse: Callable[[_Reader], T],
 ) -> list[T]:
     """Parse every row of a sheet, recording the bad ones.
 
     Args:
         sheet: The worksheet.
         errors: Collects row problems.
+        warnings: Collects cells left unknown on purpose.
         parse: Row parser; raises ``_RowProblem`` on a bad cell.
 
     Returns:
@@ -926,7 +955,8 @@ def _collect[T](
     parsed = []
     for row in sheet.rows:
         try:
-            parsed.append(parse(_Reader(row.cells)))
+            label = f"{sheet.name}, wiersz {row.number}"
+            parsed.append(parse(_Reader(row.cells, label, warnings)))
         except _RowProblem as exc:
             errors.append(RowError(sheet.name, row.number, str(exc)))
     return parsed
@@ -960,17 +990,23 @@ def parse_workbook(sheets: Mapping[str, Sheet]) -> Catalog:
     if errors := _check_contract(sheets):
         raise SheetImportError(errors)
     warnings: list[str] = []
-    cities = _collect(sheets[CITIES], errors, _parse_city)
+    cities = _collect(sheets[CITIES], errors, warnings, _parse_city)
+    if not sheets[CITIES].rows:
+        errors.append(RowError(CITIES, 0, "arkusz jest pusty, brak miast do importu"))
     by_name = {c.name: c for c in cities}
     if len(by_name) != len(cities):
         errors.append(RowError(CITIES, 0, "nazwa miasta powtórzona"))
     places = _collect(
-        sheets[PLACES], errors, lambda r: _parse_place(r, by_name, warnings)
+        sheets[PLACES], errors, warnings, lambda r: _parse_place(r, by_name, warnings)
     )
-    lodgings = _collect(sheets[LODGINGS], errors, lambda r: _parse_lodging(r, by_name))
+    lodgings = _collect(
+        sheets[LODGINGS], errors, warnings, lambda r: _parse_lodging(r, by_name)
+    )
     fares = [
         fare
-        for group in _collect(sheets[FARES], errors, lambda r: _parse_fares(r, by_name))
+        for group in _collect(
+            sheets[FARES], errors, warnings, lambda r: _parse_fares(r, by_name)
+        )
         for fare in group
     ]
     errors.extend(_duplicates(places, lodgings))
