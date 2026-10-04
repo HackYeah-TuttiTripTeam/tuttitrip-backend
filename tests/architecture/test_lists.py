@@ -23,7 +23,6 @@ LEGACY_UNPAGED = frozenset(
         "GET /admin/permissions/users",
         "GET /places",
         "GET /places/cities",
-        "GET /trips/{trip_id}/expenses",
         "GET /trips/{trip_id}/invitations",
         "GET /trips/{trip_id}/members",
         "GET /trips/{trip_id}/preferences",

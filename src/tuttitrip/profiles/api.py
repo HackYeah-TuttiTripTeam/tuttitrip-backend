@@ -21,6 +21,7 @@ from tuttitrip.profiles.services.profile_service import (
     ProfileAccountError,
     ProfileComfortError,
     ProfileForbiddenError,
+    ProfileInUseError,
     ProfileNotFoundError,
 )
 from tuttitrip.shared.db.api import SessionDep
@@ -155,7 +156,7 @@ async def delete_profile(
         await profile_service.delete_profile(session, membership, profile_id)
     except ProfileNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND) from exc
-    except ProfileAccountError as exc:
+    except (ProfileAccountError, ProfileInUseError) as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
