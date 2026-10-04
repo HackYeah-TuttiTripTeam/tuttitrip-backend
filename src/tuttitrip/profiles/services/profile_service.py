@@ -58,6 +58,13 @@ class ProfileAccountError(Exception):
     """The account link cannot change: it is not allowed, or already taken."""
 
 
+FOREIGN_KEY_VIOLATION = "23503"  # PostgreSQL SQLSTATE
+
+
+class ProfileInUseError(Exception):
+    """The person paid or shares an expense, so removing them would change the books."""
+
+
 class ProfileClaimedError(Exception):
     """The profile already belongs to an account (or was taken a moment ago)."""
 
@@ -467,12 +474,21 @@ async def delete_profile(
 
     Raises:
         ProfileAccountError: The profile has an account (a trip member).
+        ProfileInUseError: The profile paid or shares an expense.
     """
     profile = await _get(session, membership.trip_id, profile_id)
     if profile.user_sub is not None:
         raise ProfileAccountError(MEMBERSHIP_VIA_MEMBERS)
-    await db.delete_profile(session, profile)
-    await session.commit()
+    try:
+        await db.delete_profile(session, profile)
+        await session.commit()
+    except IntegrityError as exc:
+        # Backstop for a race with a new expense (the API checks first).
+        await session.rollback()
+        if getattr(exc.orig, "sqlstate", None) != FOREIGN_KEY_VIOLATION:
+            raise
+        msg = "This person has expenses on the trip; delete or reassign them first"
+        raise ProfileInUseError(msg) from exc
 
 
 async def set_weights(
@@ -510,3 +526,15 @@ async def set_weights(
         profiles[pid].weight = weight
     await session.commit()
     return [_read(p) for p in profiles.values()]
+
+
+async def detach_account(session: AsyncSession, sub: str) -> None:
+    """Detach a deleted account from all its profiles; the people stay.
+
+    Flushes only, the caller commits.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject of the deleted account.
+    """
+    await db.detach_account_everywhere(session, sub)

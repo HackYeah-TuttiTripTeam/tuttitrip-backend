@@ -295,6 +295,7 @@ class _WorkerError(Exception):
         ("document_not_found", "Nie znaleziono wklejonej oferty"),
         ("city_not_found", "Nie znaleziono takiego miasta"),
         ("rate_limited", "Dzienny limit zapytań został wyczerpany, spróbuj jutro"),
+        ("slug_conflict", "Ta nazwa pasuje do kilku miast, doprecyzuj nazwę miasta"),
         ("model_output_invalid", "invalid ParsePastedPlanInput"),
     ],
 )
@@ -310,3 +311,4 @@ def test_worker_error_codes_reach_the_job_state(code: str, message: str) -> None
     state = job_state(cast("WorkflowStatus", status), None)
     assert state.error_code == code
     assert state.error == message
+    assert (state.error_en is None) == (message == "invalid ParsePastedPlanInput")

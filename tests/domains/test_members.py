@@ -15,6 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
+from tuttitrip.expenses.services import expense_service
 from tuttitrip.main import create_app
 from tuttitrip.profiles import db as profiles_db
 from tuttitrip.profiles.logic.age_defaults import DEFAULTS, age_group_for
@@ -196,7 +197,11 @@ def app(session: AsyncMock) -> FastAPI:
 
 
 @pytest.fixture
-def client(app: FastAPI) -> Iterator[TestClient]:
+def client(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    # These tests use an in-memory fake session; no expense references anyone.
+    monkeypatch.setattr(
+        expense_service, "profile_in_use", AsyncMock(return_value=False)
+    )
     with TestClient(app) as test_client:
         yield test_client
 

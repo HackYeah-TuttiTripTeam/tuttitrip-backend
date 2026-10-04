@@ -29,6 +29,11 @@ GRANT UPDATE (name, category, tags, lat, lon, wheelchair, indoor, cuisine,
     ON public.places
     TO tuttitrip_worker;
 
+-- OSM fetch state (replaces the osm-fetch:/osm-attempt: rows of job_results).
+GRANT SELECT, INSERT, UPDATE
+    ON public.city_fetches, public.city_fetch_attempts
+    TO tuttitrip_worker;
+
 -- Read-write: tables designated for worker output.
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON public.worker_heartbeats, public.job_results, public.embeddings

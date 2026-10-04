@@ -44,6 +44,7 @@ def test_worker_has_no_access_to_permissions() -> None:
         "user_roles",
         "user_grants",
         "permission_audit",
+        "account_blocks",
         "trip_members",
     ):
         assert f"public.{table}" not in sql
@@ -89,3 +90,15 @@ def test_osm_import_updates_only_the_columns_its_upsert_sets() -> None:
         "cuisine", "diet_tags", "amenities", "opening_hours",
     }  # fmt: skip
     assert not columns & {"city_slug", "source", "hours_verified", "osm_id", "id"}
+
+
+def test_worker_writes_osm_fetch_state_without_delete() -> None:
+    sql = "\n".join(
+        line for line in GRANTS.read_text().splitlines() if not line.startswith("--")
+    )
+    match = re.search(r"GRANT SELECT, INSERT, UPDATE\s+ON (.+?)\s+TO", sql, re.DOTALL)
+    assert match is not None
+    assert set(re.findall(r"public\.([a-z_]+)", match.group(1))) == {
+        "city_fetches",
+        "city_fetch_attempts",
+    }

@@ -38,9 +38,10 @@ class Auth0Settings(BaseModel):
     # Namespaced access-token claim with the user's roles, set by the Auth0
     # post-login Action ("admin" for the superadmin allow-list).
     roles_claim: str = "https://tuttitrip.gburek.app/roles"
-    # M2M application with `read:users` and `update:users` on the Management
-    # API; empty = the admin user list and PATCH /me/account answer 503.
-    # Set in host env files / CI secrets only.
+    # M2M application on the Management API; empty = the admin user list, block,
+    # delete and PATCH /me/account answer 503. Scopes it needs: `read:users`
+    # (list), `update:users` (block, unblock, rename) and `delete:users`
+    # (delete). Host env files / CI secrets only.
     management_client_id: str = ""
     management_client_secret: SecretStr = SecretStr("")
 
@@ -66,6 +67,20 @@ class McpSettings(BaseModel):
             msg = "must not end with a slash (it is compared with the token audience)"
             raise ValueError(msg)
         return value
+
+
+class AdminSettings(BaseModel):
+    """Guards of the administrator actions."""
+
+    # Mirrors the allow-list (secret ALLOWED_DISCORD_IDS) of the Auth0 post-login
+    # Action "TuttiTrip superadmins", which is the only place superadmins exist.
+    protected_discord_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Discord user ids of the superadmins. An account with one of these "
+            "ids cannot be blocked or deleted through the API (409)."
+        ),
+    )
 
 
 class LlmSettings(BaseModel):
@@ -203,6 +218,7 @@ class Settings(BaseSettings):
     )
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     auth0: Auth0Settings = Field(default_factory=Auth0Settings)
+    admin: AdminSettings = Field(default_factory=AdminSettings)
     llm: LlmSettings = Field(default_factory=LlmSettings)
     dbos: DbosSettings = Field(default_factory=DbosSettings)
     jobs: JobsSettings = Field(default_factory=JobsSettings)
