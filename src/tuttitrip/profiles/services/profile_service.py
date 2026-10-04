@@ -58,6 +58,9 @@ class ProfileAccountError(Exception):
     """The account link cannot change: it is not allowed, or already taken."""
 
 
+FOREIGN_KEY_VIOLATION = "23503"  # PostgreSQL SQLSTATE
+
+
 class ProfileInUseError(Exception):
     """The person paid or shares an expense, so removing them would change the books."""
 
@@ -478,10 +481,11 @@ async def delete_profile(
         raise ProfileAccountError(MEMBERSHIP_VIA_MEMBERS)
     try:
         await db.delete_profile(session, profile)
-        await session.commit()  # expense foreign keys are checked at commit
+        await session.commit()
     except IntegrityError as exc:
+        # Backstop for a race with a new expense (the API checks first).
         await session.rollback()
-        if "violates foreign key constraint" not in str(exc.orig):
+        if getattr(exc.orig, "sqlstate", None) != FOREIGN_KEY_VIOLATION:
             raise
         msg = "This person has expenses on the trip; delete or reassign them first"
         raise ProfileInUseError(msg) from exc

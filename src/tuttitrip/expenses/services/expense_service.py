@@ -82,7 +82,11 @@ def _rows(participants: list[ShareInput]) -> list[ExpenseShare]:
 
 
 async def _check(
-    session: AsyncSession, membership: TripMembership, expense: ExpenseCreate
+    session: AsyncSession,
+    membership: TripMembership,
+    expense: ExpenseCreate,
+    *,
+    check_currency: bool = True,
 ) -> str:
     """Check the expense against the trip.
 
@@ -97,7 +101,9 @@ async def _check(
     violations = check_expense(
         amount=expense.amount,
         currency=expense.currency,
-        trip_currency=trip.currency,
+        # Stored expenses keep their currency if the trip's changes later: it is
+        # compared again only when the edit touches the amount or the currency.
+        trip_currency=trip.currency if check_currency else expense.currency,
         payer=expense.payer_profile_id,
         method=expense.split_method,
         shares=[Share(p.profile_id, p.value) for p in expense.participants],
@@ -228,7 +234,12 @@ async def update_expense(
             "participants": participants,
         }
     )
-    await _check(session, membership, merged)
+    await _check(
+        session,
+        membership,
+        merged,
+        check_currency="currency" in changes or "amount" in changes,
+    )
     for field, value in changes.items():
         setattr(expense, field, value)
     if data.participants is not None:
@@ -256,3 +267,19 @@ async def delete_expense(
     _require_author_or_host(membership, expense)
     await db.delete_expense(session, expense)
     await session.commit()
+
+
+async def profile_in_use(
+    session: AsyncSession, membership: TripMembership, profile_id: UUID
+) -> bool:
+    """Tell whether a person paid or shares an expense (they cannot be removed).
+
+    Args:
+        session: Open session.
+        membership: The caller's checked membership of the trip.
+        profile_id: Profile to check.
+
+    Returns:
+        True when the profile is referenced by an expense of this trip.
+    """
+    return await db.profile_has_expenses(session, membership.trip_id, profile_id)

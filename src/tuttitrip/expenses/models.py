@@ -40,9 +40,11 @@ class Expense(Base):
     trip_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("trips.id", ondelete="CASCADE"), index=True
     )
-    # No CASCADE: removing a payer must not silently drop expenses. The check is
-    # deferred to commit so that deleting a whole trip (which cascades to both its
-    # profiles and its expenses) still goes through whatever order Postgres picks.
+    # Not CASCADE: removing a payer must not silently drop expenses (the API
+    # answers 409 first). Deferred to commit because plain NO ACTION is checked
+    # while deleting a whole trip cascades to profiles and expenses in an order
+    # Postgres picks (verified: it fails on expense_shares); deferred, the trip
+    # delete passes and a profile delete is still refused at commit.
     payer_profile_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("profiles.id", deferrable=True, initially="DEFERRED"), index=True
     )

@@ -6,7 +6,8 @@ from enum import StrEnum, unique
 from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 
@@ -58,7 +59,7 @@ class ExpenseErrorCode(StrEnum):
     SHARE_VALUE_REQUIRED = "expense.share_value_required"
     SHARE_VALUE_NOT_ALLOWED = "expense.share_value_not_allowed"
     PERCENT_SUM = "expense.percent_sum"
-    WEIGHT_NOT_POSITIVE = "expense.weight_not_positive"
+    SHARE_VALUE_NOT_POSITIVE = "expense.share_value_not_positive"
 
 
 class ExpenseValidationError(BaseModel):
@@ -83,7 +84,10 @@ class ShareInput(BaseModel):
     profile_id: UUID
     value: ShareValue | None = Field(
         default=None,
-        description="Empty for `equal`, percent for `percent`, weight for `weights`.",
+        description=(
+            "Empty for `equal`, percent for `percent` (all must sum to exactly 100), "
+            "weight for `weights`."
+        ),
     )
 
 
@@ -113,7 +117,9 @@ class ExpenseUpdate(BaseModel):
 
     payer_profile_id: UUID | None = None
     amount: Money | None = None
-    currency: Currency | None = None
+    currency: Currency | None = Field(
+        default=None, description="Only checked against the trip when sent."
+    )
     description: str | None = Field(default=None, max_length=500)
     spent_on: date | None = None
     category: ExpenseCategory | None = None
@@ -123,10 +129,23 @@ class ExpenseUpdate(BaseModel):
     @model_validator(mode="after")
     def _no_null_for_required(self) -> Self:
         # `category` is the only field that may be cleared with an explicit null.
-        for field in self.model_fields_set - {"category"}:
-            if getattr(self, field) is None:
-                msg = f"{field} cannot be null"
-                raise ValueError(msg)
+        # The code goes in the error `type`, which the global 422 handler keeps.
+        errors = [
+            InitErrorDetails(
+                type=PydanticCustomError(
+                    ExpenseErrorCode.NULL_NOT_ALLOWED.value,
+                    "{message}",
+                    {"message": f"{field} cannot be null"},
+                ),
+                loc=(field,),
+                input=None,
+            )
+            for field in sorted(self.model_fields_set - {"category"})
+            if getattr(self, field) is None
+        ]
+        if errors:
+            title = "ExpenseUpdate"
+            raise ValidationError.from_exception_data(title, errors)
         return self
 
 
@@ -144,7 +163,7 @@ class ExpenseRead(BaseModel):
     id: UUID
     trip_id: UUID
     payer_profile_id: UUID
-    amount: Decimal
+    amount: Decimal = Field(description="In `currency`.")
     currency: str
     description: str
     spent_on: date

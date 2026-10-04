@@ -159,7 +159,7 @@ def _check_values(method: SplitMethod, values: Sequence[Decimal]) -> list[Violat
     if any(value <= 0 for value in values):
         return [
             Violation(
-                ExpenseErrorCode.WEIGHT_NOT_POSITIVE,
+                ExpenseErrorCode.SHARE_VALUE_NOT_POSITIVE,
                 field,
                 "Every value must be greater than zero",
             )
@@ -169,7 +169,7 @@ def _check_values(method: SplitMethod, values: Sequence[Decimal]) -> list[Violat
             Violation(
                 ExpenseErrorCode.PERCENT_SUM,
                 field,
-                f"The percentages must add up to 100 (they add up to {sum(values)})",
+                f"The percentages must add up to exactly 100 (now {sum(values)})",
             )
         ]
     return []

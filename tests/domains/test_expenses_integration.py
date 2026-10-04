@@ -144,6 +144,8 @@ async def _scenario(session: AsyncSession) -> None:
         )
         assert len(same_people.participants) == 2  # row switch, no duplicate key
 
+        assert await expense_service.profile_in_use(session, host_m, ania)
+        assert not await expense_service.profile_in_use(session, host_m, UUID(int=1))
         with pytest.raises(profile_service.ProfileInUseError):
             await profile_service.delete_profile(session, host_m, ania)
 

@@ -84,7 +84,7 @@ def test_percentages_must_add_up_to_100() -> None:
 def test_weights_must_be_positive_and_present() -> None:
     zero = (Share(KASIA, Decimal(0)), Share(ANIA, Decimal(1)))
     assert _violations(SplitMethod.WEIGHTS, zero) == [
-        ExpenseErrorCode.WEIGHT_NOT_POSITIVE
+        ExpenseErrorCode.SHARE_VALUE_NOT_POSITIVE
     ]
     missing = (Share(KASIA, Decimal(1)), Share(ANIA))
     assert _violations(SplitMethod.WEIGHTS, missing) == [
@@ -159,8 +159,11 @@ def test_allocation_never_loses_a_cent(
 
 def test_patch_rejects_null_for_required_fields_but_not_category() -> None:
     assert ExpenseUpdate.model_validate({"category": None}).category is None
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as caught:
         ExpenseUpdate.model_validate({"amount": None})
+    (error,) = caught.value.errors()
+    assert error["type"] == "expense.null_not_allowed"
+    assert error["loc"] == ("amount",)
 
 
 def test_create_rejects_unknown_fields_and_empty_participants() -> None:
@@ -435,3 +438,23 @@ def test_writes_need_the_write_permission(monkeypatch: pytest.MonkeyPatch) -> No
         AsyncMock(return_value=Page[Any](items=[], total=0, page=1, size=20, pages=0)),
     )
     assert client.get(path("list_expenses", trip_id=TRIP)).status_code == 200
+
+
+def test_editing_after_the_trip_currency_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_service(monkeypatch, _expense())
+    monkeypatch.setattr(trip_service, "get_trip", AsyncMock(return_value=_trip("EUR")))
+    host = _membership(TripRole.HOST)
+
+    async def update(data: ExpenseUpdate) -> object:
+        return await expense_service.update_expense(
+            _session(), host, uuid.uuid4(), data
+        )
+
+    asyncio.run(update(ExpenseUpdate(description="Obiad")))  # no currency check
+    with pytest.raises(expense_service.ExpenseInvalidError) as caught:
+        asyncio.run(update(ExpenseUpdate(amount=Decimal(10))))
+    assert [v.code for v in caught.value.violations] == [
+        ExpenseErrorCode.CURRENCY_MISMATCH
+    ]

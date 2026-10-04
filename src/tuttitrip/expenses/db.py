@@ -128,3 +128,30 @@ async def delete_expense(session: AsyncSession, expense: Expense) -> None:
     """
     await session.delete(expense)
     await session.flush()
+
+
+async def profile_has_expenses(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID
+) -> bool:
+    """Tell whether a person paid or shares any expense of the trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        profile_id: Profile id.
+
+    Returns:
+        True when removing the profile would orphan an expense.
+    """
+    shared = exists().where(
+        ExpenseShare.expense_id == Expense.id, ExpenseShare.profile_id == profile_id
+    )
+    found = await session.scalar(
+        select(
+            exists().where(
+                Expense.trip_id == trip_id,
+                (Expense.payer_profile_id == profile_id) | shared,
+            )
+        )
+    )
+    return bool(found)

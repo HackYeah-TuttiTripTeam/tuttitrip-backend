@@ -57,12 +57,14 @@ def upgrade() -> None:
     op.add_column(
         "expenses", sa.Column("created_by_sub", sa.String(length=255), nullable=True)
     )
-    # Rows that predate the columns: spent the day they were added, shared equally
-    # by everyone on the trip, authored by the trip's host.
+    # Rows that predate the columns: spent the (UTC) day they were added, shared
+    # equally by the payer and everyone else on the trip, authored by the trip's
+    # host. 'unknown' only when a trip has no host row (should not happen), because
+    # the column is NOT NULL.
     op.execute(
         """
         UPDATE expenses e SET
-            spent_on = e.created_at::date,
+            spent_on = (e.created_at AT TIME ZONE 'UTC')::date,
             split_method = 'equal',
             created_by_sub = COALESCE(
                 (SELECT m.user_sub FROM trip_members m
@@ -74,6 +76,8 @@ def upgrade() -> None:
     op.execute(
         """
         INSERT INTO expense_shares (expense_id, profile_id)
+        SELECT e.id, e.payer_profile_id FROM expenses e
+        UNION
         SELECT e.id, p.id FROM expenses e JOIN profiles p ON p.trip_id = e.trip_id
         """
     )

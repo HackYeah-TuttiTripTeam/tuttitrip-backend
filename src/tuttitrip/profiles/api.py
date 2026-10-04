@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
 
+from tuttitrip.expenses.services import expense_service
 from tuttitrip.profiles.logic.weight_presets import (
     FocusProfileRequiredError,
     WeightRatioError,
@@ -33,6 +34,7 @@ from tuttitrip.trips.api import TripCoHost, TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/profiles", tags=["profiles"])
 
+PROFILE_IN_USE = "This person has expenses on the trip; delete or reassign them first"
 PROFILE_NOT_FOUND = "Profile not found"
 
 
@@ -152,6 +154,8 @@ async def delete_profile(
     Returns:
         An empty 204 response.
     """
+    if await expense_service.profile_in_use(session, membership, profile_id):
+        raise HTTPException(status.HTTP_409_CONFLICT, PROFILE_IN_USE)
     try:
         await profile_service.delete_profile(session, membership, profile_id)
     except ProfileNotFoundError as exc:
