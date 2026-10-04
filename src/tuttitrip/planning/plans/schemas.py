@@ -714,6 +714,41 @@ class PlanUpgrade(BaseModel):
     d_min_r: float = Field(description="Change of min r.")
 
 
+class AnywayEffects(BaseModel):
+    """What adding the place costs: the plan with it minus the plan without it."""
+
+    d_min_r: float = Field(description="Change of min r.")
+    d_cost: Decimal = Field(description="Change of c(P), in the trip currency.")
+    d_minutes: int = Field(description="Change of the active minutes of the plan.")
+
+
+class AnywayStatus(StrEnum):
+    """Where a suggestion stands."""
+
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+
+
+class AnywaySuggestion(BaseModel):
+    """The "anyway" suggestion of a day: an iconic or unique place that fits less.
+
+    At most one per day. ``justification`` is the template built from the numbers
+    until the model's text (``write_justifications``) arrives.
+    """
+
+    place_id: UUID
+    name: str
+    day: int = Field(ge=1, description="1-based day the place lands on.")
+    v_p: float = Field(ge=-1, le=1, description="Weighted opinion V_p of the group.")
+    effects: AnywayEffects
+    justification: str
+    justification_source: Literal["template", "model"]
+    status: AnywayStatus = Field(
+        default=AnywayStatus.PROPOSED,
+        description="`accepted` once the host made the place a `must` override.",
+    )
+
+
 class PlanTelemetry(BaseModel):
     """How the plan was computed."""
 
@@ -780,3 +815,11 @@ class PlanRead(BaseModel):
         ),
     )
     telemetry: PlanTelemetry
+    anyway: list[AnywaySuggestion] = Field(
+        default_factory=list,
+        description=(
+            'At most one "anyway" suggestion per day (an iconic or unique place that '
+            "fits the group less) with its cost. The host rejects it or makes it a "
+            "`must`; rejected ones are not listed."
+        ),
+    )
