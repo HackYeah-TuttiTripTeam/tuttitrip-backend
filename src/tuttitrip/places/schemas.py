@@ -284,6 +284,9 @@ class PlaceRead(BaseModel):
     city_slug: str
     name: str
     category: PlaceCategory
+    address: str | None = Field(
+        default=None, description="Street address; null when unknown."
+    )
     tags: list[PlaceTag]
     lat: float
     lon: float
