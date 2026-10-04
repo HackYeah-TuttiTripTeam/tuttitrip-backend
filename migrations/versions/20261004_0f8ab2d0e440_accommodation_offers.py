@@ -1,7 +1,7 @@
 """Accommodation offers.
 
 Revision ID: 0f8ab2d0e440
-Revises: 243e9787efa9
+Revises: 9c1f5a7d3b20
 Create Date: 2026-10-04 00:59:35.183366
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0f8ab2d0e440"
-down_revision: str | None = "243e9787efa9"
+down_revision: str | None = "9c1f5a7d3b20"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
