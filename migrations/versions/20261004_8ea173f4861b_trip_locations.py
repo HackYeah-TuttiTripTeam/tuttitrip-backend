@@ -1,7 +1,7 @@
 """Trip locations.
 
 Revision ID: 8ea173f4861b
-Revises: 243e9787efa9
+Revises: a7bad57ce3b3
 Create Date: 2026-10-04 02:43:07.604171
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "8ea173f4861b"
-down_revision: str | None = "243e9787efa9"
+down_revision: str | None = "a7bad57ce3b3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
