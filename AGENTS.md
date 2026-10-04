@@ -836,6 +836,35 @@ read (an approved request disappears from the basket).
 - Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
   is marked `integration`.
 
+## Plan proposals, budget consent and calendar export (planning)
+
+- Proposal (`planning/proposals`, `plan_proposals`, `proposal_responses`): the host
+  (`TripHost`) sends the latest stored plan version; every member with an account
+  (`trip_members`, host included) approves, rejects or comments (`PUT .../response`, one
+  answer per member, a comment needs a remark). The host's sending counts as their approval.
+  `status`: `outdated` (the plan changed after sending), else `approved` (all approved), else
+  `rejected` (somebody rejects), else `pending`. People without an account are listed apart.
+  A new plan version makes the open proposal `superseded` (`on_plan_changed`, same transaction as
+  the version); answering it is a 409 with `detail.code = proposal.outdated`.
+- Budget consent (`planning/budget_approvals`, `budget_approvals`): a plan version with
+  `needs_approval` opens one `pending` question in the transaction that stores it (amount over
+  `B_do`, `kappa`, who gains most; copies). `approve` keeps `P_flex`; `reject` stores `P_strict` as
+  the newest version (same input hash). Both write a `budget_approval` entry to `plan_decisions`
+  (`effects.budget` holds the facts, the numbers are `P_flex` minus `P_strict`). A decided row is
+  frozen by a trigger. Any new version supersedes a pending question. 409
+  `budget_approval.not_pending` otherwise.
+- Notifications (in the same transaction, never committing): `proposal_waiting` for members except
+  the host (key `proposal:<id>`), `budget_approval_waiting` for the host only (key `budget:<id>`).
+  A member's answer resolves only their own (`resolve(..., user_sub=...)`), a new version or a
+  decision resolves all.
+- Calendar: `GET /trips/{trip_id}/plans/{plan_id}/calendar.ics` only for a version that every
+  member with an account approved (409 `plan.not_approved`). `plans/logic/ics.py` uses
+  `icalendar`; `UID` is a UUIDv5 of version and stop, `DTSTAMP` the time the version was stored,
+  `SEQUENCE` its number, times in the city zone with a `VTIMEZONE`: the same bytes every time.
+- Upgrades (`planning/logic/upgrades.py`): for a plan below `B_od`, adds and dearer same-category
+  replacements that fit under `B_od` and raise `J`; stored in the plan as `upgrades` (empty when
+  none). They use the solver's own evaluator, so vetoes, blocks and limits hold.
+
 ## Git flow
 
 - `main` is production; `develop` is integration. Both change only through

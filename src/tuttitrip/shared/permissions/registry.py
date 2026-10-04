@@ -182,7 +182,7 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.PROFILES_FEEDBACK: "Opinie i oceny atrakcji",
     Feature.INTERVIEW: "Wywiad z asystentem AI",
     Feature.PLANNING: "Planowanie wyjazdu",
-    Feature.PLANNING_PROPOSALS: "Propozycje planu generowane przez AI",
+    Feature.PLANNING_PROPOSALS: "Propozycja planu: wysłanie, zatwierdzenie i uwagi",
     Feature.PLANNING_PLANS: "Plan z miarą sprawiedliwości, księgą i werdyktami",
     Feature.PLANNING_FAIRNESS: "Ocena sprawiedliwości planu",
     Feature.PLANNING_LINTER: "Sprawdzanie planu (godziny, dystanse, budżet)",

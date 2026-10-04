@@ -72,17 +72,21 @@ async def notify(  # ruff: ignore[too-many-arguments] one keyword-only producer 
     )
 
 
-async def resolve(session: AsyncSession, dedupe_key: str) -> int:
+async def resolve(
+    session: AsyncSession, dedupe_key: str, *, user_sub: str | None = None
+) -> int:
     """Mark as read every notification with this key, so stale actions disappear.
 
     Args:
         session: Open session; the caller commits.
         dedupe_key: The key used when the notifications were created.
+        user_sub: Resolve only this recipient's notification (one member
+            answered); None resolves it for everybody (the request is obsolete).
 
     Returns:
         How many notifications changed.
     """
-    return await db.mark_read_by_key(session, dedupe_key)
+    return await db.mark_read_by_key(session, dedupe_key, user_sub)
 
 
 def to_read(row: Notification) -> NotificationRead:
