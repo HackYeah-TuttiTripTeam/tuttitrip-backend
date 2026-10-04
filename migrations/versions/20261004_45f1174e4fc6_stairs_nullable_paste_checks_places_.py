@@ -1,7 +1,7 @@
 """Unknown stairs are NULL, paste checks and the places.candidates grant.
 
 Revision ID: 45f1174e4fc6
-Revises: 6c73942873a4
+Revises: 093e32d28baf
 Create Date: 2026-10-04 04:53:09.413700
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "45f1174e4fc6"
-down_revision: str | None = "6c73942873a4"
+down_revision: str | None = "093e32d28baf"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
