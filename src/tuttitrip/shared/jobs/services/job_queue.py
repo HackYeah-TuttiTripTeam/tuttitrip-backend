@@ -69,10 +69,7 @@ def job_state(status: WorkflowStatus, progress: object) -> JobState:
     """
     error = status.error
     code = getattr(error, "code", None)
-    if error is None:
-        text = None
-    else:
-        text = ERROR_MESSAGES.get(str(code), str(error))
+    text = None if error is None else ERROR_MESSAGES.get(str(code), str(error))
     return JobState(
         workflow_id=status.workflow_id,
         workflow_name=status.name,
