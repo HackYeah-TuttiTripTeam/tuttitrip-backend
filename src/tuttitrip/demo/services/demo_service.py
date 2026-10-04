@@ -17,6 +17,10 @@ from tuttitrip.accommodation.schemas import RequirementItem, RequirementsWrite
 from tuttitrip.accommodation.services import requirements_service
 from tuttitrip.demo.logic.dataset import DEMO_TRIPS, PersonSeed, TripSeed
 from tuttitrip.places.services import place_service
+from tuttitrip.planning.linter.schemas import DocumentCreate, DocumentKind
+from tuttitrip.planning.linter.services import document_service
+from tuttitrip.planning.plans.services import plan_service
+from tuttitrip.planning.plans.services.plan_service import PlanInputError
 from tuttitrip.profiles.feedback.schemas import RatingUpdate, RatingValue, ReasonCode
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.preferences.services import preference_service
@@ -76,6 +80,44 @@ async def _rate_places(
             )
             rated += 1
     return rated
+
+
+async def _plan_and_documents(
+    session: AsyncSession, membership: TripMembership, seed: TripSeed, today: date
+) -> str | None:
+    """Compute the plan and store the pasted chatbot plan and lodging offer.
+
+    The pasted texts are stored even when the plan cannot be computed (a
+    database without the city's catalog), so the linter scenes still work.
+
+    Args:
+        session: Open session.
+        membership: The host's membership of the trip.
+        seed: The trip's sample data.
+        today: The day of the reset.
+
+    Returns:
+        The 12-character ``plan_hash`` of the stored plan, or None without a plan.
+    """
+    text = seed.chatbot_text(today)
+    if text is not None:
+        await document_service.create_document(
+            session, membership, DocumentCreate(kind=DocumentKind.PLAN, text=text)
+        )
+    if seed.offer_text is not None:
+        await document_service.create_document(
+            session,
+            membership,
+            DocumentCreate(kind=DocumentKind.OFFER, text=seed.offer_text),
+        )
+    if not seed.plan:
+        return None
+    try:
+        plan, _ = await plan_service.generate_plan(session, membership, None)
+    except PlanInputError as exc:
+        log.warning("Demo plan of '%s' not computed: %s", seed.name, exc)
+        return None
+    return plan.plan_hash
 
 
 async def create_seed_trip(
@@ -164,7 +206,13 @@ async def reset_demo_account(
     # First, so it is the oldest and the headline Warszawa trip stays on top.
     await sample_trip_service.create_sample_trip(session, sub, today=today)
     for seed in DEMO_TRIPS:
-        await create_seed_trip(session, sub, seed, today)
+        trip_id = await create_seed_trip(session, sub, seed, today)
+        membership = await trip_service.get_membership(
+            session, trip_id, sub, TripRole.HOST
+        )
+        plan_hash = await _plan_and_documents(session, membership, seed, today)
+        if plan_hash is not None:
+            log.info("Demo trip '%s': plan_hash %s", seed.name, plan_hash)
     log.info(
         "Demo account reset: %d trips removed, %d created", removed, len(DEMO_TRIPS)
     )

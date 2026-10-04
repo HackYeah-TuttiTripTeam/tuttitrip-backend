@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.planning.logic.hard_constraints import RejectionCode, filter_places
-from tuttitrip.planning.logic.params import DEFAULT_PARAMS
+from tuttitrip.planning.logic.params import AlgorithmParams
 from tuttitrip.planning.logic.plan_group import GroupPlan, plan_group
 from tuttitrip.planning.overrides import db
 from tuttitrip.planning.overrides.models import PlanDecision, TripOverride
@@ -31,6 +31,7 @@ from tuttitrip.planning.overrides.schemas import (
     OverrideRead,
     PersonDelta,
 )
+from tuttitrip.planning.parameters.services import parameters_service
 from tuttitrip.planning.plans.schemas import ConflictCode, PlanConflict
 from tuttitrip.planning.plans.services import plan_service
 from tuttitrip.planning.schemas import PlanningInput
@@ -94,22 +95,25 @@ def _minutes(group: GroupPlan) -> int:
 
 
 def _compute(
-    planning: PlanningInput, changed: PlanningInput, alpha: float
+    planning: PlanningInput,
+    changed: PlanningInput,
+    alpha: float,
+    params: AlgorithmParams,
 ) -> DecisionEffects:
     solver = configured_solver().solver
-    base = plan_group(planning, DEFAULT_PARAMS, alpha=alpha, solver=solver)
+    base = plan_group(planning, params, alpha=alpha, solver=solver)
     reference = {r.person_id: r.u_star for r in base.people}
     with_decision = plan_group(
-        changed, DEFAULT_PARAMS, alpha=alpha, u_star=reference, solver=solver
+        changed, params, alpha=alpha, u_star=reference, solver=solver
     )
     return _effects(base, with_decision)
 
 
-def _check(planning: PlanningInput, change: _Change) -> None:
+def _check(planning: PlanningInput, change: _Change, params: AlgorithmParams) -> None:
     # A "must" that E0 rejects (a veto, hours, stairs, segment) cannot be honoured.
     if change.kind is not OverrideKind.MUST:
         return
-    rejected = filter_places(planning, DEFAULT_PARAMS).reasons(change.place_id)
+    rejected = filter_places(planning, params).reasons(change.place_id)
     if not rejected:
         return
     people = {
@@ -134,9 +138,12 @@ async def _effects_of(
 ) -> DecisionEffects:
     planning, _, alpha = await plan_service.gather_input(session, membership)
     changed = _apply(planning, change)
-    _check(changed, change)
+    _, params = await parameters_service.current(session)
+    _check(changed, change, params)
     await session.rollback()  # no transaction while computing
-    return await anyio.to_thread.run_sync(partial(_compute, planning, changed, alpha))
+    return await anyio.to_thread.run_sync(
+        partial(_compute, planning, changed, alpha, params)
+    )
 
 
 async def preview(

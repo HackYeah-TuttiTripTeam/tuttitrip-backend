@@ -14,6 +14,7 @@ from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.demo.services import sample_trip_service
 from tuttitrip.main import create_app
+from tuttitrip.planning.parameters.services import parameters_service
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
@@ -313,6 +314,9 @@ FULL: dict[str, object] = {
 }
 
 
+DEFAULT_ALPHA = 1.5
+
+
 def _post_client(
     monkeypatch: pytest.MonkeyPatch, session: AsyncMock
 ) -> tuple[TestClient, AsyncMock, AsyncMock]:
@@ -322,6 +326,9 @@ def _post_client(
     monkeypatch.setattr(profile_service, "create_host_profile", host)
     monkeypatch.setattr(
         trip_service.place_service, "find_city_slug", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        parameters_service, "default_alpha", AsyncMock(return_value=DEFAULT_ALPHA)
     )
     app = create_app()
     authorize(app, BOB)
@@ -352,7 +359,11 @@ def test_post_with_only_name_and_destination_still_works(
     client, insert, _ = _post_client(monkeypatch, session)
     body = {"name": "X", "destination": "Y"}
     assert client.post(path("create_trip"), json=body).status_code == 201
-    assert insert.call_args.kwargs["fields"] == body
+    # The administrator's default slider is filled in when the request has none.
+    assert insert.call_args.kwargs["fields"] == {
+        **body,
+        "fairness_alpha": DEFAULT_ALPHA,
+    }
     assert client.post(path("create_trip"), json={"name": "X"}).status_code == 201
 
 

@@ -28,7 +28,7 @@ from tuttitrip.planning.anyway.services import anyway_service
 from tuttitrip.planning.budget_approvals.services import approval_service
 from tuttitrip.planning.logic import what_if
 from tuttitrip.planning.logic.budget_consent import plan_with_consent
-from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
+from tuttitrip.planning.logic.params import AlgorithmParams
 from tuttitrip.planning.logic.progress import (
     PLAN_STEPS,
     PlanProgress,
@@ -37,6 +37,7 @@ from tuttitrip.planning.logic.progress import (
 )
 from tuttitrip.planning.logic.upgrades import find_upgrades
 from tuttitrip.planning.overrides import db as overrides_db
+from tuttitrip.planning.parameters.services import parameters_service
 from tuttitrip.planning.plans import db
 from tuttitrip.planning.plans.logic.ics import build_ics
 from tuttitrip.planning.plans.logic.input_builder import (
@@ -482,9 +483,16 @@ async def generate_plan(  # ruff: ignore[too-many-locals] compute, lock, store, 
     planning, names, trip_alpha = await gather_input(session, membership, assumptions)
     alpha = trip_alpha if data is None or data.alpha is None else data.alpha
     knobs = data or PlanCreate()
-    preset = knobs.weight_preset
-    params = replace(DEFAULT_PARAMS, max_exceptional_nights=knobs.exceptional_nights)
-    digest = input_hash(planning, alpha, preset.value, params, configured_solver().tag)
+    version, current = await parameters_service.current(session)
+    params = replace(current, max_exceptional_nights=knobs.exceptional_nights)
+    digest = input_hash(
+        planning,
+        alpha,
+        knobs.weight_preset.value,
+        params,
+        configured_solver().tag,
+        parameters_version=version,
+    )
     locale = knobs.locale
 
     latest = await db.select_latest(session, membership.trip_id)
@@ -523,9 +531,10 @@ async def generate_plan(  # ruff: ignore[too-many-locals] compute, lock, store, 
         plan_hash=computed.plan_hash,
         params={
             "alpha": alpha,
-            "weight_preset": preset.value,
+            "weight_preset": knobs.weight_preset.value,
             "draft": draft,
             "algorithm_version": ALGORITHM_VERSION,
+            "parameters_version": version,
             "algorithm": asdict(params),
         },
         result=computed.result,
@@ -674,8 +683,12 @@ async def measure_impacts(
         PlanInputError: The trip cannot be planned (no city, unknown city).
     """
     planning, _names, alpha = await gather_input(session, membership, assumptions)
+    version, params = await parameters_service.current(session)
     await session.rollback()  # do not hold a transaction while computing
-    key = (input_hash(planning, alpha, "impact", DEFAULT_PARAMS), targets)
+    key = (
+        input_hash(planning, alpha, "impact", params, parameters_version=version),
+        targets,
+    )
     if (cached := impact_cache.get(key)) is not None:
         return cached
     scores = await anyio.to_thread.run_sync(
@@ -683,7 +696,7 @@ async def measure_impacts(
             what_if.impacts,
             planning,
             targets,
-            DEFAULT_PARAMS,
+            params,
             alpha=alpha,
             budget_seconds=budget_seconds,
         )

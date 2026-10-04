@@ -19,6 +19,10 @@ from pydantic import (
 from tuttitrip.accommodation.schemas import RequirementCheck, RequirementItem
 from tuttitrip.places.schemas import PlaceRead
 
+MAX_STOPS_PER_DAY = 20
+"""More stops than this in a day is not a plan anybody can walk."""
+MAX_PLAN_DAYS = 31
+
 
 class LintItem(BaseModel):
     """One stop of a day: a catalog place or an unrecognised name."""
@@ -58,6 +62,36 @@ class LintPlan(BaseModel):
     """A plan to check: days with stops, as typed or pasted."""
 
     days: list[LintDay]
+
+
+class NamedStop(BaseModel):
+    """A stop as another tool wrote it: a name and the times, nothing else."""
+
+    name: str = Field(min_length=1, max_length=200)
+    start: time = Field(description="Local arrival time.")
+    end: time | None = Field(
+        default=None, description="Local end; null means start + the typical visit."
+    )
+
+    @model_validator(mode="after")
+    def _ends_after_start(self) -> Self:
+        if self.end is not None and self.end <= self.start:
+            msg = "end must be later than start"
+            raise ValueError(msg)
+        return self
+
+
+class NamedDay(BaseModel):
+    """The stops of one local date, by name."""
+
+    day: date
+    items: list[NamedStop] = Field(max_length=MAX_STOPS_PER_DAY)
+
+
+class NamedPlan(BaseModel):
+    """A plan already split into days and stops, to be matched to the catalog."""
+
+    days: list[NamedDay] = Field(min_length=1, max_length=MAX_PLAN_DAYS)
 
 
 class LintPerson(BaseModel):

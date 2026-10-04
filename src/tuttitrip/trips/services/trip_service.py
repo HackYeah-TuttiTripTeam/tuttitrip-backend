@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.places.services import place_service
+from tuttitrip.planning.parameters.services import parameters_service
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips import db
@@ -72,6 +73,9 @@ async def create_trip(
         slug = await place_service.find_city_slug(session, data.destination)
         if slug is not None:
             fields["city_slug"] = slug
+    if fields.get("fairness_alpha") is None:
+        # The administrator's default (backend#96); a host changes it per trip.
+        fields["fairness_alpha"] = await parameters_service.default_alpha(session)
     trip = await db.insert_trip(session, owner_sub=owner_sub, fields=fields)
     await profile_service.create_host_profile(session, trip.id, owner_sub)
     await session.commit()

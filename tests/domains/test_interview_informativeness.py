@@ -27,6 +27,8 @@ from tuttitrip.interview.schemas import (
 from tuttitrip.interview.services import question_service
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.planning.logic import what_if
+from tuttitrip.planning.logic.params import DEFAULT_PARAMS
+from tuttitrip.planning.parameters.services import parameters_service
 from tuttitrip.planning.plans.services import plan_service
 from tuttitrip.planning.plans.services.plan_service import PlanInputError
 from tuttitrip.planning.schemas import WhatIfField, WhatIfTarget
@@ -305,6 +307,11 @@ def test_the_service_caches_a_measurement_of_the_same_data(
     data = planning_input(reference(), lodging=False)
     gather = AsyncMock(return_value=(data, {}, 1.0))
     monkeypatch.setattr(plan_service, "gather_input", gather)
+    monkeypatch.setattr(
+        parameters_service,
+        "current",
+        AsyncMock(return_value=(0, DEFAULT_PARAMS)),
+    )
     solved = MagicMock()
     plan_service.impact_cache.clear()
     targets = (budget(),)
@@ -334,6 +341,11 @@ def test_the_service_does_not_cache_a_timeout(
     data = planning_input(reference(), lodging=False)
     monkeypatch.setattr(
         plan_service, "gather_input", AsyncMock(return_value=(data, {}, 1.0))
+    )
+    monkeypatch.setattr(
+        parameters_service,
+        "current",
+        AsyncMock(return_value=(0, DEFAULT_PARAMS)),
     )
     calls: list[int] = []
 

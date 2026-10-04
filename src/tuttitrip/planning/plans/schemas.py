@@ -381,6 +381,11 @@ class PlanParams(BaseModel):
         default=False,
         description="A preliminary plan made with assumptions during the interview.",
     )
+    parameters_version: int = Field(
+        default=0,
+        ge=0,
+        description="Version of the admin parameters (0: the built-in defaults).",
+    )
 
 
 @unique

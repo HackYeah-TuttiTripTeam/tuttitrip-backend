@@ -326,12 +326,14 @@ def _canonical(value: object) -> Any:  # ruff: ignore[any-type, too-many-return-
     return value
 
 
-def input_hash(
+def input_hash(  # ruff: ignore[too-many-arguments] every input of the plan hash
     data: PlanningInput,
     alpha: float,
     weight_preset: str,
     params: AlgorithmParams,
     solver: str | None = None,
+    *,
+    parameters_version: int = 0,
 ) -> str:
     """SHA-256 of everything that decides the plan.
 
@@ -341,6 +343,7 @@ def input_hash(
         weight_preset: The weight preset recorded with the plan.
         params: The algorithm parameters.
         solver: Tag of a non-default solver; None keeps the hash of the default.
+        parameters_version: Version of the stored parameters (0: built-in).
 
     Returns:
         64 hex characters; equal for equal input, in every process.
@@ -350,6 +353,7 @@ def input_hash(
         "alpha": alpha,
         "weight_preset": weight_preset,
         "params": asdict(params),
+        "parameters_version": parameters_version,
         "input": data.model_dump(mode="python"),
     }
     if solver is not None:
