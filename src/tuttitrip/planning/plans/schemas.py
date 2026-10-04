@@ -374,6 +374,12 @@ class PlanVerdict(BaseModel):
     )
     yes: list[VoteReason] = Field(default_factory=list)
     no: list[VoteReason] = Field(default_factory=list)
+    skip_codes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "E0 codes of a skip: veto, blocked, closed, no_fit, segment, stairs."
+        ),
+    )
     substitute_place_id: UUID | None = None
     explanation: str | None = Field(
         default=None, description="Written later by a model."

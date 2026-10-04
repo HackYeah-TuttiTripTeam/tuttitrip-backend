@@ -47,6 +47,12 @@ class AlgorithmParams:
     """Rise of ``min r`` that justifies exceeding the budget (E6)."""
     good_reason_welfare: float = 0.03
     """Welfare gain over the cheaper plan required for approval (E6)."""
+    cheaper_margin: float = 0.05
+    """E6: the cheaper alternative costs at most ``c - margin * B_do`` (5%)."""
+    verdict_fits: float = 0.1
+    """Extension, outside v1.0: ``V_p`` from which a place "fits" (backend#51)."""
+    verdict_iconic: float = -0.3
+    """Extension, outside v1.0: lowest ``V_p`` of "iconic, but not yours"."""
     own_place_match: float = 0.6
     """``m_ip`` from which a place counts as the person's own (E5)."""
     stairs_limit: float = 0.9

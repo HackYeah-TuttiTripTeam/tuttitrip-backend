@@ -6,7 +6,10 @@ the existing version back; parallel requests for one trip are serialised by an
 advisory lock around the check-and-insert, so none ends in a 500.
 """
 
-from dataclasses import asdict
+import time
+import uuid
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass
 from functools import partial
 from uuid import UUID
 
@@ -16,8 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.places.services import place_service
 from tuttitrip.planning.logic import what_if
+from tuttitrip.planning.logic.budget_consent import plan_with_consent
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS
-from tuttitrip.planning.logic.plan_group import plan_group
+from tuttitrip.planning.overrides import db as overrides_db
 from tuttitrip.planning.plans import db
 from tuttitrip.planning.plans.logic.input_builder import (
     ALGORITHM_VERSION,
@@ -26,6 +30,7 @@ from tuttitrip.planning.plans.logic.input_builder import (
     input_hash,
 )
 from tuttitrip.planning.plans.logic.read_model import build_content
+from tuttitrip.planning.plans.logic.verdict import build_verdicts
 from tuttitrip.planning.plans.models import PlanVersion
 from tuttitrip.planning.plans.schemas import (
     PlanAssumptions,
@@ -135,15 +140,28 @@ def _assume(
     return trip, profiles, preferences
 
 
-async def _gather(
+async def gather_input(
     session: AsyncSession,
     caller: TripMembership,
     assumptions: PlanAssumptions | None = None,
 ) -> tuple[PlanningInput, dict[UUID, str], float]:
-    # The trip, its people, their feedback and the catalog as algorithm input. The
-    # data is read with a host-level view of the trip (not scoped to the caller):
-    # the plan reads everybody's health data, so the result must not depend on who
-    # asks. What the caller may see is decided when the response is built.
+    """The trip, its people, their feedback, the catalog and the overrides.
+
+    The data is read with a host-level view of the trip (not scoped to the
+    caller): the plan reads everybody's health data, so the result must not depend
+    on who asks. What the caller may see is decided when the response is built.
+
+    Args:
+        session: Open session.
+        caller: The caller's membership (any role).
+        assumptions: Gaps to fill in memory for a draft plan, or None.
+
+    Returns:
+        The algorithm input, display names by profile id and the trip's alpha.
+
+    Raises:
+        PlanInputError: When the trip lacks dates, a city or people.
+    """
     membership = caller.model_copy(update={"role": TripRole.HOST})
     trip = await trip_service.get_trip(session, membership)
     slug = trip.city_slug
@@ -160,6 +178,7 @@ async def _gather(
         trip, profiles, preferences = _assume(trip, profiles, preferences, assumptions)
     feedback = await feedback_service.list_for_trip(session, membership.trip_id)
     places = await _city_places(session, slug)
+    active = await overrides_db.select_active(session, membership.trip_id)
     planning = build_input(
         trip,
         city=cities[slug],
@@ -167,9 +186,60 @@ async def _gather(
         preferences=preferences,
         feedback=feedback,
         places=places,
+        must=frozenset(o.place_id for o in active if o.kind == "must"),
+        blocked=frozenset(o.place_id for o in active if o.kind == "block"),
     )
     names = {p.id: p.display_name for p in profiles}
     return planning, names, trip.fairness_alpha
+
+
+@dataclass(frozen=True, slots=True)
+class _Stored:
+    plan_hash: str
+    result: dict[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _Computed(_Stored):
+    alternative: _Stored | None
+
+
+def _compute(
+    planning: PlanningInput,
+    alpha: float,
+    names: Mapping[UUID, str],
+    alternative_id: UUID,
+) -> _Computed:
+    # Runs in a worker thread: N solo runs, the group plan and, when the plan goes
+    # over B_do, P_strict and the cheaper alternative (E6).
+    started = time.perf_counter()
+    decision = plan_with_consent(planning, DEFAULT_PARAMS, alpha=alpha)
+    chosen = decision.chosen
+    verdicts = build_verdicts(planning, chosen.plan.place_ids)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    alternative = None
+    if decision.needs_approval and decision.alternative is not None:
+        strict = decision.alternative
+        alternative = _Stored(
+            strict.plan.plan_hash,
+            build_content(
+                planning,
+                strict,
+                names,
+                verdicts=build_verdicts(planning, strict.plan.place_ids),
+                elapsed_ms=elapsed_ms,
+            ),
+        )
+    content = build_content(
+        planning,
+        chosen,
+        names,
+        decision=decision,
+        strict_plan_id=alternative_id,
+        verdicts=verdicts,
+        elapsed_ms=elapsed_ms,
+    )
+    return _Computed(chosen.plan.plan_hash, content, alternative)
 
 
 def _is_current(latest: PlanVersion, digest: str, *, draft: bool) -> bool:
@@ -210,7 +280,7 @@ async def generate_plan(
         PlanInputError: When the trip lacks dates, a city or people.
     """
     draft = assumptions is not None
-    planning, names, trip_alpha = await _gather(session, membership, assumptions)
+    planning, names, trip_alpha = await gather_input(session, membership, assumptions)
     alpha = trip_alpha if data is None or data.alpha is None else data.alpha
     preset = (data or PlanCreate()).weight_preset
     digest = input_hash(planning, alpha, preset.value, DEFAULT_PARAMS)
@@ -220,10 +290,10 @@ async def generate_plan(
         return await _read(session, membership, latest), False
     await session.rollback()  # do not hold a transaction while computing
 
-    group = await anyio.to_thread.run_sync(
-        partial(plan_group, planning, DEFAULT_PARAMS, alpha=alpha)
+    alternative_id = uuid.uuid4()
+    computed = await anyio.to_thread.run_sync(
+        partial(_compute, planning, alpha, names, alternative_id)
     )
-    result = build_content(planning, group, names)
 
     await db.lock_trip_plans(session, membership.trip_id)
     latest = await db.select_latest(session, membership.trip_id)
@@ -233,7 +303,7 @@ async def generate_plan(
         trip_id=membership.trip_id,
         version=(latest.version if latest else 0) + 1,
         input_hash=digest,
-        plan_hash=group.plan.plan_hash,
+        plan_hash=computed.plan_hash,
         params={
             "alpha": alpha,
             "weight_preset": preset.value,
@@ -241,10 +311,25 @@ async def generate_plan(
             "algorithm_version": ALGORITHM_VERSION,
             "algorithm": asdict(DEFAULT_PARAMS),
         },
-        result=result,
+        result=computed.result,
         created_by_sub=membership.sub,
     )
     session.add(row)
+    if computed.alternative is not None:
+        await session.flush()
+        session.add(
+            PlanVersion(
+                id=alternative_id,
+                trip_id=membership.trip_id,
+                version=row.version,
+                input_hash=digest,
+                plan_hash=computed.alternative.plan_hash,
+                params=row.params,
+                result=computed.alternative.result,
+                created_by_sub=membership.sub,
+                alternative_of=row.id,
+            )
+        )
     await session.commit()
     await session.refresh(row)
     return await _read(session, membership, row), True
@@ -324,7 +409,7 @@ async def measure_impacts(
     Raises:
         PlanInputError: The trip cannot be planned (no city, unknown city).
     """
-    planning, _names, alpha = await _gather(session, membership, assumptions)
+    planning, _names, alpha = await gather_input(session, membership, assumptions)
     await session.rollback()  # do not hold a transaction while computing
     key = (input_hash(planning, alpha, "impact", DEFAULT_PARAMS), targets)
     if (cached := impact_cache.get(key)) is not None:

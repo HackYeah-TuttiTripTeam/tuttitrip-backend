@@ -16,8 +16,8 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCall
 from pydantic_ai.models.function import AgentInfo
 from sqlalchemy import select
 
-from tests.domains.test_plan_service_integration import _seed, _unseed
 from tests.fixtures.city import CITY_SLUG
+from tests.shared.db_seed import seed_city, unseed_city
 from tests.shared.fakes import authorize
 from tests.shared.interview_world import model_of
 from tests.shared.paths import path
@@ -47,11 +47,11 @@ def client() -> Iterator[TestClient]:
     app = create_app()
     authorize(app, HOST)
     with TestClient(app) as test_client:
-        _run(test_client, _seed)
+        _run(test_client, seed_city)
         try:
             yield test_client
         finally:
-            _run(test_client, _unseed)
+            _run(test_client, unseed_city)
 
 
 def _run[T](client: TestClient, work: Callable[[], Awaitable[T]]) -> T:

@@ -8,8 +8,9 @@ domain replaces the Jain index in the UI (section 4).
 """
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 from uuid import UUID
 
 from tuttitrip.planning.fairness.logic.measure import jain, min_r
@@ -73,6 +74,8 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
     lodging: LodgingStay | None = None,
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
     max_evaluations: int | None = None,
+    cost_cap: Decimal | None = None,
+    u_star: Mapping[UUID, float] | None = None,
 ) -> GroupPlan:
     """Solo runs, floors, the group plan and the fairness measures.
 
@@ -84,6 +87,10 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         lodging_outcomes: The trip's lodging requirements checked against it.
         max_evaluations: Work limit of every run (solo and group); default
             scales with the instance.
+        cost_cap: Hard cost limit of the group plan; default ``B_max``.
+        u_star: ``u*`` per person to reuse (the solo runs are then skipped); the
+            budget consent (E6) compares three group plans against the same
+            reference points.
 
     Returns:
         The plan, a ledger row per person (id order), ``min r`` and Jain's index.
@@ -91,8 +98,9 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
     people = sorted(data.people, key=lambda p: str(p.id))
     alone = len(people) == 1
     started = time.perf_counter()
-    u_star: dict[UUID, float] = {}
-    if not alone:
+    reference: dict[UUID, float] = dict(u_star or {})
+    ran_solo = not alone and u_star is None
+    if ran_solo:
         for person in people:
             run = solo_utility(
                 data,
@@ -103,10 +111,10 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
                 lodging_outcomes=lodging_outcomes,
                 max_evaluations=max_evaluations,
             )
-            u_star[person.id] = run.scores[0].welfare
+            reference[person.id] = run.scores[0].welfare
     solo_ms = int((time.perf_counter() - started) * 1000)
     floors = {
-        p.id: 0.0 if alone else effective_floor(p.floor, u_star[p.id], params)
+        p.id: 0.0 if alone else effective_floor(p.floor, reference[p.id], params)
         for p in people
     }
     plan = solve(
@@ -116,17 +124,20 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         lodging=lodging,
         lodging_outcomes=lodging_outcomes,
         floors=floors,
+        cost_cap=cost_cap,
         max_evaluations=max_evaluations,
     )
     by_person = {s.person_id: s for s in plan.scores}
     rows = tuple(
         PersonReference(
             person_id=p.id,
-            u_star=by_person[p.id].welfare if alone else u_star[p.id],
+            u_star=by_person[p.id].welfare if alone else reference[p.id],
             u=by_person[p.id].welfare,
             r=1.0
             if alone
-            else relative_satisfaction(by_person[p.id].welfare, u_star[p.id], params),
+            else relative_satisfaction(
+                by_person[p.id].welfare, reference[p.id], params
+            ),
             floor=p.floor,
             floor_eff=floors[p.id],
             floor_met=by_person[p.id].welfare >= floors[p.id] - _FLOOR_TOLERANCE,
@@ -140,6 +151,6 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         people=rows,
         jain=jain(r),
         min_r=min_r(r),
-        solo_runs=0 if alone else len(people),
+        solo_runs=len(people) if ran_solo else 0,
         solo_elapsed_ms=solo_ms,
     )

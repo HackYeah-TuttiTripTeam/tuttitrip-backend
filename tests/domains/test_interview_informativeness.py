@@ -304,7 +304,7 @@ def test_the_service_caches_a_measurement_of_the_same_data(
 ) -> None:
     data = planning_input(reference(), lodging=False)
     gather = AsyncMock(return_value=(data, {}, 1.0))
-    monkeypatch.setattr(plan_service, "_gather", gather)
+    monkeypatch.setattr(plan_service, "gather_input", gather)
     solved = MagicMock()
     plan_service.impact_cache.clear()
     targets = (budget(),)
@@ -333,7 +333,7 @@ def test_the_service_does_not_cache_a_timeout(
 ) -> None:
     data = planning_input(reference(), lodging=False)
     monkeypatch.setattr(
-        plan_service, "_gather", AsyncMock(return_value=(data, {}, 1.0))
+        plan_service, "gather_input", AsyncMock(return_value=(data, {}, 1.0))
     )
     calls: list[int] = []
 

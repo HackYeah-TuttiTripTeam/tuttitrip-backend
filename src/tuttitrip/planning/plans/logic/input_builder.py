@@ -29,7 +29,7 @@ from tuttitrip.planning.schemas import (
     PlanningTrip,
     Vote,
 )
-from tuttitrip.profiles.feedback.schemas import RatingValue, TripFeedback
+from tuttitrip.profiles.feedback.schemas import RatingValue, ReasonCode, TripFeedback
 from tuttitrip.profiles.preferences.schemas import PreferencesRead
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.trips.schemas import TripRead
@@ -71,6 +71,8 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
     preferences: Sequence[PreferencesRead],
     feedback: TripFeedback,
     places: Sequence[PlaceRead],
+    must: frozenset[UUID] = frozenset(),
+    blocked: frozenset[UUID] = frozenset(),
 ) -> PlanningInput:
     """Assemble ``PlanningInput`` from the trip, its people and the catalog.
 
@@ -81,6 +83,8 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
         preferences: Their preferences (one per profile).
         feedback: Ratings and active vetoes.
         places: The city's places.
+        must: Places the host forces into the plan (E0).
+        blocked: Places the host blocked (E0).
 
     Returns:
         The input of the algorithm.
@@ -96,8 +100,13 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
         raise PlanInputError(msg)
     by_profile = {p.profile_id: p for p in preferences}
     votes: dict[UUID, dict[UUID, Vote]] = {}
+    reasons: dict[UUID, dict[UUID, ReasonCode]] = {}
     for rating in feedback.ratings:
         votes.setdefault(rating.profile_id, {})[rating.place_id] = _VOTES[rating.value]
+        if rating.reason_code is not None:
+            reasons.setdefault(rating.profile_id, {})[rating.place_id] = (
+                rating.reason_code
+            )
     vetoes: dict[UUID, set[UUID]] = {}
     for veto in feedback.vetoes:
         vetoes.setdefault(veto.profile_id, set()).add(veto.place_id)
@@ -123,6 +132,7 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
                 nap_minutes=profile.nap_minutes,
                 floor=profile.floor,
                 votes=votes.get(profile.id, {}),
+                vote_reasons=reasons.get(profile.id, {}),
                 vetoes=frozenset(vetoes.get(profile.id, set())),
                 min_tags=tuple(prefs.min_tags),
             )
@@ -142,7 +152,8 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
         ),
         people=tuple(people),
         places=tuple(sorted(places, key=lambda p: str(p.id))),
-        # ponytail: "must" and host blocks come with the overrides of #51 and #52
+        must=must,
+        blocked=blocked,
     )
 
 

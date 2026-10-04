@@ -32,7 +32,7 @@ async def select_latest(session: AsyncSession, trip_id: UUID) -> PlanVersion | N
     """
     stmt = (
         select(PlanVersion)
-        .where(PlanVersion.trip_id == trip_id)
+        .where(PlanVersion.trip_id == trip_id, PlanVersion.alternative_of.is_(None))
         .order_by(PlanVersion.version.desc())
         .limit(1)
     )

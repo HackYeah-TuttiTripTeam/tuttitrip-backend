@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,7 +22,15 @@ class PlanVersion(Base):
 
     __tablename__ = "plan_versions"
     __table_args__ = (
-        UniqueConstraint("trip_id", "version", name="uq_plan_versions_trip_version"),
+        # An alternative (P_strict of E6) shares the version of the plan it
+        # replaces, so only the main rows are unique per trip and version.
+        Index(
+            "uq_plan_versions_trip_version",
+            "trip_id",
+            "version",
+            unique=True,
+            postgresql_where=text("alternative_of IS NULL"),
+        ),
         Index("ix_plan_versions_trip_input_hash", "trip_id", "input_hash"),
     )
 
@@ -37,3 +45,6 @@ class PlanVersion(Base):
     result: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_by_sub: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    alternative_of: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("plan_versions.id", ondelete="CASCADE")
+    )
