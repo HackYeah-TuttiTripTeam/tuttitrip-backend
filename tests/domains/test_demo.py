@@ -336,7 +336,8 @@ def test_the_reset_replaces_the_accounts_own_trips_with_the_sample_set(
     people = sum(len(t.people) for t in DEMO_TRIPS)
     assert fakes.preferences.replace_preferences.await_count == people
     assert fakes.profiles.create_profile.await_count == people - len(DEMO_TRIPS)
-    assert fakes.profiles.set_weights.await_count == 1
+    weighted = sum(1 for t in DEMO_TRIPS if t.weights is not None)
+    assert fakes.profiles.set_weights.await_count == weighted == 2
     owners = {call.args[1] for call in fakes.trips.create_trip.await_args_list}
     assert owners == {"auth0|demo"}
 
