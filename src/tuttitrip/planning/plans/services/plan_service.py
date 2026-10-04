@@ -193,11 +193,11 @@ async def gather_input(
         places=places,
         must=frozenset(o.place_id for o in active if o.kind == "must"),
         blocked=frozenset(o.place_id for o in active if o.kind == "block"),
-        fares=await place_service.list_fares(session, trip.city_slug),
+        fares=await place_service.list_fares(session, slug),
         lodgings=lodging_options(
             places,
             required.requirements,
-            trip.currency or cities[trip.city_slug].currency,
+            trip.currency or cities[slug].currency,
         ),
     )
     names = {p.id: p.display_name for p in profiles}
