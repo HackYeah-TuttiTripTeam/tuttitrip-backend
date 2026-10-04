@@ -9,6 +9,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
+from tuttitrip.shared.jobs.schemas import JobAccepted
 from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 
 Money = Annotated[Decimal, Field(max_digits=12, decimal_places=2)]
@@ -28,6 +29,14 @@ class SplitMethod(StrEnum):
     EQUAL = "equal"
     PERCENT = "percent"
     WEIGHTS = "weights"
+
+
+@unique
+class ExpenseStatus(StrEnum):
+    """Whether an expense counts: a draft (read by the model) is not settled yet."""
+
+    DRAFT = "draft"
+    CONFIRMED = "confirmed"
 
 
 @unique
@@ -210,6 +219,12 @@ class ExpenseRead(BaseModel):
     description: str
     spent_on: date
     category: ExpenseCategory | None
+    status: ExpenseStatus = Field(
+        description="`draft` (read from a receipt) is left out of the settlement."
+    )
+    has_evidence: bool = Field(
+        description="A receipt image is stored (until the draft is confirmed)."
+    )
     split_method: SplitMethod
     participants: list[ParticipantRead] = Field(
         description="Their parts are in the trip's currency."
@@ -235,6 +250,9 @@ class ExpenseFilters(ListFilters):
     )
     date_to: date | None = Field(default=None, description="Up to this day, inclusive.")
     payer_profile_id: UUID | None = None
+    status: ExpenseStatus | None = Field(
+        default=None, description="Only drafts or only confirmed expenses."
+    )
     participant_profile_id: UUID | None = Field(
         default=None, description="Expenses this person takes part in."
     )
@@ -294,3 +312,45 @@ class ExpenseDraftState(BaseModel):
 
     status: Literal["pending", "ready", "failed"]
     draft: ExpenseDraft | None
+
+
+@unique
+class ReceiptErrorCode(StrEnum):
+    """Stable code of a refused upload, sent as the 422 item's ``type``."""
+
+    EMPTY = "receipt.empty"
+    TOO_LARGE = "receipt.too_large"
+    TYPE_NOT_ALLOWED = "receipt.type_not_allowed"
+
+
+class ReceiptValidationError(BaseModel):
+    """One 422 item of a refused upload."""
+
+    type: ReceiptErrorCode
+    loc: list[str] = Field(description='`["body", "file"]`')
+    msg: str = Field(description="For people; may change, do not parse it.")
+
+
+class ReceiptValidationErrors(BaseModel):
+    """The 422 body of ``POST .../expenses/receipts``."""
+
+    detail: list[ReceiptValidationError]
+
+
+class ReceiptAccepted(JobAccepted):
+    """A receipt was stored and its reading enqueued."""
+
+    evidence_id: UUID = Field(description="Poll `GET .../receipts/{evidence_id}`.")
+
+
+class ReceiptState(BaseModel):
+    """Progress of reading a receipt; the draft appears once `status` is `ready`."""
+
+    status: Literal["pending", "ready", "failed"]
+    expense: ExpenseRead | None = Field(
+        description="The `draft` expense to confirm, with the image still stored."
+    )
+    needs_confirmation: bool | None = Field(
+        description="The reader was unsure (only while there is a draft)."
+    )
+    reasons: list[str] = Field(description="Why the reader was unsure.")

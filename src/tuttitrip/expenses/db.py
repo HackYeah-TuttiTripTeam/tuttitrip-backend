@@ -2,11 +2,16 @@
 
 from uuid import UUID
 
-from sqlalchemy import Select, exists, select
+from sqlalchemy import Select, delete, exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tuttitrip.expenses.models import Expense, ExpenseShare
-from tuttitrip.expenses.schemas import ExpenseFilters, ExpenseQuery, ExpenseSort
+from tuttitrip.expenses.models import Expense, ExpenseEvidence, ExpenseShare
+from tuttitrip.expenses.schemas import (
+    ExpenseFilters,
+    ExpenseQuery,
+    ExpenseSort,
+    ExpenseStatus,
+)
 from tuttitrip.shared.db.pagination import Column, ordering, paginate
 from tuttitrip.shared.pagination.schemas import Page
 
@@ -45,6 +50,8 @@ def apply_filters(stmt: Select[Expense], filters: ExpenseFilters) -> Select[Expe
         stmt = stmt.where(Expense.spent_on <= filters.date_to)
     if filters.payer_profile_id is not None:
         stmt = stmt.where(Expense.payer_profile_id == filters.payer_profile_id)
+    if filters.status is not None:
+        stmt = stmt.where(Expense.status == filters.status)
     if filters.category is not None:
         stmt = stmt.where(Expense.category == filters.category)
     if filters.participant_profile_id is not None:
@@ -158,7 +165,7 @@ async def profile_has_expenses(
 
 
 async def select_all(session: AsyncSession, trip_id: UUID) -> list[Expense]:
-    """All expenses of a trip, for settlement (a computation, not a list).
+    """All confirmed expenses of a trip, for settlement (not a list).
 
     Args:
         session: Open session.
@@ -167,5 +174,71 @@ async def select_all(session: AsyncSession, trip_id: UUID) -> list[Expense]:
     Returns:
         The expenses with shares, in a stable order.
     """
-    result = await session.scalars(scoped(trip_id).order_by(Expense.id))
+    result = await session.scalars(
+        scoped(trip_id)
+        .where(Expense.status == ExpenseStatus.CONFIRMED)
+        .order_by(Expense.id)
+    )
     return list(result)
+
+
+async def insert_evidence(session: AsyncSession, evidence: ExpenseEvidence) -> None:
+    """Store a receipt image and flush.
+
+    Args:
+        session: Open session (caller commits).
+        evidence: The image row.
+    """
+    session.add(evidence)
+    await session.flush()
+
+
+async def select_evidence(
+    session: AsyncSession, trip_id: UUID, evidence_id: UUID
+) -> ExpenseEvidence | None:
+    """Find a receipt image of a trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        evidence_id: Evidence id.
+
+    Returns:
+        The row, or None when it is not on this trip (or already deleted).
+    """
+    return await session.scalar(
+        select(ExpenseEvidence).where(
+            ExpenseEvidence.id == evidence_id, ExpenseEvidence.trip_id == trip_id
+        )
+    )
+
+
+async def select_by_evidence(
+    session: AsyncSession, trip_id: UUID, evidence_id: UUID
+) -> Expense | None:
+    """The draft expense read from a receipt, if it was created.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        evidence_id: Evidence id.
+
+    Returns:
+        The expense, or None.
+    """
+    return await session.scalar(
+        scoped(trip_id).where(Expense.evidence_id == evidence_id)
+    )
+
+
+async def delete_evidence(session: AsyncSession, evidence_id: UUID) -> None:
+    """Delete a receipt image (a draft keeps no link) and flush.
+
+    Args:
+        session: Open session (caller commits).
+        evidence_id: Evidence id.
+    """
+    await session.execute(
+        delete(ExpenseEvidence).where(ExpenseEvidence.id == evidence_id)
+    )
+    await session.flush()

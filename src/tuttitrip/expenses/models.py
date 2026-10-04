@@ -8,17 +8,21 @@ from sqlalchemy import (
     CheckConstraint,
     ForeignKey,
     Index,
+    Integer,
+    LargeBinary,
     Numeric,
     String,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from tuttitrip.expenses.schemas import ExpenseCategory, SplitMethod
+from tuttitrip.expenses.schemas import ExpenseCategory, ExpenseStatus, SplitMethod
 from tuttitrip.shared.db.base import Base
 
 
-def _in(column: str, values: type[SplitMethod | ExpenseCategory]) -> str:
+def _in(
+    column: str, values: type[SplitMethod | ExpenseCategory | ExpenseStatus]
+) -> str:
     return f"{column} IN ({', '.join(f"'{v.value}'" for v in values)})"
 
 
@@ -31,6 +35,7 @@ class Expense(Base):
         CheckConstraint("trip_amount > 0", name="trip_amount_positive"),
         CheckConstraint("rate_source IN ('nbp', 'manual')", name="rate_source"),
         CheckConstraint(_in("split_method", SplitMethod), name="split_method"),
+        CheckConstraint(_in("status", ExpenseStatus), name="status"),
         CheckConstraint(
             _in("category", ExpenseCategory),
             name="category",
@@ -65,6 +70,13 @@ class Expense(Base):
     split_method: Mapped[SplitMethod] = mapped_column(String(16))
     created_by_sub: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    status: Mapped[ExpenseStatus] = mapped_column(
+        String(10), default=ExpenseStatus.CONFIRMED, server_default="confirmed"
+    )
+    # The receipt this draft was read from; the image is deleted on confirm.
+    evidence_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("expense_evidence.id", ondelete="SET NULL"), unique=True
+    )
 
     shares: Mapped[list[ExpenseShare]] = relationship(
         lazy="selectin",
@@ -89,3 +101,21 @@ class ExpenseShare(Base):
     )
     # Empty for `equal`, percent for `percent`, weight for `weights`.
     value: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
+
+
+class ExpenseEvidence(Base):
+    """A receipt image or bank screenshot; the worker reads it, then it is deleted."""
+
+    __tablename__ = "expense_evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    trip_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("trips.id", ondelete="CASCADE"), index=True
+    )
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    media_type: Mapped[str] = mapped_column(String(20))
+    size: Mapped[int] = mapped_column(Integer)
+    created_by_sub: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # Unconfirmed images are removed after this time (a periodic cleanup).
+    delete_after: Mapped[datetime]

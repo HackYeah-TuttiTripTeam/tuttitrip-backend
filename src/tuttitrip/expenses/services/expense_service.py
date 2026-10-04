@@ -24,6 +24,7 @@ from tuttitrip.expenses.schemas import (
     ExpenseErrorCode,
     ExpenseQuery,
     ExpenseRead,
+    ExpenseStatus,
     ExpenseUpdate,
     ParticipantRead,
     ShareInput,
@@ -42,6 +43,10 @@ class ExpenseNotFoundError(Exception):
 
 class ExpenseForbiddenError(Exception):
     """Only the author, a co-host or the host may change or delete an expense."""
+
+
+class ExpenseNotDraftError(Exception):
+    """Only a draft can be confirmed."""
 
 
 class ExpenseInvalidError(Exception):
@@ -100,6 +105,8 @@ def _read(expense: Expense) -> ExpenseRead:
         description=expense.description,
         spent_on=expense.spent_on,
         category=expense.category,
+        status=expense.status,
+        has_evidence=expense.evidence_id is not None,
         split_method=expense.split_method,
         participants=participants,
         created_by_sub=expense.created_by_sub,
@@ -314,14 +321,67 @@ async def update_expense(
 
     Returns:
         The changed expense.
+    """
+    return await _update(session, membership, expense_id, data, confirm=False)
+
+
+async def confirm_expense(
+    session: AsyncSession,
+    membership: TripMembership,
+    expense_id: UUID,
+    data: ExpenseUpdate,
+) -> ExpenseRead:
+    """Confirm a draft read from a receipt, with the person's corrections.
+
+    The expense is priced again, becomes ``confirmed`` (enters the settlement)
+    and its receipt image is deleted.
+
+    Args:
+        session: Open session.
+        membership: The caller's checked membership of the trip.
+        expense_id: The draft.
+        data: Corrected fields (may be empty).
+
+    Returns:
+        The confirmed expense.
+
+    Raises:
+        ExpenseNotDraftError: The expense is already confirmed.
+    """
+    return await _update(session, membership, expense_id, data, confirm=True)
+
+
+async def _update(
+    session: AsyncSession,
+    membership: TripMembership,
+    expense_id: UUID,
+    data: ExpenseUpdate,
+    *,
+    confirm: bool,
+) -> ExpenseRead:
+    """Apply an update; with ``confirm`` also reprice, confirm and drop the image.
+
+    Args:
+        session: Open session.
+        membership: The caller's checked membership of the trip.
+        expense_id: Expense to change.
+        data: Only the fields that change.
+        confirm: Also confirm the draft and delete its image.
+
+    Returns:
+        The changed expense.
 
     Raises:
         ExpenseNotFoundError: The expense is not on this trip.
         ExpenseForbiddenError: The caller is not the author nor a co-host.
+        ExpenseNotDraftError: ``confirm`` on an expense that is not a draft.
         ExpenseInvalidError: The merged expense breaks a rule.
     """
     expense = await _get(session, membership, expense_id)
     _require_author_or_host(membership, expense)
+    if confirm and expense.status != ExpenseStatus.DRAFT:
+        msg = "Only a draft can be confirmed"
+        raise ExpenseNotDraftError(msg)
     await settlement_service.ensure_open(session, membership.trip_id)
     changes = data.model_dump(
         exclude_unset=True, exclude={"participants", "manual_rate"}
@@ -349,11 +409,16 @@ async def update_expense(
     )
     currency, trip_currency = await _check(session, membership, merged)
     # A description-only edit never reprices (the trip's currency may have changed).
-    if data.manual_rate is not None or changes.keys() & {
-        "amount",
-        "currency",
-        "spent_on",
-    }:
+    if (
+        confirm
+        or data.manual_rate is not None
+        or changes.keys()
+        & {
+            "amount",
+            "currency",
+            "spent_on",
+        }
+    ):
         pricing = await price(
             amount=merged.amount,
             currency=currency,
@@ -371,8 +436,85 @@ async def update_expense(
         setattr(expense, field, value)
     if data.participants is not None:
         await db.replace_shares(session, expense, _rows(participants))
+    if confirm:
+        expense.status = ExpenseStatus.CONFIRMED
+        evidence_id, expense.evidence_id = expense.evidence_id, None
+        await session.flush()
+        if evidence_id is not None:
+            await db.delete_evidence(session, evidence_id)
     await session.commit()
     await session.refresh(expense)
+    return _read(expense)
+
+
+async def create_draft(
+    session: AsyncSession,
+    membership: TripMembership,
+    data: ExpenseCreate,
+    evidence_id: UUID,
+) -> ExpenseRead:
+    """Store an expense read from a receipt as a draft (no settlement effect).
+
+    A rate that cannot be fetched now leaves the amount unconverted; confirming
+    prices it again.
+
+    Args:
+        session: Open session.
+        membership: The caller's checked membership of the trip.
+        data: The fields read.
+        evidence_id: The stored image it comes from.
+
+    Returns:
+        The draft.
+
+    Raises:
+        ExpenseInvalidError: The fields break a rule.
+    """
+    currency, trip_currency = await _check(session, membership, data)
+    try:
+        pricing = await price(
+            amount=data.amount,
+            currency=currency,
+            trip_currency=trip_currency,
+            spent_on=data.spent_on,
+            manual_rate=None,
+        )
+    except ExpenseInvalidError:
+        pricing = Pricing(data.amount)
+    expense = Expense(
+        trip_id=membership.trip_id,
+        payer_profile_id=data.payer_profile_id,
+        amount=data.amount,
+        currency=currency,
+        trip_amount=pricing.trip_amount,
+        rate=pricing.rate,
+        rate_source=pricing.source,
+        rate_table=pricing.table,
+        rate_date=pricing.rate_date,
+        description=data.description,
+        spent_on=data.spent_on,
+        category=data.category,
+        split_method=data.split_method,
+        created_by_sub=membership.sub,
+        status=ExpenseStatus.DRAFT,
+        evidence_id=evidence_id,
+    )
+    expense.shares = _rows(data.participants)
+    await db.insert_expense(session, expense)
+    await session.commit()
+    await session.refresh(expense)
+    return _read(expense)
+
+
+def read(expense: Expense) -> ExpenseRead:
+    """Public view of one stored expense.
+
+    Args:
+        expense: A stored expense with its shares.
+
+    Returns:
+        The API shape.
+    """
     return _read(expense)
 
 
@@ -393,7 +535,10 @@ async def delete_expense(
     expense = await _get(session, membership, expense_id)
     _require_author_or_host(membership, expense)
     await settlement_service.ensure_open(session, membership.trip_id)
+    evidence_id = expense.evidence_id
     await db.delete_expense(session, expense)
+    if evidence_id is not None:
+        await db.delete_evidence(session, evidence_id)
     await session.commit()
 
 

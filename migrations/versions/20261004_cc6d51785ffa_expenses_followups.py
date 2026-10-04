@@ -102,6 +102,59 @@ def upgrade() -> None:
         ["trip_id", "paid_on"],
         unique=False,
     )
+
+    # --- #87: receipt images and draft expenses --------------------------------
+    op.create_table(
+        "expense_evidence",
+        sa.Column("id", sa.Uuid(), nullable=False),
+        sa.Column("trip_id", sa.Uuid(), nullable=False),
+        sa.Column("data", sa.LargeBinary(), nullable=False),
+        sa.Column("media_type", sa.String(length=20), nullable=False),
+        sa.Column("size", sa.Integer(), nullable=False),
+        sa.Column("created_by_sub", sa.String(length=255), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column("delete_after", sa.DateTime(timezone=True), nullable=False),
+        sa.ForeignKeyConstraint(
+            ["trip_id"],
+            ["trips.id"],
+            name=op.f("fk_expense_evidence_trip_id_trips"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_expense_evidence")),
+    )
+    op.create_index(
+        op.f("ix_expense_evidence_trip_id"), "expense_evidence", ["trip_id"]
+    )
+    op.add_column(
+        "expenses",
+        sa.Column(
+            "status",
+            sa.String(length=10),
+            server_default="confirmed",
+            nullable=False,
+        ),
+    )
+    op.add_column("expenses", sa.Column("evidence_id", sa.Uuid(), nullable=True))
+    op.create_unique_constraint(
+        op.f("uq_expenses_evidence_id"), "expenses", ["evidence_id"]
+    )
+    op.create_foreign_key(
+        op.f("fk_expenses_evidence_id_expense_evidence"),
+        "expenses",
+        "expense_evidence",
+        ["evidence_id"],
+        ["id"],
+        ondelete="SET NULL",
+    )
+    op.create_check_constraint(
+        op.f("ck_expenses_status"), "expenses", "status IN ('draft', 'confirmed')"
+    )
+
     op.create_table(
         "trip_settlements",
         sa.Column("trip_id", sa.Uuid(), nullable=False),
@@ -125,6 +178,15 @@ def upgrade() -> None:
 def downgrade() -> None:
     """Revert this revision."""
     op.drop_table("trip_settlements")
+    op.drop_constraint(op.f("ck_expenses_status"), "expenses", type_="check")
+    op.drop_constraint(
+        op.f("fk_expenses_evidence_id_expense_evidence"), "expenses", type_="foreignkey"
+    )
+    op.drop_constraint(op.f("uq_expenses_evidence_id"), "expenses", type_="unique")
+    op.drop_column("expenses", "evidence_id")
+    op.drop_column("expenses", "status")
+    op.drop_index(op.f("ix_expense_evidence_trip_id"), "expense_evidence")
+    op.drop_table("expense_evidence")
     op.drop_index("ix_settlement_payments_trip_id_paid_on", "settlement_payments")
     op.drop_index(op.f("ix_settlement_payments_trip_id"), "settlement_payments")
     op.drop_table("settlement_payments")
