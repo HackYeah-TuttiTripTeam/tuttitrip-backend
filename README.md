@@ -167,6 +167,72 @@ Dalej ścieżki podajemy bez prefiksu `/api/v1`.
 Szczegóły (dodawanie funkcjonalności, ochrona endpointu, role) są w
 [AGENTS.md](AGENTS.md#uprawnienia).
 
+## Serwer MCP
+
+Backend wystawia serwer MCP (Streamable HTTP, tryb bezstanowy, odpowiedzi JSON)
+pod `/api/v1/mcp`, żeby użytkownik mógł podłączyć swoje dane do Claude,
+ChatGPT albo innego klienta MCP. Kod jest w domenie `src/tuttitrip/mcp/`
+(FastMCP, `fastmcp-slim[server]`), montaż w `create_app()` tylko przy
+`TUTTITRIP_MCP__ENABLED=true` (deploy włącza go w każdym środowisku).
+
+- Token to token dostępowy Auth0 z audience równym adresowi serwera
+  (`TUTTITRIP_MCP__RESOURCE_URL`, np. `https://tuttitrip-api.gburek.app/api/v1/mcp`),
+  czyli innym niż audience API aplikacji. Token z audience API aplikacji daje 401.
+  Podpis, wystawca i ważność sprawdza ten sam `TokenVerifier` co w REST.
+- Metadane zasobu (RFC 9728) są pod `/.well-known/oauth-protected-resource/api/v1/mcp`
+  na poziomie głównym domeny; 401 niesie `WWW-Authenticate` z `resource_metadata`.
+- Uprawnienia: każde narzędzie ma dokładnie jeden `mcp_requires(Feature.X, Access.Y)`,
+  który wymaga `mcp:READ` i `X:Y`. Narzędzie bez zgody znika z `tools/list`.
+  Dostęp do konkretnego wyjazdu dalej zależy od roli na nim.
+- Narzędzia: `whoami`, `list_trips` (stronicowane), `get_trip`.
+
+### Konfiguracja Auth0 pod MCP (chore #102)
+
+Tenant `dev-yahwm2zlut2gqdry.us.auth0.com` konfiguruje właściciel tenantu w
+panelu (agent i kod tego nie zmieniają). Bez tego Claude i ChatGPT zatrzymają
+się na logowaniu. Kroki, kolejno:
+
+1. **API (Resource Servers)**, po jednym na środowisko, podpis RS256.
+   Identyfikator musi być znak w znak równy `TUTTITRIP_MCP__RESOURCE_URL`
+   (bez ukośnika na końcu):
+   - `https://tuttitrip-api.gburek.app/api/v1/mcp` (main),
+   - `https://tuttitrip-api-develop.gburek.app/api/v1/mcp` (develop).
+
+   ```bash
+   auth0 apis create --name "TuttiTrip MCP" \
+     --identifier https://tuttitrip-api.gburek.app/api/v1/mcp --signing-alg RS256
+   auth0 apis create --name "TuttiTrip MCP (develop)" \
+     --identifier https://tuttitrip-api-develop.gburek.app/api/v1/mcp --signing-alg RS256
+   ```
+2. **Settings > Advanced > Settings** (włączniki):
+   - „Resource Parameter Compatibility Profile”: Auth0 bierze `resource`, gdy
+     nie ma `audience` (przy obu wygrywa `audience`),
+   - „Include Issuer in Authorization Responses”: parametr `iss` w odpowiedzi
+     autoryzacji (obrona przed mix-up),
+   - „Client ID Metadata Document Registration” (CIMD): klienci rejestrują się
+     adresem URL metadanych, jako aplikacje third-party w trybie `strict`.
+3. **Dynamic Client Registration** dla klientów bez CIMD:
+   `auth0 api patch tenants/settings --data '{"flags":{"enable_dynamic_client_registration":true}}'`.
+   To otwarta rejestracja (każdy może założyć aplikację bez tokenu); ryzyko
+   i środki zaradcze: „Securing an Open DCR Endpoint” w dokumentacji Auth0.
+4. **Połączenia na poziomie domeny**: Google (`google-oauth2`), Discord i baza
+   haseł (strategia `auth0`) przenieś na poziom domeny („Promote connection to
+   domain level”), bo aplikacje CIMD i DCR są third-party i widzą tylko takie:
+   `auth0 api get connections` (skopiuj `id`), potem dla każdego
+   `auth0 api patch connections/<id> --data '{"is_domain_connection":true}'`.
+5. **Akcja „TuttiTrip superadmins”** nie wymaga zmian: odrzuca tylko aplikację
+   bramki admina (`ADMIN_GATE_CLIENT_IDS`), a claim `.../roles` dodaje każdemu
+   tokenowi dostępowemu osoby z listy superadminów, także dla klienta MCP.
+   Konto spoza listy nie dostaje claimu `admin`.
+
+Weryfikacja: `/.well-known/openid-configuration` tenantu ma `registration_endpoint`
+i znacznik obsługi CIMD (`client_id_metadata_document_supported`, nazwę pola
+potwierdzić w odpowiedzi tenantu); MCP Inspector z logowaniem Google daje token
+z `aud` równym adresowi MCP danego środowiska.
+
+Gałęzie podglądu mają serwer MCP (odpowiada 401 i wystawia metadane), ale nie
+mają API w Auth0, więc nikt nie zdobędzie dla nich tokenu.
+
 ## Architektura
 
 Kod jest podzielony na pionowe moduły domenowe (vertical slices). Każda domena

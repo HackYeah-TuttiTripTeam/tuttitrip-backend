@@ -12,6 +12,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "dbos>=3.2.0",
     "fastapi>=0.142.2",
+    "fastmcp-slim[server]>=4.0.10",
     "pgvector>=0.5.0",
     "pydantic>=2.13.5",
     "pydantic-ai>=2.54.0",

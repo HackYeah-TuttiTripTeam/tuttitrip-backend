@@ -61,6 +61,7 @@ src/tuttitrip/
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
+  mcp/                 MCP server at /api/v1/mcp (FastMCP); tools call other domains' services
   places/              city and place catalog; prices and hours carry source + verified mark
 contracts/             jobs.schema.json: rendered job contract (compared with the worker)
 migrations/            Alembic (async); versions/ holds revisions
@@ -122,13 +123,20 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   `/api/v1/openapi.json`, `/api/v1/docs` and `/api/v1/redoc`. Routers in
   `api.py` keep their own short prefix (`/trips`); `create_app()` adds the
   version once. `tests/architecture/test_routes.py` fails on any route outside
-  it (allow-list `ALLOWED_UNVERSIONED`, empty on purpose).
+  it (allow-list `ALLOWED_UNVERSIONED`: only the MCP resource metadata).
 - Route-level tests iterate `fastapi.routing.iter_route_contexts(app.routes)`:
   FastAPI 0.142 includes routers lazily, so `app.routes` alone does not list them.
 - The deployed frontends call the API same-origin through their Worker proxy
   (`https://tuttitrip[-develop].gburek.app/api/...`), so a browser never needs CORS
   there; CORS still matters for direct cross-origin use. It allows no
   credentials (the API takes bearer tokens, never cookies).
+- The one exception is the MCP server (`mcp/api.py`, `Settings.mcp.enabled`):
+  one `Mount("/api/v1", ...)` after the routers that serves only `/api/v1/mcp`,
+  plus the resource metadata `/.well-known/oauth-protected-resource/api/v1/mcp`
+  at the root (RFC 9728). `test_routes.py` allows exactly that (one mount that
+  wraps the FastMCP app with those two routes) and `test_permissions.py` lists
+  them in `MCP_ROUTES`; any other route outside the prefix or a second mount
+  fails.
 - Old unversioned paths (`/health`, `/openapi.json`, `/docs`, `/trips`...) answer 404.
 
 ## Lists
@@ -374,11 +382,23 @@ from tuttitrip.shared.permissions.registry import Access, Feature
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
   `permissions.allows(Feature.X, Access.WRITE)`.
 
+### Narzędzia MCP
+
+Serwer MCP (`mcp/api.py`) ma własne uwierzytelnianie: token Auth0 z audience
+równym `TUTTITRIP_MCP__RESOURCE_URL` (inny niż audience API; ten sam
+`TokenVerifier`, ten sam claim ról). Każde narzędzie ma dokładnie jeden
+`auth=mcp_requires(Feature.X, Access.Y)`, który wymaga `mcp:READ` i `X:Y`
+(granty liczone raz na żądanie z bazy, nigdy z tokenu); narzędzie bez zgody
+znika z `tools/list`. Test przechodzi po `create_mcp(...).local_provider` i
+pilnuje jednego `mcp_requires` na narzędzie. Dostęp do wyjazdu sprawdza
+narzędzie przez `trip_service.get_membership`. Serwera nie uruchamiamy przez
+stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
+
 ### Role
 
 | Rola | Uprawnienia | Uwagi |
 | --- | --- | --- |
-| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `planning.plans`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
+| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `planning.plans`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement`, `mcp` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
 | `superadmin` | `*:WRITE` | Tylko z claimu Auth0 `admin` (lista osób jest w Akcji Auth0). API jej nie przypisze ani nie zmieni, a wiersz w bazie jest ignorowany. Nowe funkcjonalności obejmuje automatycznie (test). |
 | własne | dowolne | `POST /admin/permissions/roles`. |
 

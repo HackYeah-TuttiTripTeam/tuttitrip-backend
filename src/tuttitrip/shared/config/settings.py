@@ -39,6 +39,29 @@ class Auth0Settings(BaseModel):
     roles_claim: str = "https://tuttitrip.gburek.app/roles"
 
 
+class McpSettings(BaseModel):
+    """The MCP server under ``/api/v1/mcp`` (Auth0 audience = its own URL)."""
+
+    enabled: bool = False
+    # Public URL of the endpoint, without a trailing slash (RFC 8707). It is the
+    # `resource` in the metadata and the Auth0 API identifier (the token
+    # audience), so it must match the Auth0 API of this environment exactly.
+    resource_url: str = "https://tuttitrip-api.gburek.app/api/v1/mcp"
+    # Host names besides the one in `resource_url` accepted in the Host header.
+    allowed_hosts: list[str] = Field(default_factory=list)
+
+    @field_validator("resource_url")
+    @classmethod
+    def _url_without_trailing_slash(cls, value: str) -> str:
+        if not value.startswith(("https://", "http://localhost")):
+            msg = "must be an https:// URL (http only for localhost)"
+            raise ValueError(msg)
+        if value.endswith("/"):
+            msg = "must not end with a slash (it is compared with the token audience)"
+            raise ValueError(msg)
+        return value
+
+
 class LlmSettings(BaseModel):
     """Model providers behind the Pydantic AI model catalog.
 
@@ -165,6 +188,7 @@ class Settings(BaseSettings):
     dbos: DbosSettings = Field(default_factory=DbosSettings)
     jobs: JobsSettings = Field(default_factory=JobsSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
+    mcp: McpSettings = Field(default_factory=McpSettings)
 
     def dbos_system_database_url(self) -> str:
         """DBOS system database URL, defaulting to the app database.
