@@ -177,9 +177,9 @@ def test_sort_by_type_is_stable_across_pages(
         keys, key=itemgetter(0), reverse=direction == "desc"
     )  # type order, whatever the tie-break
     assert [k[0] for k in keys] == [k[0] for k in by_type]
-    for kind in TYPES:  # within a type: newest first, in both directions
+    for kind in TYPES:  # within a type: by created_at in the requested direction
         stamps = [k[1] for k in keys if k[0] == kind]
-        assert stamps == sorted(stamps, reverse=True)
+        assert stamps == sorted(stamps, reverse=direction == "desc")
 
 
 def test_unread_count_counts_only_unread(client: TestClient) -> None:

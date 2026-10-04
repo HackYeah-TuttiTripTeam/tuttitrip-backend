@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Select, delete, extract, func, select, update
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +14,7 @@ from tuttitrip.notifications.schemas import (
     NotificationSort,
 )
 from tuttitrip.shared.db.pagination import ordering, paginate
-from tuttitrip.shared.pagination.schemas import Page, SortDir
+from tuttitrip.shared.pagination.schemas import Page
 
 COLUMNS = {
     NotificationSort.CREATED_AT: Notification.created_at,
@@ -68,8 +68,8 @@ async def select_page(
 ) -> Page[Notification]:
     """One page of the caller's notifications.
 
-    Sorting by type breaks ties by ``created_at`` newest first (whatever the
-    direction), then by ``id``, so pages are stable.
+    Sorting by type breaks ties by ``created_at`` and then ``id``, all in the
+    requested direction, so pages are stable.
 
     Args:
         session: Open session.
@@ -81,10 +81,7 @@ async def select_page(
     """
     order = ordering(COLUMNS, query.sort, Notification.id)
     if query.sort is NotificationSort.TYPE:
-        # `paginate` applies one direction to every key; flip the epoch so the
-        # tie-break stays "newest first" for both directions.
-        epoch = extract("epoch", Notification.created_at)
-        order = (order[0], epoch if query.dir is SortDir.DESC else -epoch, order[-1])
+        order = (order[0], Notification.created_at, order[-1])
     return await paginate(session, apply_filters(scoped(caller), query), query, order)
 
 

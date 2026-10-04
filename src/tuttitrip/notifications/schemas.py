@@ -11,7 +11,13 @@ from datetime import UTC, datetime
 from enum import StrEnum, unique
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 
@@ -82,9 +88,10 @@ class NotificationFilter(ListFilters):
     read: bool | None = Field(
         default=None, description="true: read, false: unread, absent: all."
     )
-    type: Annotated[list[str] | None, Field(max_length=20)] = Field(
-        default=None, description="Repeatable: any of these types."
-    )
+    type: Annotated[
+        list[Annotated[str, StringConstraints(max_length=64)]] | None,
+        Field(max_length=20),
+    ] = Field(default=None, description="Repeatable: any of these types.")
     trip_id: uuid.UUID | None = None
     created_from: datetime | None = Field(
         default=None, description="Created at or after this moment (inclusive)."

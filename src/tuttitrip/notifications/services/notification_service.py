@@ -6,12 +6,15 @@ trip membership; the producer decides who gets the notification. ``params``
 reach the stream and the browser, so no tokens, token links or private data.
 """
 
+import logging
 import uuid
 from collections.abc import Iterable, Sequence
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.notifications import db
+from tuttitrip.notifications.models import Notification
 from tuttitrip.notifications.schemas import (
     NotificationAction,
     NotificationQuery,
@@ -20,6 +23,8 @@ from tuttitrip.notifications.schemas import (
     UnreadCount,
 )
 from tuttitrip.shared.pagination.schemas import Page
+
+log = logging.getLogger(__name__)
 
 
 async def notify(  # ruff: ignore[too-many-arguments] one keyword-only producer call
@@ -78,6 +83,41 @@ async def resolve(session: AsyncSession, dedupe_key: str) -> int:
     return await db.mark_read_by_key(session, dedupe_key)
 
 
+def _read(row: Notification) -> NotificationRead:
+    """Read a row without failing on what a newer producer wrote.
+
+    An action code this version does not know is dropped and params that are
+    not strings are turned into strings, each with a log line, so one odd row
+    never turns the whole list into a 500.
+
+    Args:
+        row: The stored notification.
+
+    Returns:
+        The notification as the owner sees it.
+    """
+    actions: list[NotificationAction] = []
+    for raw in row.actions:
+        try:
+            actions.append(NotificationAction.model_validate(raw))
+        except ValidationError:
+            log.warning("notification %s: unknown action %r skipped", row.id, raw)
+    params = {
+        str(k): v if isinstance(v, str) else str(v) for k, v in row.params.items()
+    }
+    if params != row.params:
+        log.warning("notification %s: non-string params coerced", row.id)
+    return NotificationRead(
+        id=row.id,
+        type=row.type,
+        trip_id=row.trip_id,
+        params=params,
+        actions=actions,
+        read_at=row.read_at,
+        created_at=row.created_at,
+    )
+
+
 async def list_notifications(
     session: AsyncSession, caller: str, query: NotificationQuery
 ) -> Page[NotificationRead]:
@@ -93,7 +133,7 @@ async def list_notifications(
     """
     page = await db.select_page(session, caller, query)
     return Page[NotificationRead](
-        items=[NotificationRead.model_validate(n) for n in page.items],
+        items=[_read(n) for n in page.items],
         total=page.total,
         page=page.page,
         size=page.size,

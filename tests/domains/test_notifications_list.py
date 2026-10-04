@@ -1,5 +1,6 @@
 """Notification list and unread counter: validation, permissions, filters in SQL."""
 
+import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -14,7 +15,9 @@ from tests.shared.paths import path
 from tests.shared.tokens import bearer, make_verifier
 from tuttitrip.main import create_app
 from tuttitrip.notifications import db
+from tuttitrip.notifications.models import Notification
 from tuttitrip.notifications.schemas import (
+    NotificationActionCode,
     NotificationFilter,
     NotificationQuery,
     NotificationSort,
@@ -123,6 +126,7 @@ def test_list_parses_repeated_types_and_all_filters(
         {"trip_id": "not-a-uuid"},
         {"created_from": "yesterday"},
         {"unknown": "1"},
+        {"type": "x" * 65},
     ],
     ids=lambda p: "-".join(f"{k}={v}" for k, v in p.items()),
 )
@@ -191,3 +195,22 @@ def test_filters_combine_with_and() -> None:
 def test_filter_model_is_shared_by_query_and_bulk() -> None:
     assert set(NotificationFilter.model_fields) <= set(NotificationQuery.model_fields)
     assert {"page", "size", "sort", "dir"}.isdisjoint(NotificationFilter.model_fields)
+
+
+def test_a_row_from_a_newer_producer_does_not_break_the_list(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    row = Notification(
+        id=uuid.uuid4(),
+        user_sub=SUB,
+        type="from_the_future",
+        trip_id=None,
+        params={"name": "Ola", "count": 3},
+        actions=[{"code": "open_plan", "params": {}}, {"code": "teleport"}],
+        read_at=None,
+        created_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    read = notification_service._read(row)  # ruff: ignore[private-member-access] - the tolerance under test
+    assert [a.code for a in read.actions] == [NotificationActionCode.OPEN_PLAN]
+    assert read.params == {"name": "Ola", "count": "3"}
+    assert "teleport" in caplog.text
