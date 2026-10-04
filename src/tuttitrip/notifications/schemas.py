@@ -19,7 +19,12 @@ from pydantic import (
     field_validator,
 )
 
-from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
+from tuttitrip.shared.pagination.schemas import (
+    BulkSelection,
+    ListFilters,
+    PageParams,
+    SortDir,
+)
 
 
 @unique
@@ -119,3 +124,19 @@ class UnreadCount(BaseModel):
     """How many notifications the caller has not read."""
 
     count: Annotated[int, Field(ge=0)]
+
+
+class NotificationMark(BulkSelection[NotificationFilter, uuid.UUID]):
+    """Mark notifications read or unread: by `ids` (max 100) or by `filters`.
+
+    Exactly one of `ids` and `filters`; `filters: {}` means every notification of
+    the caller. The filter is the one the list takes (without paging and sort).
+    """
+
+    read: bool = Field(description="true marks as read, false as unread.")
+
+
+class MarkResult(BaseModel):
+    """How many notifications actually changed state."""
+
+    updated: Annotated[int, Field(ge=0)]

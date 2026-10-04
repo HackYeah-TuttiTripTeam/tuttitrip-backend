@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tuttitrip.notifications import db
 from tuttitrip.notifications.models import Notification
 from tuttitrip.notifications.schemas import (
+    MarkResult,
     NotificationAction,
+    NotificationMark,
     NotificationQuery,
     NotificationRead,
     NotificationType,
@@ -152,6 +154,27 @@ async def unread_count(session: AsyncSession, caller: str) -> UnreadCount:
         The count.
     """
     return UnreadCount(count=await db.count_unread(session, caller))
+
+
+async def mark(
+    session: AsyncSession, caller: str, selection: NotificationMark
+) -> MarkResult:
+    """Mark the caller's notifications read or unread, by ids or by filter.
+
+    Idempotent: only rows that change state count. A filter selection means the
+    rows matching at the time of the call.
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user; others' rows are never touched.
+        selection: Which notifications and which state.
+
+    Returns:
+        How many notifications changed.
+    """
+    updated = await db.set_read(session, caller, selection)
+    await session.commit()
+    return MarkResult(updated=updated)
 
 
 async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:

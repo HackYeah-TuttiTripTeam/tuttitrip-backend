@@ -759,6 +759,10 @@ read (an approved request disappears from the basket).
   `notifications:READ`. Every query is `WHERE user_sub = <caller>`; another user's rows simply
   do not exist for you (no 403). `NotificationFilter` is the one filter model for the list and
   for bulk marking.
+- `POST /notifications/mark` (`notifications:WRITE`): body `{"read": bool, "ids": [uuid] | null,
+  "filters": NotificationFilter | null}`, exactly one of `ids` (1 to 100, else 422) and `filters`
+  (`{}` = all); answers `{"updated": n}`, counting only rows that changed state. One `UPDATE`
+  scoped to the caller (foreign ids are skipped silently).
 - Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
   is marked `integration`.
 

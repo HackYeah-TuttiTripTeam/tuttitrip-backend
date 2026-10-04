@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tuttitrip.notifications.models import Notification
 from tuttitrip.notifications.schemas import (
     NotificationFilter,
+    NotificationMark,
     NotificationQuery,
     NotificationSort,
 )
-from tuttitrip.shared.db.pagination import ordering, paginate
+from tuttitrip.shared.db.pagination import ordering, paginate, selected
 from tuttitrip.shared.pagination.schemas import Page
 
 COLUMNS = {
@@ -141,6 +142,39 @@ async def mark_read_by_key(session: AsyncSession, dedupe_key: str) -> int:
         update(Notification)
         .where(Notification.dedupe_key == dedupe_key, Notification.read_at.is_(None))
         .values(read_at=func.now())
+        .returning(Notification.id)
+    )
+    return len(result.all())
+
+
+async def set_read(
+    session: AsyncSession, caller: str, selection: NotificationMark
+) -> int:
+    """Mark the selected notifications read or unread in one ``UPDATE``.
+
+    Only rows that change state are touched: ``read`` sets ``read_at`` where it
+    was empty, ``unread`` clears it where it was set. The ids come from the
+    caller-scoped select, so someone else's ids are silently skipped.
+
+    Args:
+        session: Open session (the caller commits).
+        caller: ``sub`` of the signed-in user.
+        selection: Which notifications and which state.
+
+    Returns:
+        How many rows changed.
+    """
+    target = selected(scoped(caller), Notification.id, selection, apply_filters)
+    result = await session.execute(
+        update(Notification)
+        .where(
+            Notification.id.in_(target),
+            Notification.user_sub == caller,
+            Notification.read_at.is_(None)
+            if selection.read
+            else Notification.read_at.is_not(None),
+        )
+        .values(read_at=func.now() if selection.read else None)
         .returning(Notification.id)
     )
     return len(result.all())
