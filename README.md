@@ -230,6 +230,10 @@ i znacznik obsługi CIMD (`client_id_metadata_document_supported`, nazwę pola
 potwierdzić w odpowiedzi tenantu); MCP Inspector z logowaniem Google daje token
 z `aud` równym adresowi MCP danego środowiska.
 
+Stan na dziś (odczyt publicznego `/.well-known/openid-configuration`): jest już
+`registration_endpoint` (`/oidc/register`) i `authorization_response_iss_parameter_supported: true`,
+nie ma jeszcze znacznika CIMD.
+
 Gałęzie podglądu mają serwer MCP (odpowiada 401 i wystawia metadane), ale nie
 mają API w Auth0, więc nikt nie zdobędzie dla nich tokenu.
 
