@@ -28,6 +28,8 @@ from tuttitrip.notifications.api import router as notifications_router
 from tuttitrip.notifications.services import notification_service
 from tuttitrip.places.api import router as places_router
 from tuttitrip.places.cities.api import router as city_search_router
+from tuttitrip.places.candidates.api import router as candidates_router
+from tuttitrip.places.takeout.api import router as takeout_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.budget.api import router as budget_router
 from tuttitrip.planning.budget_approvals.api import router as budget_approvals_router
@@ -36,6 +38,7 @@ from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.planning.overrides.api import router as overrides_router
 from tuttitrip.planning.plans.api import router as plans_router
 from tuttitrip.planning.proposals.api import router as proposals_router
+from tuttitrip.planning.trip_linter.api import router as trip_linter_router
 from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.profiles.feedback.api import router as feedback_router
 from tuttitrip.profiles.preferences.api import router as preferences_router
@@ -101,6 +104,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     budget_approvals_router,
     proposals_router,
     linter_router,
+    trip_linter_router,
     accommodation_router,
     expenses_router,
     settlement_router,
@@ -108,6 +112,8 @@ ROUTERS: tuple[APIRouter, ...] = (
     city_search_router,
     places_router,
     notifications_router,
+    candidates_router,
+    takeout_router,
 )
 
 # Domain data cleared when an administrator deletes an account.

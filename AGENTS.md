@@ -287,6 +287,19 @@ through `DBOSClient` (`src/tuttitrip/shared/jobs/`). Full rules are in
   then start the worker from its repo with the same `DBOS_SYSTEM_DATABASE_URL`
   and `DBOS__APPVERSION=local`.
 
+- Plan justifications: a new plan version asks `write_justifications` (key = plan
+  id, best effort: no worker means templates only) and cancels the job of the
+  version it replaces. Verdicts always carry `justification` and
+  `justification_source` (`template` from `plans/logic/justification.py`, or `model`
+  once the newest version's job succeeded; the text is then kept in the version's
+  `result["justifications"]`). The worker needs `SELECT` on `plan_versions`.
+- Trip linter (`planning/trip_linter`): `POST /trips/{id}/linter/plans/{plan_id}`
+  lints a stored version (sync); `POST .../linter/pastes` stores the text, then
+  queues `parse_pasted_plan` (503 keeps the text); `GET .../pastes/{id}` stores the
+  report at the first read after the job; `PATCH .../pastes/{id}/items/{index}`
+  picks a candidate and recomputes. The solver plan of the demo family must lint to
+  0 violations (`tests/domains/test_trip_linter.py`).
+
 ## Uprawnienia
 
 Ścieżki w tej sekcji są względne wobec `API_PREFIX` (`/api/v1`). Dwie
@@ -767,17 +780,33 @@ Wydania:
 - `cena_ulgowa` becomes `TicketCategory.REDUCED` ("reduced", for whom unknown).
   `planning/logic/cost.py` never applies it, so a place with only a reduced price
   counts as unpriced (the plan needs approval).
-- **Stairs caveat:** `places.stairs` is NOT NULL with default 0, so an empty `schody`
-  is stored as 0.0, which reads as "no stairs", not "unknown". The sheet leaves it
-  empty almost everywhere, so the accessibility linter and the wheelchair/E0 stairs
-  rules cannot tell unknown from step-free. Do not treat `stairs == 0` as verified
-  until the column can be NULL (tracked in a follow-up issue).
+- Stairs are NULL when unknown: an empty `schody` is stored as NULL, never 0
+  (`places.stairs` is nullable). `stairs == 0` is a verified "no stairs". The linter
+  (`accessibility`: warning for a stairs-sensitive person, violation for a wheelchair
+  user without confirmed step-free access) and E0 (a person who cannot take any stairs
+  rejects a place with unknown stairs unless `wheelchair` is `true`) read NULL as
+  unknown. Rows imported before the fix keep 0 until the sheet is imported again.
 - The sheet wins over OSM: a `source = 'osm'` row for the same `osm_type`/`osm_id`
   is taken over (becomes `sheet`). The migration `sheet_catalog_rules` adds triggers
   that skip writes of role `tuttitrip_worker` (the OSM import) to `source = 'sheet'`
   places and their prices, so the worker needs no special code.
 - Transit fares: `ticket_type` is `<code>:<zone>` (`single:1+2`, `24h:I`, `family:AB`),
   `person_category` is `adult` or `reduced`.
+
+### Candidates, plan catalog check and Takeout import
+
+- `POST /trips/{id}/places/candidates` (`places.candidates:WRITE`, co-host) asks
+  the worker for `fetch_place_candidates` keyed by the city slug; a city that is
+  not in `cities` yet is fetched by name (`city_query`, default the slug's words,
+  it must give the slug). A city that already has places (the demo cities) answers
+  200 `ready` and starts nothing. `GET .../candidates/status?job_id=` reports the
+  job and the catalog size. Planning a city with no places answers 409
+  `detail.code = catalog_missing` with the job id (`PlanCatalogMissing`).
+- `POST /trips/{id}/places/import` takes a Google Takeout CSV (`Saved/<list>.csv`,
+  500 places, 1 MB) and a `profile_id`; titles are matched to the city's catalog
+  by name in `places/takeout/logic/name_match.py` (no coordinates in the file;
+  ambiguous names are reported, never guessed) and matched places become `want`
+  for that person, keeping votes already cast. No worker is involved.
 
 ## Ratings and vetoes (profiles/feedback)
 
