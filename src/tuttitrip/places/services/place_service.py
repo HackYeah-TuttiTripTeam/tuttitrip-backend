@@ -13,6 +13,9 @@ class PlaceNotFoundError(Exception):
     """The place does not exist."""
 
 
+ALL_PLACES_PAGE = 200
+
+
 async def list_cities(session: AsyncSession) -> list[CityRead]:
     """List the covered cities.
 
@@ -54,6 +57,26 @@ async def list_places(
         offset=offset,
     )
     return [PlaceRead.model_validate(place) for place in places]
+
+
+async def list_all_places(session: AsyncSession, city_slug: str) -> list[PlaceRead]:
+    """Every catalog place of a city, read page by page.
+
+    Args:
+        session: Open session.
+        city_slug: City slug.
+
+    Returns:
+        The places ordered by name; empty for an unknown city.
+    """
+    found: list[PlaceRead] = []
+    while page := await list_places(
+        session, city_slug, None, limit=ALL_PLACES_PAGE, offset=len(found)
+    ):
+        found.extend(page)
+        if len(page) < ALL_PLACES_PAGE:
+            break
+    return found
 
 
 async def get_place(session: AsyncSession, place_id: UUID) -> PlaceRead:

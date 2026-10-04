@@ -8,6 +8,7 @@ so it can run any number of times (at deploy, daily, before a presentation).
 
 import logging
 from datetime import date
+from uuid import UUID
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -119,9 +120,20 @@ async def _plan_and_documents(
     return plan.plan_hash
 
 
-async def _create_trip(
+async def create_seed_trip(
     session: AsyncSession, sub: str, seed: TripSeed, today: date
-) -> str | None:
+) -> UUID:
+    """Create one trip from a seed through the domain services.
+
+    Args:
+        session: Open session; the services commit it.
+        sub: Auth0 subject of the host.
+        seed: The trip with its people.
+        today: The day dates are counted from.
+
+    Returns:
+        The id of the new trip.
+    """
     trip = await trip_service.create_trip(session, sub, seed.create_payload(today))
     membership = await trip_service.get_membership(session, trip.id, sub, TripRole.HOST)
     host_profile, *_ = await profile_service.list_profiles(session, membership)
@@ -166,7 +178,7 @@ async def _create_trip(
                 preset=seed.weights, focus_profile_id=profiles[seed.focus].id
             ),
         )
-    return await _plan_and_documents(session, membership, seed, today)
+    return trip.id
 
 
 async def reset_demo_account(
@@ -188,8 +200,17 @@ async def reset_demo_account(
     """
     today = today or date.today()  # ruff: ignore[call-date-today]  # a calendar day, not an instant
     removed = await trip_service.delete_trips_owned_by(session, sub)
+    # The sample builds on `create_seed_trip` below, hence the late import.
+    from tuttitrip.demo.services import sample_trip_service  # ruff: ignore[import-outside-top-level]
+
+    # First, so it is the oldest and the headline Warszawa trip stays on top.
+    await sample_trip_service.create_sample_trip(session, sub, today=today)
     for seed in DEMO_TRIPS:
-        plan_hash = await _create_trip(session, sub, seed, today)
+        trip_id = await create_seed_trip(session, sub, seed, today)
+        membership = await trip_service.get_membership(
+            session, trip_id, sub, TripRole.HOST
+        )
+        plan_hash = await _plan_and_documents(session, membership, seed, today)
         if plan_hash is not None:
             log.info("Demo trip '%s': plan_hash %s", seed.name, plan_hash)
     log.info(

@@ -18,6 +18,7 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from tuttitrip.accommodation.schemas import RequirementStatus
 from tuttitrip.profiles.feedback.schemas import ReasonCode
+from tuttitrip.shared.jobs.contracts import Locale
 
 Money = Annotated[Decimal, Field(ge=0, decimal_places=2, max_digits=12)]
 Hash12 = Annotated[str, Field(min_length=12, max_length=12)]
@@ -192,6 +193,7 @@ class PlanErrorCode(StrEnum):
     """Stable code of a plan error, sent as ``detail.code``."""
 
     NOT_APPROVED = "plan.not_approved"
+    CATALOG_MISSING = "catalog_missing"
 
 
 class NotApprovedDetail(BaseModel):
@@ -205,6 +207,22 @@ class NotApprovedError(BaseModel):
     """409 body: no approved proposal for this plan version."""
 
     detail: NotApprovedDetail
+
+
+class PlanCatalogMissing(BaseModel):
+    """409: the trip's city has no places in the catalog, so no plan is computed."""
+
+    code: Literal[PlanErrorCode.CATALOG_MISSING] = PlanErrorCode.CATALOG_MISSING
+    message: str
+    city_slug: str
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "The fetch of candidates for the city, started or found; poll "
+            "`GET /trips/{id}/places/candidates/status?job_id=...`. Null when no "
+            "worker could take it (ask `POST /trips/{id}/places/candidates`)."
+        ),
+    )
 
 
 class PlanCreate(BaseModel):
@@ -234,6 +252,13 @@ class PlanCreate(BaseModel):
             "Recorded with the plan and part of its input hash, but it has no effect "
             "on the computation yet: the weights come from the profiles "
             "(`PUT /trips/{id}/profiles/weights`)."
+        ),
+    )
+    locale: Locale = Field(
+        default="pl",
+        description=(
+            "Language of the verdict justifications the worker writes for this "
+            "version (read them with the same `locale`)."
         ),
     )
 
@@ -582,6 +607,9 @@ class ExplainEntry(BaseModel):
     utility: float = Field(ge=0, le=100, description="u_ip (E1).")
 
 
+JustificationSource = Literal["template", "model"]
+
+
 class VoteReason(BaseModel):
     """A person on one side of a verdict, with a reason code."""
 
@@ -609,8 +637,15 @@ class PlanVerdict(BaseModel):
         ),
     )
     substitute_place_id: UUID | None = None
-    explanation: str | None = Field(
-        default=None, description="Written later by a model."
+    justification: str = Field(
+        description=(
+            "Why this verdict, one or two sentences in the requested `locale`. "
+            "A template from the verdict data until the worker's model text is "
+            "ready."
+        )
+    )
+    justification_source: JustificationSource = Field(
+        description="`template`: written by code. `model`: written by the worker."
     )
 
 

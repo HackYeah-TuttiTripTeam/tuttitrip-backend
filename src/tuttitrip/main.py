@@ -19,6 +19,7 @@ from tuttitrip.accounts.api import router as accounts_router
 from tuttitrip.demo.api import admin_router as demo_admin_router
 from tuttitrip.demo.api import internal_router as demo_internal_router
 from tuttitrip.demo.api import router as demo_router
+from tuttitrip.demo.services import sample_trip_service
 from tuttitrip.expenses.api import router as expenses_router
 from tuttitrip.expenses.logic.receipts import MAX_BYTES as RECEIPT_MAX_BYTES
 from tuttitrip.expenses.services.nbp_client import close_client as close_nbp_client
@@ -28,7 +29,9 @@ from tuttitrip.mcp.api import create_mcp_app
 from tuttitrip.notifications.api import router as notifications_router
 from tuttitrip.notifications.services import notification_service
 from tuttitrip.places.api import router as places_router
+from tuttitrip.places.candidates.api import router as candidates_router
 from tuttitrip.places.cities.api import router as city_search_router
+from tuttitrip.places.takeout.api import router as takeout_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.budget.api import router as budget_router
 from tuttitrip.planning.budget_approvals.api import router as budget_approvals_router
@@ -38,6 +41,7 @@ from tuttitrip.planning.overrides.api import router as overrides_router
 from tuttitrip.planning.parameters.api import router as parameters_router
 from tuttitrip.planning.plans.api import router as plans_router
 from tuttitrip.planning.proposals.api import router as proposals_router
+from tuttitrip.planning.trip_linter.api import router as trip_linter_router
 from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.profiles.feedback.api import router as feedback_router
 from tuttitrip.profiles.preferences.api import router as preferences_router
@@ -105,6 +109,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     budget_approvals_router,
     proposals_router,
     linter_router,
+    trip_linter_router,
     accommodation_router,
     expenses_router,
     settlement_router,
@@ -112,6 +117,8 @@ ROUTERS: tuple[APIRouter, ...] = (
     city_search_router,
     places_router,
     notifications_router,
+    candidates_router,
+    takeout_router,
 )
 
 # Domain data cleared when an administrator deletes an account.
@@ -122,6 +129,7 @@ erasure.register(trip_service.erase_account)
 erasure.register(invitation_service.erase_account)
 erasure.register(notification_service.erase_account)
 erasure.register(photo_service.erase_account)
+erasure.register(sample_trip_service.erase_account)
 
 
 @asynccontextmanager

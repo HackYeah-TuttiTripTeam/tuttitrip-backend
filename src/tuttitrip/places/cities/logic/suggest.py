@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from tuttitrip.places.cities.logic.slug import slugify
+from tuttitrip.places.candidates.logic.slug import slugify
 from tuttitrip.places.cities.schemas import CitySource, CitySuggestion
 
 MAX_SLUG_LENGTH = 64  # the trip's `city_slug` limit

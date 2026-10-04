@@ -300,6 +300,16 @@ async def update_member_status(
     )
 
 
+async def mark_sample(session: AsyncSession, trip_id: UUID) -> None:
+    """Set ``is_sample`` on one trip.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+    """
+    await session.execute(update(Trip).where(Trip.id == trip_id).values(is_sample=True))
+
+
 async def delete_trips_owned_by(session: AsyncSession, owner_sub: str) -> int:
     """Delete every trip created by one user (the database cascades).
 
