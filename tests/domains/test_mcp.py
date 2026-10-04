@@ -22,7 +22,13 @@ from tuttitrip.shared.permissions.logic.resolution import Grant
 from tuttitrip.shared.permissions.registry import Access
 from tuttitrip.shared.permissions.services import permission_service
 from tuttitrip.trips.models import Trip
-from tuttitrip.trips.schemas import TripDetails, TripListQuery, TripRead, TripRole
+from tuttitrip.trips.schemas import (
+    MemberStatus,
+    TripDetails,
+    TripListQuery,
+    TripRead,
+    TripRole,
+)
 from tuttitrip.trips.services import trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
@@ -59,7 +65,11 @@ def trip_read() -> TripRead:
         fairness_alpha=1.0,
     )
     details = TripDetails.model_validate(trip, from_attributes=True)
-    return TripRead(**details.model_dump(exclude={"kind"}), my_role=TripRole.HOST)
+    return TripRead(
+        **details.model_dump(exclude={"kind"}),
+        my_role=TripRole.HOST,
+        my_status=MemberStatus.CONFIRMED,
+    )
 
 
 @pytest.fixture

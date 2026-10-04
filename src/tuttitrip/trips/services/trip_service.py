@@ -10,6 +10,7 @@ from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips import db
 from tuttitrip.trips.models import Trip
 from tuttitrip.trips.schemas import (
+    MemberStatus,
     TripCreate,
     TripDetails,
     TripListQuery,
@@ -42,9 +43,11 @@ class TripInvalidError(Exception):
         self.errors = errors
 
 
-def _read(trip: Trip, role: TripRole) -> TripRead:
+def _read(trip: Trip, role: TripRole, status: MemberStatus) -> TripRead:
     details = TripDetails.model_validate(trip, from_attributes=True)
-    return TripRead(**details.model_dump(exclude={"kind"}), my_role=role)
+    return TripRead(
+        **details.model_dump(exclude={"kind"}), my_role=role, my_status=status
+    )
 
 
 async def create_trip(
@@ -65,7 +68,7 @@ async def create_trip(
     )
     await profile_service.create_host_profile(session, trip.id, owner_sub)
     await session.commit()
-    return _read(trip, TripRole.HOST)
+    return _read(trip, TripRole.HOST, MemberStatus.CONFIRMED)
 
 
 async def list_trips(
@@ -81,8 +84,8 @@ async def list_trips(
     Returns:
         The page, each trip with the user's role.
     """
-    page, roles = await db.select_trips_page(session, sub, query)
-    items = [_read(trip, roles[trip.id]) for trip in page.items]
+    page, mine = await db.select_trips_page(session, sub, query)
+    items = [_read(trip, *mine[trip.id]) for trip in page.items]
     return Page[TripRead].of(items, page.total, query)
 
 
@@ -103,13 +106,14 @@ async def get_membership(
     Returns:
         The membership.
     """
-    role = await db.select_member_role(session, trip_id, sub)
-    if role is None:
+    found = await db.select_membership(session, trip_id, sub)
+    if found is None:
         raise TripNotFoundError(str(trip_id))
+    role, status = found
     if not role.satisfies(min_role):
         msg = f"Trip role '{min_role}' required (you are '{role}')"
         raise TripRoleError(msg)
-    return TripMembership(trip_id=trip_id, sub=sub, role=role)
+    return TripMembership(trip_id=trip_id, sub=sub, role=role, status=status)
 
 
 async def get_trip(session: AsyncSession, membership: TripMembership) -> TripRead:
@@ -128,7 +132,7 @@ async def get_trip(session: AsyncSession, membership: TripMembership) -> TripRea
     trip = await db.select_trip(session, membership.trip_id)
     if trip is None:
         raise TripNotFoundError(str(membership.trip_id)) from None
-    return _read(trip, membership.role)
+    return _read(trip, membership.role, membership.status)
 
 
 async def update_trip(
@@ -171,7 +175,7 @@ async def update_trip(
         setattr(trip, field, value)
     await session.commit()
     await session.refresh(trip)
-    return _read(trip, membership.role)
+    return _read(trip, membership.role, membership.status)
 
 
 async def delete_trip(session: AsyncSession, membership: TripMembership) -> None:
