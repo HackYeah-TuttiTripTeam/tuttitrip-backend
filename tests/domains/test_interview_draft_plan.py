@@ -27,7 +27,7 @@ from tuttitrip.interview import constants
 from tuttitrip.interview.logic import plan_defaults
 from tuttitrip.interview.logic.plan_defaults import MissingCityError
 from tuttitrip.interview.schemas import AssumptionCode
-from tuttitrip.interview.services import draft_plan_service
+from tuttitrip.interview.services import draft_plan_service, question_service
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.main import create_app
 from tuttitrip.planning.plans.schemas import PlanAssumptions, PlanRead
@@ -117,6 +117,8 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
     w.install(monkeypatch)
     asyncio.run(w.add_host())
     w.trip = w.trip.model_copy(update=CITY)
+    # The instructions ask for the measured question; it is not under test here.
+    monkeypatch.setattr(question_service, "choose", AsyncMock(return_value=None))
     return w
 
 

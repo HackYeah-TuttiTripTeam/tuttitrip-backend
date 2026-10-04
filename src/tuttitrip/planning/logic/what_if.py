@@ -33,7 +33,11 @@ from tuttitrip.planning.schemas import (
     WhatIfField,
     WhatIfTarget,
 )
-from tuttitrip.profiles.preferences.schemas import ImportanceDomain, ImportancePool
+from tuttitrip.profiles.preferences.schemas import (
+    POOL_TOTAL,
+    ImportanceDomain,
+    ImportancePool,
+)
 
 PROBE_EVALUATIONS: Final = 200
 """Work limit of every run, in evaluated plans (equal for all, so comparable)."""
@@ -57,7 +61,7 @@ PACE_FACTORS: Final = (0.5, 1.5)
 """The slowest person's walking limits tried, as a share of the current ones."""
 
 FOCUS_POINTS: Final = 6
-"""Points a focused domain gets in the importance question (the rest share 4)."""
+"""Points a focused domain gets in the importance question; others share the rest."""
 
 FOCUS_DOMAINS: Final = (ImportanceDomain.ATTRACTIONS, ImportanceDomain.FOOD)
 """Domains tried as the most important one."""
@@ -165,7 +169,7 @@ def _pace(data: PlanningInput, person: PlanningPerson) -> list[PlanningInput]:
 
 
 def _importance(data: PlanningInput, person: PlanningPerson) -> list[PlanningInput]:
-    rest = (10 - FOCUS_POINTS) // (len(ImportanceDomain) - 1)
+    rest = (POOL_TOTAL - FOCUS_POINTS) // (len(ImportanceDomain) - 1)
     out = []
     for focus in FOCUS_DOMAINS:
         pool = ImportancePool.model_validate(
