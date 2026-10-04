@@ -21,6 +21,7 @@ def planning_person(persona: Persona, catalog: dict[str, PlaceRead]) -> Planning
     prefs = persona.preferences
     return PlanningPerson(
         id=persona.id,
+        age=profile.age,
         weight=persona.weight,
         interests=prefs.interests,
         pool=persona.pool,
