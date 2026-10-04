@@ -3,15 +3,18 @@
 import itertools
 import subprocess  # ruff: ignore[suspicious-subprocess-import] fixed snippet
 import sys
-from decimal import Decimal
+from datetime import time, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import pytest
 
+from tests.fixtures.brute_force import best
 from tests.fixtures.city import key_of, place_id, places
 from tests.fixtures.planning import planning_input
-from tests.fixtures.scenarios import Scenario, all_scenarios, reference
+from tests.fixtures.scenarios import Scenario, all_scenarios, reference, solo
+from tuttitrip.places.schemas import OpeningHours, PlaceRead, TimeRange, Weekday
 from tuttitrip.planning.logic.hard_constraints import filter_places
 from tuttitrip.planning.logic.schedule import DAILY_KM_FACTOR
 from tuttitrip.planning.logic.solver import (
@@ -141,12 +144,12 @@ def test_unknown_prices_need_approval() -> None:
     stay = LodgingStay(nights=2, price_per_night=PRICE_PER_NIGHT)
     priced = [p for p in data.places if p.prices]
     only_priced = data.model_copy(update={"places": tuple(priced)})
-    assert not solve(only_priced, lodging=stay).needs_approval
+    assert not solve(only_priced, lodging=stay).has_unpriced_places
     unpriced = next(p for p in data.places if not p.prices)
     must = data.model_copy(update={"must": frozenset({unpriced.id})})
     result = solve(must, lodging=stay)
     assert unpriced.id in result.cost.unknown_price_place_ids
-    assert result.needs_approval
+    assert result.has_unpriced_places
 
 
 # --- soft guarantees never block the plan ---------------------------------------
@@ -307,3 +310,210 @@ def test_hash_is_the_same_in_processes_with_different_hash_seeds() -> None:
     assert first == second
     _, here = run(reference())
     assert first == here.plan_hash
+
+
+# --- musts, limits, larger brute force, independent checks ------------------------
+
+
+def single_day_place(
+    base_key: str, tag: str, *, hours_days: list[Weekday] | None = None
+) -> PlaceRead:
+    """A copy of a catalog place with a new id, 1 km of walking, optional days."""
+    base = CATALOG[base_key]
+    hours = base.hours
+    if hours_days is not None:
+        weekly = {d: [TimeRange(open="10:00", close="18:00")] for d in hours_days}
+        hours = hours.model_copy(update={"opening_hours": OpeningHours(weekly=weekly)})
+    return base.model_copy(
+        update={
+            "id": uuid5(base.id, tag),
+            "segment_km": 1.0,
+            "stairs": 0.0,
+            "hours": hours,
+        }
+    )
+
+
+@pytest.mark.parametrize("tag", ["a", "b", "c", "d", "e", "f"])
+def test_a_must_is_tried_on_other_days_so_that_both_musts_fit(tag: str) -> None:
+    # Two 1 km stops exceed 1.5 * 1 km a day. B is open only on Friday (day 1);
+    # A, placed first on its best day (also day 1), would block it.
+    # The tags give different ids, so both orders of the two musts are exercised.
+    a = single_day_place("zoo", tag)
+    b = single_day_place("hevelianum", tag, hours_days=[Weekday.FRI])
+    data = planning_input(reference(), lodging=False)
+    walker = data.people[0].model_copy(update={"daily_km": 1.0, "segment_km": 3.0})
+    tight = data.model_copy(
+        update={
+            "people": (walker,),
+            "places": (a, b),
+            "must": frozenset({a.id, b.id}),
+        }
+    )
+    result = solve(tight)
+    assert {a.id, b.id} <= set(result.place_ids)
+    kinds = [kind for kind, _ in result.conflicts]
+    assert SolverConflict.MUST_UNPLACEABLE not in kinds
+    day_of = {
+        v.place_id: i for i, d in enumerate(result.days) for v in d.schedule.visits
+    }
+    assert day_of[b.id] == 0
+    assert day_of[a.id] != day_of[b.id]
+
+
+def test_an_unplaceable_must_is_reported_from_the_final_plan() -> None:
+    a = single_day_place("zoo", "x", hours_days=[Weekday.FRI])
+    b = single_day_place("hevelianum", "x", hours_days=[Weekday.FRI])
+    data = planning_input(reference(), lodging=False)
+    walker = data.people[0].model_copy(update={"daily_km": 1.0, "segment_km": 3.0})
+    both_friday = data.model_copy(
+        update={
+            "people": (walker,),
+            "places": (a, b),
+            "must": frozenset({a.id, b.id}),
+        }
+    )
+    result = solve(both_friday)
+    unplaced = {
+        pid for kind, pid in result.conflicts if kind is SolverConflict.MUST_UNPLACEABLE
+    }
+    assert len(unplaced) == 1
+    assert unplaced.isdisjoint(result.place_ids)
+
+
+def test_the_work_limit_sets_exhausted_and_stays_deterministic() -> None:
+    data, stay = instance_for(reference())
+    first = solve(data, lodging=stay, max_evaluations=30)
+    second = solve(data, lodging=stay, max_evaluations=30)
+    assert first.telemetry.exhausted
+    assert first.plan_hash == second.plan_hash
+    assert not solve(data, lodging=stay).telemetry.exhausted
+
+
+def instance_for(scenario: Scenario) -> tuple[PlanningInput, LodgingStay | None]:
+    stay = lodging_for(scenario) if scenario.key != "solo" else None
+    return planning_input(scenario, lodging=stay is not None), stay
+
+
+LARGE = (
+    "muzeum_miejskie",
+    "zoo",
+    "bar_mleczny",
+    "restauracja_indyjska",
+    "park_oliwski",
+    "kawiarnia_w_ogrodzie",
+    "planszowki",
+)
+
+
+@pytest.mark.parametrize(
+    ("who", "cap"),
+    [(slice(0, 1), Decimal(330)), (slice(0, 4), Decimal(450))],
+    ids=["solo", "group"],
+)
+def test_larger_brute_force_with_lodging_a_cap_and_two_musts(
+    who: slice, cap: Decimal
+) -> None:
+    data = planning_input(reference(), lodging=True)
+    keep = {place_id(k) for k in LARGE}
+    must = frozenset({place_id("muzeum_miejskie"), place_id("bar_mleczny")})
+    data = data.model_copy(
+        update={
+            "people": data.people[who],
+            "places": tuple(p for p in data.places if p.id in keep),
+            "must": must,
+        }
+    )
+    stay = LodgingStay(nights=2, price_per_night=Decimal(100))
+    evaluator = PlanEvaluator(data, cost_cap=cap, lodging=stay)
+    optimum = best(evaluator, 3, must).objective.value
+    result = solve(data, cost_cap=cap, lodging=stay)
+    assert must <= set(result.place_ids)
+    assert result.cost.total <= cap
+    assert result.objective.value <= optimum + 1e-9
+    assert result.objective.value >= optimum - 0.005 * abs(optimum)
+
+
+def local_range(visit_start, visit_end, place, day) -> bool:  # ruff: ignore[missing-type-function-argument]
+    hours = place.hours.opening_hours
+    if hours is None:
+        return True
+    if day in hours.closed_dates:
+        return False
+    weekday = [
+        Weekday.MON,
+        Weekday.TUE,
+        Weekday.WED,
+        Weekday.THU,
+        Weekday.FRI,
+        Weekday.SAT,
+        Weekday.SUN,
+    ][day.weekday()]
+    for rng in hours.weekly.get(weekday, []):
+        close = (
+            time(23, 59, 59) if rng.close == "24:00" else time.fromisoformat(rng.close)
+        )
+        if (
+            time.fromisoformat(rng.open) <= visit_start.time()
+            and visit_end.time() <= close
+        ):
+            return True
+    return False
+
+
+@pytest.mark.parametrize("key", list(all_scenarios()))
+def test_visits_respect_hours_window_and_cost_checked_independently(key: str) -> None:
+    scenario = all_scenarios()[key]
+    data, stay = instance_for(scenario)
+    result = solve(data, lodging=stay)
+    by_id = {p.id: p for p in data.places}
+    for planned in result.days:
+        previous_end = None
+        for visit in planned.schedule.visits:
+            place = by_id[visit.place_id]
+            assert visit.start.time() >= data.trip.day_start
+            assert visit.end.time() <= data.trip.day_end
+            assert local_range(visit.start, visit.end, place, planned.day)
+            assert visit.end - visit.start >= timedelta(minutes=place.typical_visit_min)
+            if previous_end is not None:
+                assert visit.start >= previous_end
+            previous_end = visit.end
+    expected = Decimal(0) if stay is None else stay.price_per_night * stay.nights
+    for pid in result.place_ids:
+        place = by_id[pid]
+        for person in data.people:
+            rows = [
+                r
+                for r in place.prices
+                if r.unit.value == "person"
+                and (
+                    r.ticket_category.value == "adult"
+                    or (r.ticket_category.value == "child" and person.age <= 17)
+                    or (r.ticket_category.value == "senior" and person.age >= 65)
+                )
+            ]
+            if rows:
+                expected += min(
+                    r.amount if r.verified else r.amount * Decimal("1.15") for r in rows
+                )
+    assert result.cost.total == expected.quantize(Decimal("0.01"), ROUND_HALF_UP)
+
+
+def test_solving_a_clone_group_equals_solving_one_person() -> None:
+    single = planning_input(solo(), lodging=False)
+    alone = solve(single)
+    n = 3
+    clones = tuple(
+        single.people[0].model_copy(update={"id": uuid5(single.people[0].id, str(i))})
+        for i in range(n)
+    )
+    trip = single.trip.model_copy(
+        update={
+            "budget_from": single.trip.budget_from * n,
+            "budget_to": single.trip.budget_to * n,
+        }
+    )
+    group = solve(
+        single.model_copy(update={"people": clones, "trip": trip}),
+    )
+    assert group.plan_hash == alone.plan_hash

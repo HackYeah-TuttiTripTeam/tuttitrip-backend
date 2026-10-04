@@ -19,9 +19,24 @@ a clock. Every place is visited at most once. Everybody goes everywhere, so
 there is no group split (section 9). The result is not proven optimal on large
 instances; on the small test instances it matches brute force.
 
-Unknown prices. A plan with any place that could not be fully priced is flagged
-``needs_approval`` (see ``cost``), and its ``c(P) <= B_max`` check is not proof.
-Approval for going over ``B_do`` (E6) is a separate step (backend#53).
+Unknown prices. A plan with any place that could not be fully priced has
+``has_unpriced_places``, and its ``c(P) <= B_max`` check is not proof (see
+``cost``). That flag is a warning of its own. The E6 consent dialog is driven by
+``over_b_do`` (``c(P) > B_do``); the consent itself, with the price per point,
+is backend#53.
+
+Work limit. ``max_evaluations`` (default: scaled with candidates x days) counts
+evaluated plans. When it ends the search, ``Telemetry.exhausted`` is True and
+the result is a local state, not an optimum. The placement of "must" places
+ignores the limit.
+
+Hash scope. The plan hash covers the itinerary (days, visits, nights), not the
+people or amounts, because section 4 (test 5) gives clones "the same plan (the
+same hash)" as one person and section 10 calls the hash the plan's label.
+
+One person's best plan alone (``u*``, E4) is the same ``solve`` on a trip of that
+person with ``1/N`` of the budget and the lodging, ``floors={id: 0}`` and no
+"must"; ``reference.solo_utility`` builds exactly that input.
 """
 
 import time
@@ -30,6 +45,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
+from itertools import combinations
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -70,12 +86,17 @@ from tuttitrip.planning.schemas import (
 
 SOLVER_NAME = "local-search-v1"
 DEFAULT_MAX_EVALUATIONS = 20_000
-"""Work limit: evaluated candidate plans (not time)."""
+"""Smallest work limit: evaluated candidate plans (not time)."""
+EVALUATIONS_PER_SLOT = 300
+"""Work limit per candidate place and day (the larger of the two limits wins)."""
+MAX_CACHE_ENTRIES = 200_000
+"""A cache is cleared when it grows past this."""
 _CENT = Decimal("0.01")
 
 Assignment = tuple[tuple[UUID, ...], ...]
 """Per day (in date order) the chosen place ids, sorted by id."""
-_Key = tuple[float, Decimal, tuple[str, ...]]
+_Key = tuple[float, Decimal, tuple[str, ...], tuple[tuple[int, str], ...]]
+"""``rank_key`` plus the (day, id) slots, so equal itineraries differ by their days."""
 _DayKey = tuple[int, tuple[UUID, ...]]
 
 
@@ -108,6 +129,8 @@ class Telemetry:
     evaluations: int
     """Candidate plans evaluated (the work limit counts these)."""
     elapsed_ms: int
+    exhausted: bool = False
+    """The work limit ended the search: a local state, not an optimum."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +143,10 @@ class PlanResult:
     objective: GroupObjective
     report: FairnessReport
     cost: PlanCost
-    needs_approval: bool
-    """True when a place is not fully priced."""
+    has_unpriced_places: bool
+    """A place is not fully priced: warn, and ``c <= B_max`` is not proven."""
+    over_b_do: bool
+    """``c(P) > B_do``: the organizer's consent (E6, backend#53) is needed."""
     conflicts: tuple[tuple[SolverConflict, UUID | None], ...]
     plan_hash: str
     telemetry: Telemetry
@@ -232,6 +257,8 @@ class PlanEvaluator:
             result = schedule_day(
                 [self.places[i] for i in ids], self.windows[day], self.schedulers
             )
+            if len(self._schedule_cache) >= MAX_CACHE_ENTRIES:
+                self._schedule_cache.clear()
             self._schedule_cache[key] = (
                 None if isinstance(result, Infeasible) else result
             )
@@ -251,6 +278,8 @@ class PlanEvaluator:
             return self._cache[assignment]
         self.evaluations += 1
         result = self._evaluate(assignment)
+        if len(self._cache) >= MAX_CACHE_ENTRIES:
+            self._cache.clear()
         self._cache[assignment] = result
         return result
 
@@ -306,7 +335,12 @@ class PlanEvaluator:
             scores,
             objective,
             total,
-            rank_key(objective, total, ids),
+            (
+                *rank_key(objective, total, ids),
+                tuple(
+                    (d, str(i)) for d, day_ids in enumerate(assignment) for i in day_ids
+                ),
+            ),
         )
 
 
@@ -341,23 +375,12 @@ def _neighbours(
                 for d2 in range(len(current))
                 if d2 != d
             )
-    for (d1, first), (d2, second) in ((a, b) for a, b in _day_pairs(current)):
+    for (d1, first), (d2, second) in combinations(enumerate(current), 2):
         for a in first:
             for b in second:
                 moved = _with(current, d1, add=(b,), drop=(a,))
                 moves.append(_with(moved, d2, add=(a,), drop=(b,)))
     return moves
-
-
-def _day_pairs(
-    current: Assignment,
-) -> list[tuple[tuple[int, tuple[UUID, ...]], tuple[int, tuple[UUID, ...]]]]:
-    indexed = list(enumerate(current))
-    return [
-        (indexed[i], indexed[j])
-        for i in range(len(indexed))
-        for j in range(i + 1, len(indexed))
-    ]
 
 
 def _best_improving(
@@ -380,20 +403,49 @@ def _best_improving(
 
 def _place_musts(
     evaluator: PlanEvaluator, start: Evaluation, must: Sequence[UUID]
-) -> tuple[Evaluation, list[tuple[SolverConflict, UUID | None]]]:
-    current = start
-    conflicts: list[tuple[SolverConflict, UUID | None]] = []
-    for pid in must:
-        options = [
-            e
-            for d in range(len(current.assignment))
-            if (e := evaluator.evaluate(_with(current.assignment, d, add=(pid,))))
-        ]
-        if options:
-            current = min(options, key=lambda e: e.key)
-        else:
-            conflicts.append((SolverConflict.MUST_UNPLACEABLE, pid))
-    return current, conflicts
+) -> Evaluation:
+    """Put as many "must" places as possible into the plan, trying other days.
+
+    A must placed on its best day may leave no room for a later one, so the days
+    are searched depth first (best key first) and the first plan holding every
+    must wins; otherwise the plan with the most musts (then the best key). This
+    ignores the work limit: it is bounded by days ** musts, and musts are few.
+
+    Args:
+        evaluator: The evaluator.
+        start: The empty plan.
+        must: The "must" places that passed E0, in id order.
+
+    Returns:
+        The evaluation holding the musts that could be placed.
+    """
+    best: tuple[int, Evaluation] = (0, start)
+
+    def place(index: int, current: Evaluation, placed: int) -> bool:
+        nonlocal best
+        if placed > best[0] or (placed == best[0] and current.key < best[1].key):
+            best = (placed, current)
+        if index == len(must):
+            return placed == len(must)
+        options = sorted(
+            (
+                e
+                for d in range(len(current.assignment))
+                if (
+                    e := evaluator.evaluate(
+                        _with(current.assignment, d, add=(must[index],))
+                    )
+                )
+            ),
+            key=lambda e: e.key,
+        )
+        if any(place(index + 1, option, placed + 1) for option in options):
+            return True
+        place(index + 1, current, placed)  # this must may fit nowhere here
+        return False
+
+    place(0, start, 0)
+    return best[1]
 
 
 def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
@@ -404,7 +456,7 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
     cost_cap: Decimal | None = None,
     lodging: LodgingStay | None = None,
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
-    max_evaluations: int = DEFAULT_MAX_EVALUATIONS,
+    max_evaluations: int | None = None,
 ) -> PlanResult:
     """Compute the plan that maximises ``J`` under the hard constraints.
 
@@ -415,7 +467,8 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
         cost_cap: Hard cost limit; default ``B_max``.
         lodging: The lodging base, given exactly when the trip has nights.
         lodging_outcomes: The trip's lodging requirements checked against it.
-        max_evaluations: Work limit in evaluated plans.
+        max_evaluations: Work limit in evaluated plans; default scales with
+            candidates x days (never below ``DEFAULT_MAX_EVALUATIONS``).
 
     Returns:
         A plan; never "no plan". Misses of the soft guarantees are in
@@ -436,26 +489,35 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
     if evaluator.lodging_over_cap:
         conflicts.append((SolverConflict.LODGING_OVER_CAP, None))
     must = _sorted_ids([m for m in data.must if m in evaluator.places])
-    best, steps, unplaceable = _search(evaluator, must, max_evaluations)
-    conflicts.extend(unplaceable)
+    limit = max_evaluations or max(
+        DEFAULT_MAX_EVALUATIONS,
+        EVALUATIONS_PER_SLOT * len(evaluator.candidates) * len(evaluator.windows),
+    )
+    best, steps, exhausted = _search(evaluator, must, limit)
+    placed = {i for ids in best.assignment for i in ids}
+    conflicts.extend(
+        (SolverConflict.MUST_UNPLACEABLE, pid) for pid in must if pid not in placed
+    )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
-    return _result(evaluator, best, conflicts, steps, elapsed_ms)
+    return _result(evaluator, best, conflicts, steps, elapsed_ms, exhausted=exhausted)
 
 
 def _search(
     evaluator: PlanEvaluator, must: Sequence[UUID], max_evaluations: int
-) -> tuple[Evaluation, int, list[tuple[SolverConflict, UUID | None]]]:
+) -> tuple[Evaluation, int, bool]:
     # Must places first, then adds only, then the whole neighbourhood until stuck.
     empty: Assignment = tuple(() for _ in evaluator.windows)
     start = evaluator.evaluate(empty)
     if start is None:  # pragma: no cover - an empty plan has no hard constraint
         msg = "The empty plan must be feasible"
         raise RuntimeError(msg)
-    current, unplaceable = _place_musts(evaluator, start, must)
+    current = _place_musts(evaluator, start, must)
     must_set = frozenset(must)
     steps = 0
     phase_adds = True
-    while evaluator.evaluations < max_evaluations:
+    while True:
+        if evaluator.evaluations >= max_evaluations:
+            return current, steps, True
         placed = {i for ids in current.assignment for i in ids}
         unplaced = [p.id for p in evaluator.candidates if p.id not in placed]
         moves = (
@@ -466,19 +528,22 @@ def _search(
         better = _best_improving(evaluator, current, moves, max_evaluations)
         if better is not None:
             current, steps = better, steps + 1
+        elif evaluator.evaluations >= max_evaluations:
+            return current, steps, True
         elif phase_adds:
             phase_adds = False
         else:
-            break
-    return current, steps, unplaceable
+            return current, steps, False
 
 
-def _result(
+def _result(  # ruff: ignore[too-many-arguments] the pieces of one result
     evaluator: PlanEvaluator,
     best: Evaluation,
     conflicts: Sequence[tuple[SolverConflict, UUID | None]],
     steps: int,
     elapsed_ms: int,
+    *,
+    exhausted: bool,
 ) -> PlanResult:
     trip = evaluator.trip
     day_plans = [
@@ -504,6 +569,7 @@ def _result(
             for day, s in zip(trip.days, best.schedules, strict=True)
         ],
         0 if stay is None else stay.nights,
+        evaluator.windows[0].timezone,
     )
     return PlanResult(
         days=tuple(map(PlannedDay, trip.days, best.schedules, strict=True)),
@@ -511,10 +577,13 @@ def _result(
         objective=best.objective,
         report=build_report(best.objective),
         cost=cost,
-        needs_approval=bool(cost.unknown_price_place_ids),
+        has_unpriced_places=bool(cost.unknown_price_place_ids),
+        over_b_do=cost.total > trip.budget_to,
         conflicts=tuple(conflicts),
         plan_hash=digest,
-        telemetry=Telemetry(SOLVER_NAME, steps, evaluator.evaluations, elapsed_ms),
+        telemetry=Telemetry(
+            SOLVER_NAME, steps, evaluator.evaluations, elapsed_ms, exhausted
+        ),
     )
 
 

@@ -14,7 +14,7 @@ sorted keys. Nothing here iterates a set, so it is the same in every process
 """
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date, datetime, tzinfo
 from uuid import UUID
 
 from tuttitrip.planning.plans.logic.hashing import compute_plan_hash
@@ -23,21 +23,26 @@ TIME_STEP_MIN = 5
 _MINUTES_PER_HOUR = 60
 
 
-def _minutes(moment: datetime) -> int:
-    # Minutes since local midnight rounded half up to the 5-minute step.
+def _minutes(moment: datetime, zone: tzinfo) -> int:
+    # Minutes since midnight in the city's zone (whatever zone the instant is in),
+    # rounded half up to the 5-minute step.
+    moment = moment.astimezone(zone)
     total = moment.hour * _MINUTES_PER_HOUR + moment.minute + moment.second / 60
     return int(total / TIME_STEP_MIN + 0.5) * TIME_STEP_MIN
 
 
 def canonical_plan(
     days: Sequence[tuple[date, Sequence[tuple[UUID, datetime, datetime]]]],
-    nights: int = 0,
+    nights: int,
+    zone: tzinfo,
 ) -> dict[str, object]:
     """The plan as JSON-ready data in canonical order.
 
     Args:
         days: Per day its date and the visits as ``(place id, start, end)``.
         nights: Number of nights of the lodging base (0 without one).
+        zone: The city's time zone; times are taken in it, so the hash does not
+            depend on the zone the instants happen to be expressed in.
 
     Returns:
         Content that depends only on the plan itself.
@@ -47,9 +52,13 @@ def canonical_plan(
             {
                 "date": day.isoformat(),
                 "visits": [
-                    {"place": str(pid), "start": _minutes(start), "end": _minutes(end)}
+                    {
+                        "place": str(pid),
+                        "start": _minutes(start, zone),
+                        "end": _minutes(end, zone),
+                    }
                     for pid, start, end in sorted(
-                        visits, key=lambda v: (_minutes(v[1]), str(v[0]))
+                        visits, key=lambda v: (_minutes(v[1], zone), str(v[0]))
                     )
                 ],
             }
@@ -61,15 +70,18 @@ def canonical_plan(
 
 def plan_hash(
     days: Sequence[tuple[date, Sequence[tuple[UUID, datetime, datetime]]]],
-    nights: int = 0,
+    nights: int,
+    zone: tzinfo,
 ) -> str:
     """12-character hash of a plan.
 
     Args:
         days: Per day its date and the visits as ``(place id, start, end)``.
         nights: Number of nights of the lodging base (0 without one).
+        zone: The city's time zone; times are taken in it, so the hash does not
+            depend on the zone the instants happen to be expressed in.
 
     Returns:
         The first 12 hex characters of the SHA-256 of the canonical JSON.
     """
-    return compute_plan_hash(canonical_plan(days, nights))
+    return compute_plan_hash(canonical_plan(days, nights, zone))
