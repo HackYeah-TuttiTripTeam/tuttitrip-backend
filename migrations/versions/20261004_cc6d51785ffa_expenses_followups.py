@@ -1,7 +1,7 @@
 """Expenses follow-ups: foreign-currency rate, payments, settlement state, evidence.
 
 Revision ID: cc6d51785ffa
-Revises: b28a37ba42ff
+Revises: 477ae4f2a2d8
 Create Date: 2026-10-04 02:55:59.180093
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "cc6d51785ffa"
-down_revision: str | None = "b28a37ba42ff"
+down_revision: str | None = "477ae4f2a2d8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
