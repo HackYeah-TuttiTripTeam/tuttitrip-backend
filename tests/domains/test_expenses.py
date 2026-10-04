@@ -447,7 +447,8 @@ def test_writes_need_the_write_permission(monkeypatch: pytest.MonkeyPatch) -> No
 def test_editing_after_the_trip_currency_changed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _patch_service(monkeypatch, _expense())
+    expense = _expense()
+    _patch_service(monkeypatch, expense)
     monkeypatch.setattr(trip_service, "get_trip", AsyncMock(return_value=_trip("EUR")))
     host = _membership(TripRole.HOST)
 
@@ -456,9 +457,5 @@ def test_editing_after_the_trip_currency_changed(
             _session(), host, uuid.uuid4(), data
         )
 
-    asyncio.run(update(ExpenseUpdate(description="Obiad")))  # no currency check
-    with pytest.raises(expense_service.ExpenseInvalidError) as caught:
-        asyncio.run(update(ExpenseUpdate(amount=Decimal(10))))
-    assert [v.code for v in caught.value.violations] == [
-        ExpenseErrorCode.CURRENCY_MISMATCH
-    ]
+    asyncio.run(update(ExpenseUpdate(description="Obiad")))  # never reprices
+    assert (expense.trip_amount, expense.rate) == (Decimal("142.00"), None)

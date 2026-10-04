@@ -127,9 +127,7 @@ async def _check(
     violations = check_expense(
         amount=expense.amount,
         currency=expense.currency,
-        # Stored expenses keep their currency if the trip's changes later: it is
-        # compared again only when the edit touches the amount or the currency.
-        trip_currency=trip.currency if check_currency else expense.currency,
+        trip_currency=trip.currency,
         payer=expense.payer_profile_id,
         method=expense.split_method,
         shares=[Share(p.profile_id, p.value) for p in expense.participants],
@@ -350,21 +348,27 @@ async def update_expense(
         }
     )
     currency, trip_currency = await _check(session, membership, merged)
-    pricing = await price(
-        amount=merged.amount,
-        currency=currency,
-        trip_currency=trip_currency,
-        spent_on=merged.spent_on,
-        manual_rate=data.manual_rate,
-        stored=expense,
-    )
+    # A description-only edit never reprices (the trip's currency may have changed).
+    if data.manual_rate is not None or changes.keys() & {
+        "amount",
+        "currency",
+        "spent_on",
+    }:
+        pricing = await price(
+            amount=merged.amount,
+            currency=currency,
+            trip_currency=trip_currency,
+            spent_on=merged.spent_on,
+            manual_rate=data.manual_rate,
+            stored=expense,
+        )
+        expense.trip_amount = pricing.trip_amount
+        expense.rate = pricing.rate
+        expense.rate_source = pricing.source
+        expense.rate_table = pricing.table
+        expense.rate_date = pricing.rate_date
     for field, value in changes.items():
         setattr(expense, field, value)
-    expense.trip_amount = pricing.trip_amount
-    expense.rate = pricing.rate
-    expense.rate_source = pricing.source
-    expense.rate_table = pricing.table
-    expense.rate_date = pricing.rate_date
     if data.participants is not None:
         await db.replace_shares(session, expense, _rows(participants))
     await session.commit()
