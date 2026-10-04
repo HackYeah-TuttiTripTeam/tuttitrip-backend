@@ -35,6 +35,7 @@ from tuttitrip.trips.photos.logic.rules import (
 )
 from tuttitrip.trips.photos.models import TripPhoto
 from tuttitrip.trips.photos.schemas import PhotoQuery
+from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import member_service, trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
@@ -435,3 +436,24 @@ def test_orphaned_photo_is_deleted_only_by_the_host(
     allowed: bool,  # ruff: ignore[boolean-type-hint-positional-argument]
 ) -> None:
     assert can_delete(role, "auth0|x", None) is allowed
+
+
+def test_account_erasure_unattributes_its_photos(
+    state: State, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mine = state.add_photo("auth0|gone")
+    other = state.add_photo("auth0|ola")
+
+    def detach(_s: object, sub: str) -> int:
+        hit = [p for p in state.photos.values() if p.author_sub == sub]
+        for photo in hit:
+            photo.author_sub = None
+        return len(hit)
+
+    monkeypatch.setattr(
+        photos_db, "detach_author_everywhere", AsyncMock(side_effect=detach)
+    )
+    counts = asyncio.run(photo_service.erase_account(AsyncMock(), "auth0|gone"))
+    assert counts == {"photos_unattributed": 1}
+    assert mine.author_sub is None
+    assert other.author_sub == "auth0|ola"
