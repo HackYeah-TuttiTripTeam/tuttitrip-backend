@@ -1,7 +1,7 @@
 """Trip photos.
 
 Revision ID: 6a471240ae34
-Revises: 243e9787efa9
+Revises: a7bad57ce3b3
 Create Date: 2026-10-04 02:32:04.547246
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "6a471240ae34"
-down_revision: str | None = "243e9787efa9"
+down_revision: str | None = "a7bad57ce3b3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
