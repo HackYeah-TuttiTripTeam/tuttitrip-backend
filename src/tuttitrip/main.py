@@ -27,8 +27,8 @@ from tuttitrip.mcp.api import create_mcp_app
 from tuttitrip.notifications.api import router as notifications_router
 from tuttitrip.notifications.services import notification_service
 from tuttitrip.places.api import router as places_router
-from tuttitrip.places.cities.api import router as city_search_router
 from tuttitrip.places.candidates.api import router as candidates_router
+from tuttitrip.places.cities.api import router as city_search_router
 from tuttitrip.places.takeout.api import router as takeout_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.budget.api import router as budget_router
