@@ -363,6 +363,7 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
     )
     telemetry = PlanTelemetry(
         solver=plan.telemetry.solver,
+        status=plan.telemetry.status,
         steps=plan.telemetry.steps,
         solo_runs=group.solo_runs,
         elapsed_ms=elapsed,
