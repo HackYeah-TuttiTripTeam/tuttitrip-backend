@@ -1,7 +1,7 @@
 """A stored plan version as the response model.
 
 Pure: the columns of a ``plan_versions`` row come in as plain values. Rows
-stored before a key existed (``upgrades``) read with its empty default.
+stored before a key existed (``upgrades``, ``transit``) read with its empty default.
 """
 
 import datetime as dt
@@ -21,9 +21,11 @@ RESULT_KEYS = (
     "verdicts",
     "budget",
     "upgrades",
+    "transit",
+    "transit_tickets",
     "telemetry",
 )
-_OPTIONAL = {"upgrades": []}
+_OPTIONAL: dict[str, Any] = {"upgrades": [], "transit": None, "transit_tickets": []}
 
 
 def stored_plan(  # ruff: ignore[too-many-arguments] the columns of one row

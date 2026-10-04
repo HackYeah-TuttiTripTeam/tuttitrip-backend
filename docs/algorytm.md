@@ -185,6 +185,7 @@ Uruchomienie dema: `py -3 demo.py` w folderze `algorytm\` (zapisuje `wyniki_demo
 - Harmonogram dnia to heurystyka (kolejność wg terminu zamknięcia lub otwarcia) bez macierzy czasów dojazdu; stała przesiadka `transferₚ`.
 - Nocleg: jedna baza na wszystkie noce.
 - Parametry niekalibrowane. Dane w `demo_data.py` są wymyślone, to nie są dane o miejscach w Gdańsku.
+- Rozszerzenia poza v1.0, wyłączone albo osobne od rdzenia (nie zmieniają E0 do E6 ani testów z sekcji 8): noc-atrakcja, czyli inna baza na `N_max` nocy (`max_exceptional_nights`, domyślnie 0, wtedy plan jest jak z jedną bazą); przeplanowanie reszty dnia w deszczu (`replan_*`, `rain_*` w `AlgorithmParams`); bilet rodzinny w cenie wstępu (jeśli tańszy od sumy cen osób, koszt na osobę to cena rodzinna podzielona po równo); bilety komunikacji pokazywane tylko jako informacja (nie wchodzą do `c(P)` ani do budżetu).
 - Poza zakresem tej wersji (pomysły z rekomendacji, które pozostają ważne): deszcz i stabilność planu, MMR / pokrycie w preselekcji, uczenie gustu z powodów odrzuceń, pamięć sprawiedliwości między dniami, mediana ocen bayesowska.
 
 ---

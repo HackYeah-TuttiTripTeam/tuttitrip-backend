@@ -129,7 +129,7 @@ def person_scores(  # ruff: ignore[too-many-arguments] the whole input of E2 and
     *,
     trip: PlanningTrip,
     cost: Decimal,
-    lodging: Sequence[RequirementOutcome] | None,
+    lodging: Sequence[RequirementOutcome] | float | None,
     params: AlgorithmParams = DEFAULT_PARAMS,
 ) -> DomainScores:
     """E2 and E3 for one person and one plan.
@@ -143,8 +143,9 @@ def person_scores(  # ruff: ignore[too-many-arguments] the whole input of E2 and
         utilities: ``u_ip`` of this person by place id.
         trip: Budget, whether there are nights.
         cost: ``c(P)`` of the plan.
-        lodging: The requirements checked against the chosen offer; given
-            exactly when the trip has nights.
+        lodging: The requirements checked against the chosen offer, or the
+            lodging satisfaction ``q`` itself (the mean over nights when the
+            nights use different bases); given exactly when the trip has nights.
         params: Algorithm parameters.
 
     Returns:
@@ -164,6 +165,8 @@ def person_scores(  # ruff: ignore[too-many-arguments] the whole input of E2 and
         ImportanceDomain.PACE: pace_score(days, person),
         ImportanceDomain.COST: cost_score(cost, trip, params),
     }
-    if lodging is not None:
+    if isinstance(lodging, int | float):
+        q[ImportanceDomain.LODGING] = lodging
+    elif lodging is not None:
         q[ImportanceDomain.LODGING] = lodging_score(lodging, params)
     return domain_scores(person, q, has_lodging=trip.has_lodging)
