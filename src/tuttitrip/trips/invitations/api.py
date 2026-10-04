@@ -8,6 +8,10 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 
+from tuttitrip.profiles.services.profile_service import (
+    ProfileClaimedError,
+    ProfileNotFoundError,
+)
 from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import no_store, requires
@@ -25,6 +29,7 @@ from tuttitrip.trips.invitations.schemas import (
 from tuttitrip.trips.invitations.services import invitation_service
 from tuttitrip.trips.invitations.services.invitation_service import (
     InvitationNotFoundError,
+    InvitationProfileMismatchError,
     TooManyInvitationsError,
 )
 
@@ -35,11 +40,38 @@ NO_STORE = {"Cache-Control": "no-store"}
 INVITATION_NOT_FOUND: dict[int | str, dict[str, str]] = {
     404: {"description": "Unknown, expired, revoked or used-up invitation."}
 }
+PROFILE_NOT_FOUND = "Profile not found"
+PROFILE_CLAIMED = "Profile already has an account"
+PROFILE_MISMATCH = "This invitation is for a different profile"
+ACCEPT_ERRORS: dict[int | str, dict[str, str]] = {
+    404: {
+        "description": (
+            "Unknown, expired, revoked or used-up invitation (`Invitation not "
+            "found`), or `profile_id` is not on the invitation's trip "
+            "(`Profile not found`)."
+        )
+    },
+    409: {
+        "description": (
+            "The profile already has an account or another person took it a "
+            "moment ago, or a named invitation is for a different profile. "
+            "Nothing changed: no membership, no use taken."
+        )
+    },
+}
 
 
 @router.post(
     "/trips/{trip_id}/invitations",  # ruff: ignore[fast-api-unused-path-parameter]
     status_code=status.HTTP_201_CREATED,
+    responses={
+        404: {"description": "`profile_id` is not a profile of this trip."},
+        409: {
+            "description": (
+                "20 working invitations already, or `profile_id` has an account."
+            )
+        },
+    },
     dependencies=[requires(Feature.TRIPS_INVITATIONS, Access.WRITE), no_store()],
 )
 async def create_invitation(
@@ -50,8 +82,11 @@ async def create_invitation(
     The response is the only time the token is visible. The frontend builds
     `https://<frontend>/join#t=<token>` (and a QR code from it).
 
+    With `profile_id` the invitation is named: whoever joins with it takes
+    over that profile (without an account) and the link works once.
+
     Args:
-        data: Lifetime and use limit.
+        data: Lifetime, use limit and an optional profile to hand over.
         membership: The caller's (co-host) membership of ``{trip_id}``.
         session: Database session.
 
@@ -65,6 +100,10 @@ async def create_invitation(
             status.HTTP_409_CONFLICT,
             "Too many working invitations (20); revoke one first",
         ) from exc
+    except ProfileNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND) from exc
+    except ProfileClaimedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, PROFILE_CLAIMED) from exc
 
 
 @router.get(
@@ -119,7 +158,10 @@ async def revoke_invitation(
 async def preview_invitation(
     body: InvitationToken, user: CurrentUser, session: SessionDep
 ) -> InvitationPreview:
-    """Show the trip behind an invitation token (name and destination).
+    """Show the trip behind an invitation token and who can be taken over.
+
+    `claimable_profiles` lists the trip's people without an account (id, name,
+    age group, nothing else) so the joining person can point at themselves.
 
     Args:
         body: The token from the link's `#t=` fragment.
@@ -127,7 +169,7 @@ async def preview_invitation(
         session: Database session.
 
     Returns:
-        The trip's name and destination.
+        The trip's name and destination and the claimable profiles.
     """
     try:
         return await invitation_service.preview(session, user.sub, body)
@@ -139,7 +181,7 @@ async def preview_invitation(
 
 @router.post(
     "/invitations/accept",
-    responses=INVITATION_NOT_FOUND,
+    responses=ACCEPT_ERRORS,
     dependencies=[requires(Feature.TRIPS_INVITATIONS, Access.WRITE), no_store()],
 )
 async def accept_invitation(
@@ -147,11 +189,15 @@ async def accept_invitation(
 ) -> JoinResult:
     """Join the trip as a member and get a profile linked to your account.
 
-    Idempotent: if you are on the trip already you get your profile back
-    (`already_member: true`) and the link's use limit is not touched.
+    With `profile_id` you take over an existing profile without an account
+    (membership and profile link in one transaction) instead of getting a new
+    one; a named invitation does that by itself. Idempotent: if you are on the
+    trip already you get your profile back (`already_member: true`) and the
+    link's use limit is not touched.
 
     Args:
-        body: The token and an optional profile name.
+        body: The token, an optional profile name and an optional profile to
+            take over.
         user: The authenticated caller.
         session: Database session.
 
@@ -163,4 +209,16 @@ async def accept_invitation(
     except InvitationNotFoundError as exc:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, NOT_FOUND, headers=NO_STORE
+        ) from exc
+    except ProfileNotFoundError as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND, headers=NO_STORE
+        ) from exc
+    except ProfileClaimedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, PROFILE_CLAIMED, headers=NO_STORE
+        ) from exc
+    except InvitationProfileMismatchError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, PROFILE_MISMATCH, headers=NO_STORE
         ) from exc

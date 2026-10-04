@@ -55,6 +55,7 @@ TUTTITRIP_DATABASE__USER=tuttitrip
 TUTTITRIP_DATABASE__PASSWORD=...
 TUTTITRIP_DATABASE__NAME=<database>
 TUTTITRIP_DBOS__APPLICATION_VERSION=<env>
+TUTTITRIP_DEMO__RESET_SECRET=<generated, same as the worker>
 # + Auth0/CORS settings and every line of ~/tuttitrip/app.env
 ```
 
@@ -65,6 +66,7 @@ TUTTITRIP_ENVIRONMENT=<env>
 DBOS_SYSTEM_DATABASE_URL=postgresql://tuttitrip_worker:...@tuttitrip-postgres:5432/<database>
 TUTTITRIP_WORKER_DATABASE_URL=postgresql://tuttitrip_worker:...@tuttitrip-postgres:5432/<database>
 DBOS__APPVERSION=<env>
+TUTTITRIP_DEMO__RESET_SECRET=<generated, same as the API>
 # + every line of ~/tuttitrip/app.env (shared secrets, e.g. OPENAI_API_KEY)
 ```
 
@@ -88,8 +90,18 @@ starting the container. The next backend deploy starts it (fallback below).
 | Enqueue, status, cancel | backend, through `DBOSClient` only |
 | Executing workflows, writing results, heartbeats | worker |
 
-The backend never executes workflows. The worker never runs DDL and never
-calls the backend over HTTP; it only talks to Postgres.
+The backend never executes workflows. The worker never runs DDL and talks to
+Postgres only, with one exception: the daily demo reset (`reset_demo_account`,
+04:00 Europe/Warsaw) POSTs `/api/v1/internal/demo/reset` to the API container
+on the `tuttitrip` network (`tuttitrip-api[-<env>]:8000`), with the bearer
+secret `TUTTITRIP_DEMO__RESET_SECRET` that the deploy writes into both env
+files (derived per environment: `sha256("<generated>:<env>")`, at least 24
+characters). The worker gets it only after a backend deploy of that env wrote
+`envs/<env>.worker.env`, and env files are read when a container is created, so
+an already running worker must be recreated (a worker deploy, or remove the
+container and redeploy the backend) to pick it up; until then it skips the reset
+(a worker outside `local` fails the scheduled run loudly). The reset logic stays in the backend; the gateway answers 404 for
+`/api/v1/internal/`, so the endpoint is not public.
 
 ### Database access
 
@@ -198,6 +210,12 @@ domain tables such as `embeddings`. The backend reads those.
   reports `contract_version` and `worker_contract_version`. If the backend
   version is outside `[min_contract_version, contract_version]`, `/api/v1/health`
   answers 503 `degraded`.
+- A heartbeat that cannot be read (database error) is logged and answered as
+  503 `degraded` / `database: unavailable`, never as `worker: missing`. The
+  worker beats once right after launch, and `deploy.sh` logs a WARNING and a
+  GitHub `::warning::` annotation (it does not fail the deploy, the worker ships
+  from its own repo) when `/health` does not show `worker: ok` within about two
+  minutes of the ping.
 - Enqueue endpoints answer 503 with a readable message while the worker is
   `missing` or incompatible.
 

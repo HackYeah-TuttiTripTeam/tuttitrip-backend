@@ -15,6 +15,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "TUTTITRIP_"
 ENV_NESTED_DELIMITER = "__"
+MIN_RESET_SECRET_CHARS = 24
 
 
 class DatabaseSettings(BaseModel):
@@ -36,6 +37,33 @@ class Auth0Settings(BaseModel):
     # Namespaced access-token claim with the user's roles, set by the Auth0
     # post-login Action ("admin" for the superadmin allow-list).
     roles_claim: str = "https://tuttitrip.gburek.app/roles"
+    # M2M application with `read:users` on the Management API; empty = the
+    # admin user list answers 503. Set in host env files / CI secrets only.
+    management_client_id: str = ""
+    management_client_secret: SecretStr = SecretStr("")
+
+
+class McpSettings(BaseModel):
+    """The MCP server under ``/api/v1/mcp`` (Auth0 audience = its own URL)."""
+
+    enabled: bool = False
+    # Public URL of the endpoint, without a trailing slash (RFC 8707). It is the
+    # `resource` in the metadata and the Auth0 API identifier (the token
+    # audience), so it must match the Auth0 API of this environment exactly.
+    resource_url: str = "https://tuttitrip-api.gburek.app/api/v1/mcp"
+    # Host names besides the one in `resource_url` accepted in the Host header.
+    allowed_hosts: list[str] = Field(default_factory=list)
+
+    @field_validator("resource_url")
+    @classmethod
+    def _url_without_trailing_slash(cls, value: str) -> str:
+        if not value.startswith(("https://", "http://localhost")):
+            msg = "must be an https:// URL (http only for localhost)"
+            raise ValueError(msg)
+        if value.endswith("/"):
+            msg = "must not end with a slash (it is compared with the token audience)"
+            raise ValueError(msg)
+        return value
 
 
 class LlmSettings(BaseModel):
@@ -100,6 +128,10 @@ class DemoSettings(BaseModel):
     offline_access: bool = False
     # Requests per minute from one IP (all outcomes count).
     rate_limit_per_minute: int = Field(default=10, ge=1)
+    # Shared secret of the internal reset endpoint the worker's daily schedule
+    # calls (the deploy generates it into the API and worker env files).
+    # Empty = that endpoint is off (404).
+    reset_secret: SecretStr = SecretStr("")
 
     @field_validator("token_sha256")
     @classmethod
@@ -107,6 +139,15 @@ class DemoSettings(BaseModel):
         value = value.strip().lower()
         if value and not re.fullmatch(r"[0-9a-f]{64}", value):
             msg = "must be a 64-character hex SHA-256 digest (or empty)"
+            raise ValueError(msg)
+        return value
+
+    @field_validator("reset_secret")
+    @classmethod
+    def _secret_is_empty_or_long(cls, value: SecretStr) -> SecretStr:
+        secret = value.get_secret_value()
+        if secret and len(secret) < MIN_RESET_SECRET_CHARS:
+            msg = f"must be empty or at least {MIN_RESET_SECRET_CHARS} characters"
             raise ValueError(msg)
         return value
 
@@ -151,6 +192,7 @@ class Settings(BaseSettings):
     dbos: DbosSettings = Field(default_factory=DbosSettings)
     jobs: JobsSettings = Field(default_factory=JobsSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
+    mcp: McpSettings = Field(default_factory=McpSettings)
 
     def dbos_system_database_url(self) -> str:
         """DBOS system database URL, defaulting to the app database.

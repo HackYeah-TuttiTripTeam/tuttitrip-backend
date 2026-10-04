@@ -24,9 +24,20 @@ uv run alembic upgrade head               # migrate
 uv run uvicorn tuttitrip.main:app --reload
 docker compose up --build                 # db + migrate + api in containers
 
-# Must all pass before every commit (CI runs the same):
-uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
+# Must all pass before every commit (this is all CI runs: lint, types, unit + architecture tests):
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -m "not integration and not e2e"
+
+# Local only, before the PR is marked ready (CI does not run them; part of the smoke step).
+# Exit code 5 means "no such tests yet" (fine): today every test is a unit test (mocked services, SQL
+# rendered without a DB), so the set is empty.
+uv run pytest -m integration
 ```
+
+Test markers (registered in `pyproject.toml`, strict): `integration` for a test that needs a real
+Postgres, a DBOS runtime or another live service, `e2e` for one against a running stack, the
+network or a real model. Mark such a test at the moment you write it; it then stays off CI and
+runs in the local smoke step. A fast test with fakes, mocked services or a `TestClient` with
+overridden dependencies is a unit test and carries no marker.
 
 ## Layout: vertical slices
 
@@ -50,6 +61,7 @@ src/tuttitrip/
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
+  mcp/                 MCP server at /api/v1/mcp (FastMCP); tools call other domains' services
   places/              city and place catalog; prices and hours carry source + verified mark
 contracts/             jobs.schema.json: rendered job contract (compared with the worker)
 migrations/            Alembic (async); versions/ holds revisions
@@ -111,13 +123,19 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   `/api/v1/openapi.json`, `/api/v1/docs` and `/api/v1/redoc`. Routers in
   `api.py` keep their own short prefix (`/trips`); `create_app()` adds the
   version once. `tests/architecture/test_routes.py` fails on any route outside
-  it (allow-list `ALLOWED_UNVERSIONED`, empty on purpose).
+  it (allow-list `ALLOWED_UNVERSIONED`: only the MCP resource metadata).
 - Route-level tests iterate `fastapi.routing.iter_route_contexts(app.routes)`:
   FastAPI 0.142 includes routers lazily, so `app.routes` alone does not list them.
 - The deployed frontends call the API same-origin through their Worker proxy
   (`https://tuttitrip[-develop].gburek.app/api/...`), so a browser never needs CORS
   there; CORS still matters for direct cross-origin use. It allows no
   credentials (the API takes bearer tokens, never cookies).
+- The one exception is the MCP server (`mcp/api.py`, `Settings.mcp.enabled`):
+  two exact routes added after the routers, `/api/v1/mcp` and the resource
+  metadata `/.well-known/oauth-protected-resource/api/v1/mcp` at the root
+  (RFC 9728). Never mount an app under `/api/v1`: a mount swallows REST 405s and
+  redirects. `test_routes.py` allows only the metadata path and no mounts at
+  all, `test_permissions.py` lists both in `MCP_ROUTES`.
 - Old unversioned paths (`/health`, `/openapi.json`, `/docs`, `/trips`...) answer 404.
 
 ## Lists
@@ -168,6 +186,9 @@ How:
 - Tests never call real LLMs (`models.ALLOW_MODEL_REQUESTS = False` in
   `tests/conftest.py`); use `agent.override(model=TestModel(...))`.
 - Domain tests go in `tests/domains/`, shared infrastructure in `tests/shared/`.
+- Algorithm fixtures (test city, persona families, expected values of
+  `docs/algorytm.md` section 7) live in `tests/fixtures/` (`city`, `personas`,
+  `scenarios`, `expected`); reuse them instead of inventing data per test.
 - Services raise domain exceptions; `api.py` maps them to HTTP errors.
 - Validation errors (422) never echo request values: `shared/errors/api.py`
   strips `input` and `ctx` from every item. This protects secrets in headers
@@ -360,11 +381,23 @@ from tuttitrip.shared.permissions.registry import Access, Feature
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
   `permissions.allows(Feature.X, Access.WRITE)`.
 
+### Narzędzia MCP
+
+Serwer MCP (`mcp/api.py`) ma własne uwierzytelnianie: token Auth0 z audience
+równym `TUTTITRIP_MCP__RESOURCE_URL` (inny niż audience API; ten sam
+`TokenVerifier`, ten sam claim ról). Każde narzędzie ma dokładnie jeden
+`auth=mcp_requires(Feature.X, Access.Y)`, który wymaga `mcp:READ` i `X:Y`
+(granty liczone raz na żądanie z bazy, nigdy z tokenu); narzędzie bez zgody
+znika z `tools/list`. Test przechodzi po `create_mcp(...).local_provider` i
+pilnuje jednego `mcp_requires` na narzędzie. Dostęp do wyjazdu sprawdza
+narzędzie przez `trip_service.get_membership`. Serwera nie uruchamiamy przez
+stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
+
 ### Role
 
 | Rola | Uprawnienia | Uwagi |
 | --- | --- | --- |
-| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `planning.plans`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
+| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `planning.plans`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement`, `mcp` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
 | `superadmin` | `*:WRITE` | Tylko z claimu Auth0 `admin` (lista osób jest w Akcji Auth0). API jej nie przypisze ani nie zmieni, a wiersz w bazie jest ignorowany. Nowe funkcjonalności obejmuje automatycznie (test). |
 | własne | dowolne | `POST /admin/permissions/roles`. |
 
@@ -452,7 +485,16 @@ adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login
   tylko savepointy, więc błąd w połowie cofa wszystko i poprzednie dane zostają.
   Jest idempotentny; `deploy/deploy.sh` uruchamia go po wdrożeniu i włączeniu routingu
   (`timeout 120`, log w `~/tuttitrip/demo-seed-<env>.log`, błąd nie psuje wdrożenia), a
-  codzienny reset robi harmonogram workera (osobne issue).
+  codzienny reset robi harmonogram workera (tuttitrip-worker#37), który woła wewnętrzny
+  `POST /api/v1/internal/demo/reset` z tym samym kodem (`demo/services/reset_service.py`).
+- Endpoint wewnętrzny: `public()` (na liście `PUBLIC_ENDPOINTS` jako `reset_demo`), poza
+  OpenAPI, chroniony sekretem `Authorization: Bearer $TUTTITRIP_DEMO__RESET_SECRET`; zły,
+  brakujący i nieustawiony sekret to to samo `404`. Gdy demo jest wyłączone (pusty
+  `TOKEN_SHA256`), odpowiada dokładnie `{"status": "disabled"}` i niczego nie rusza. Gateway
+  (`deploy/gateway/nginx.conf`) zwraca `404` dla `/api/v1/internal/`, a worker woła
+  kontener API bezpośrednio w sieci Docker (`http://tuttitrip-api[-<env>]:8000`).
+  `deploy.sh` generuje sekret raz (`DEMO_RESET_SECRET` w `~/tuttitrip/deploy.env`) i
+  zapisuje do obu plików env (API i workera) jako `sha256("<sekret>:<env>")`, osobny dla każdego środowiska; wpis w `app.env` ma pierwszeństwo. Sekret ma co najmniej 24 znaki (walidator). Działający worker czyta env przy tworzeniu kontenera, więc po pierwszym wdrożeniu backendu trzeba go odtworzyć.
 - Wszyscy jurorzy dzielą jedno konto: zmiany jednego widzą inni do następnego resetu.
 
 ## Design system
@@ -505,6 +547,10 @@ innym w drogę i żeby każda funkcja przeszła ten sam proces. Dotyczą też lu
    zmienna ma wartość `true`). Użyj etykiety wyłącznie, gdy żywy podgląd jest niezbędny; w pozostałych
    przypadkach smoke test robisz lokalnie, a po merge'u sprawdzasz develop. Pominięty podgląd zostawia
    w podsumowaniu joba jedną linię "Preview disabled (PREVIEW_DEPLOYS=false); add label `preview` to deploy".
+   CI sprawdza tylko lint, typy, testy jednostkowe i architektury (`pytest -m "not integration and not e2e"`).
+   Testy z markerami `integration` i `e2e` nie chodzą na CI, więc przed oznaczeniem PR jako gotowego
+   uruchom lokalnie `uv run pytest` (cały zestaw, albo osobno `uv run pytest -m integration`)
+   i wpisz wynik w komentarzu ze smoke testem.
    Przejdź scenariusz z kryteriów akceptacji issue:
    - lokalnie: lokalny stos (`docker compose`, albo `uv run` na lokalnym PostgreSQL; README), Swagger pod
      `/api/v1/docs`, endpointy z tokenem konta testowego i `/api/v1/health`; po merge'u to samo na API develop,
@@ -560,7 +606,8 @@ Zgłoszenia (issues):
   - [ ] Given gotowy plan, When kliknę "Pobierz PDF", Then dostanę plik z planem dzień po dniu
 
   ### Definition of Done
-  - [ ] CI zielone (lint, typy, testy, testy architektury)
+  - [ ] CI zielone (lint, typy, testy jednostkowe, testy architektury)
+  - [ ] Lokalnie przeszły testy integracyjne i smoke test (`uv run pytest -m integration`)
   - [ ] PR zmergowany do `develop` i sprawdzony na wdrożeniu develop
 
   ### Obszar

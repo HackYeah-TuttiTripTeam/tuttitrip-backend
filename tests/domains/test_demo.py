@@ -6,6 +6,7 @@ import json
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Self
 from unittest.mock import AsyncMock, MagicMock
@@ -21,12 +22,13 @@ from tuttitrip.demo import api as demo_api
 from tuttitrip.demo.api import get_client_factory, get_rate_limiter
 from tuttitrip.demo.logic.dataset import DEMO_TRIPS
 from tuttitrip.demo.logic.rate_limit import RateLimiter
-from tuttitrip.demo.logic.token import token_matches
-from tuttitrip.demo.services import demo_service, seed_command
+from tuttitrip.demo.logic.token import secret_matches, token_matches
+from tuttitrip.demo.services import demo_service, reset_service, seed_command
 from tuttitrip.main import create_app
 from tuttitrip.shared.config.settings import DemoSettings, Settings
 from tuttitrip.trips import db as trips_db
 
+ROOT = Path(__file__).resolve().parents[2]
 TOKEN = "t0ken-for-tests-only-not-a-real-secret"
 ACCOUNT_PASSWORD = "p4ss-for-tests-only"
 SHA = hashlib.sha256(TOKEN.encode()).hexdigest()
@@ -432,3 +434,160 @@ def test_an_enabled_demo_needs_the_whole_account(missing: str) -> None:
 
 def test_the_advisory_lock_key_fits_a_bigint() -> None:
     assert 0 < demo_service.RESET_LOCK_KEY < 2**63
+
+
+# --- internal reset endpoint (the worker's daily schedule) ---------------------
+
+RESET_SECRET = "reset-secret-for-tests-only"
+
+
+@pytest.fixture
+def internal(stub: Auth0Stub, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    settings = Settings(demo=_demo(reset_secret=RESET_SECRET))
+    monkeypatch.setattr(demo_api, "get_settings", lambda: settings)
+    app = create_app()
+    app.dependency_overrides[get_client_factory] = stub.factory
+    return TestClient(app)
+
+
+class ResetSpy:
+    """Replaces the Auth0 sub lookup and the data reset."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.reset = AsyncMock(return_value=len(DEMO_TRIPS))
+        monkeypatch.setattr(
+            reset_service, "demo_sub", AsyncMock(return_value="auth0|demo")
+        )
+        monkeypatch.setattr(reset_service, "get_engine", object)
+        monkeypatch.setattr(demo_service, "run_reset", self.reset)
+
+    @property
+    def subs(self) -> list[str]:
+        return [call.args[1] for call in self.reset.await_args_list]
+
+
+def _reset(client: TestClient, secret: str | None = RESET_SECRET) -> Reply:
+    headers = {} if secret is None else {"Authorization": f"Bearer {secret}"}
+    return client.post(path("reset_demo"), headers=headers)
+
+
+def test_the_internal_reset_runs_the_same_reset_as_the_deploy(
+    internal: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spy = ResetSpy(monkeypatch)
+    response = _reset(internal)
+    assert response.status_code == 200
+    assert response.json() == {"status": "reset", "trips": len(DEMO_TRIPS)}
+    assert response.headers["cache-control"] == "no-store"
+    assert spy.subs == ["auth0|demo"]
+
+
+@pytest.mark.parametrize("secret", [None, "", "wrong", RESET_SECRET + "x"])
+def test_a_wrong_or_missing_secret_is_a_plain_404(
+    internal: TestClient,
+    stub: Auth0Stub,
+    monkeypatch: pytest.MonkeyPatch,
+    secret: str | None,
+) -> None:
+    spy = ResetSpy(monkeypatch)
+    response = _reset(internal, secret)
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not found"}
+    assert response.headers["cache-control"] == "no-store"
+    assert spy.subs == []
+    assert stub.requests == []
+
+
+@pytest.mark.parametrize("scheme", ["Basic", "Token"])
+def test_only_the_bearer_scheme_is_accepted(
+    internal: TestClient, monkeypatch: pytest.MonkeyPatch, scheme: str
+) -> None:
+    spy = ResetSpy(monkeypatch)
+    response = internal.post(
+        path("reset_demo"), headers={"Authorization": f"{scheme} {RESET_SECRET}"}
+    )
+    assert response.status_code == 404
+    assert spy.subs == []
+
+
+def test_without_a_configured_secret_the_endpoint_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(demo=_demo())
+    monkeypatch.setattr(demo_api, "get_settings", lambda: settings)
+    spy = ResetSpy(monkeypatch)
+    web = TestClient(create_app())
+    assert _reset(web, "").status_code == 404
+    assert _reset(web, None).status_code == 404
+    assert _reset(web, "anything").status_code == 404
+    assert spy.subs == []
+
+
+def test_a_switched_off_demo_answers_disabled_and_touches_nothing(
+    stub: Auth0Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(demo=_demo(token_sha256="", reset_secret=RESET_SECRET))
+    monkeypatch.setattr(demo_api, "get_settings", lambda: settings)
+    spy = ResetSpy(monkeypatch)
+    response = _reset(TestClient(create_app()))
+    assert response.status_code == 200
+    assert response.json() == {"status": "disabled"}
+    assert spy.subs == []
+    assert stub.requests == []
+
+
+def test_an_auth0_failure_during_the_reset_is_a_502_without_secrets(
+    internal: TestClient, stub: Auth0Stub, caplog: pytest.LogCaptureFixture
+) -> None:
+    stub.status = 403
+    with caplog.at_level("DEBUG"):
+        response = _reset(internal)
+    assert response.status_code == 502
+    assert "reason=status_403" in caplog.text
+    for secret in (RESET_SECRET, ACCOUNT_PASSWORD, "demo@example.test"):
+        assert secret not in caplog.text + response.text
+
+
+def test_the_internal_reset_is_not_in_the_public_openapi() -> None:
+    assert path("reset_demo") == "/api/v1/internal/demo/reset"
+    assert path("reset_demo") not in create_app().openapi()["paths"]
+
+
+def test_the_gateway_never_forwards_internal_paths() -> None:
+    conf = (ROOT / "deploy/gateway/nginx.conf").read_text()
+    block = "location /api/v1/internal/ { return 404; }"
+    assert block in conf
+    assert conf.index(block) < conf.index("location / {")
+
+
+def test_the_deploy_gives_api_and_worker_the_same_generated_secret() -> None:
+    deploy = (ROOT / "deploy/deploy.sh").read_text()
+    assert "WORKER_DB_PASSWORD DEMO_RESET_SECRET; do" in deploy
+    line = "printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\\n' \"$demo_reset_secret\""
+    assert deploy.count(line) == 2  # the API env file and the worker env file
+
+
+@pytest.mark.parametrize("secret", ["short", "x" * 23])
+def test_a_short_reset_secret_fails_at_startup(secret: str) -> None:
+    with pytest.raises(ValueError, match="at least 24"):
+        _demo(reset_secret=secret)
+
+
+def test_an_empty_or_long_reset_secret_is_accepted() -> None:
+    assert not _demo(reset_secret="").reset_secret.get_secret_value()
+    assert _demo(reset_secret="x" * 24)
+
+
+def test_the_deploy_derives_the_secret_per_environment() -> None:
+    deploy = (ROOT / "deploy/deploy.sh").read_text()
+    assert '\'%s:%s\' "$DEMO_RESET_SECRET" "$env" | sha256sum' in deploy
+    assert (
+        '=%s\\n\' "$DEMO_RESET_SECRET"' not in deploy
+    )  # the raw secret is never written
+
+
+def test_the_secret_comparison_is_exact_and_empty_never_matches() -> None:
+    assert secret_matches("abc", "abc")
+    assert not secret_matches("abd", "abc")
+    assert not secret_matches("", "")
+    assert not secret_matches("x", "")

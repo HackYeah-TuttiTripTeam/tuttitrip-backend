@@ -64,8 +64,10 @@ jobs:
           enable-cache: false
       - name: Install
         run: uv sync --locked
-      - name: Tests (including architecture tests)
-        run: uv run pytest
+      # Unit and architecture tests only. Integration/e2e tests run locally before the PR
+      # (`uv run pytest -m "integration or e2e"`, see AGENTS.md).
+      - name: Tests (unit and architecture)
+        run: uv run pytest -m "not integration and not e2e"
 
   contracts-check:
     if: github.event_name == 'push'

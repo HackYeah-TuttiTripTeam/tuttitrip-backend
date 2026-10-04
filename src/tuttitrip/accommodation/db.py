@@ -10,7 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tuttitrip.accommodation.models import (
     AccommodationRequirement,
     RequirementsVersion,
+    SearchOpening,
 )
+from tuttitrip.accommodation.schemas import OpeningQuery, OpeningSort
+from tuttitrip.shared.db.pagination import ordering, paginate
+from tuttitrip.shared.pagination.schemas import Page
 
 
 async def select_requirements(
@@ -84,3 +88,38 @@ async def bump_version(session: AsyncSession, trip_id: UUID) -> None:
             set_={"version": RequirementsVersion.version + 1},
         )
     )
+
+
+_OPENING_SORT = {OpeningSort.OPENED_AT: SearchOpening.opened_at}
+
+
+async def insert_opening(session: AsyncSession, opening: SearchOpening) -> None:
+    """Append a row to the openings log.
+
+    Args:
+        session: Open session (caller commits).
+        opening: The new row.
+    """
+    session.add(opening)
+    await session.flush()
+    await session.refresh(opening)
+
+
+async def select_openings(
+    session: AsyncSession, trip_id: UUID, query: OpeningQuery
+) -> Page[SearchOpening]:
+    """One page of a trip's openings log.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        query: Page, direction, sort and filters.
+
+    Returns:
+        The page of rows.
+    """
+    stmt = select(SearchOpening).where(SearchOpening.trip_id == trip_id)
+    if query.platform is not None:
+        stmt = stmt.where(SearchOpening.platform == query.platform)
+    order = ordering(_OPENING_SORT, query.sort, SearchOpening.id)
+    return await paginate(session, stmt, query, order)

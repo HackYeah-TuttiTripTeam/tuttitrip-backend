@@ -18,6 +18,17 @@ class AgeGroup(StrEnum):
     SENIOR = "senior"
 
 
+class ClaimableProfile(BaseModel):
+    """A person without an account that an invited account can take over.
+
+    Deliberately minimal: shown to anyone holding a working invitation token.
+    """
+
+    profile_id: UUID
+    display_name: str
+    age_group: AgeGroup
+
+
 class ProfileWeightPreset(StrEnum):
     """Ready-made weight settings."""
 

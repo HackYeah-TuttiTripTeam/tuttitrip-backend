@@ -1,11 +1,18 @@
 """Invitation DTOs."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
+from tuttitrip.profiles.schemas import ClaimableProfile
 from tuttitrip.trips.schemas import TripRole
 
 DEFAULT_TTL_DAYS = 7
@@ -31,8 +38,27 @@ class InvitationCreate(BaseModel):
         default=DEFAULT_MAX_USES,
         ge=1,
         le=MAX_MAX_USES,
-        description="How many people may join with this link.",
+        description=(
+            "How many people may join with this link. A named invitation "
+            "(`profile_id`) always has exactly 1."
+        ),
     )
+    profile_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Makes a named invitation: the person who joins takes over this "
+            "profile. It must be on the trip and have no account (404 / 409)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _named_is_single_use(self) -> Self:
+        if self.profile_id is not None and self.max_uses != 1:
+            if "max_uses" in self.model_fields_set:
+                msg = "A named invitation works once: omit max_uses or send 1"
+                raise ValueError(msg)
+            self.max_uses = 1
+        return self
 
 
 class InvitationRead(BaseModel):
@@ -48,6 +74,9 @@ class InvitationRead(BaseModel):
     max_uses: int
     uses: int
     revoked_at: datetime | None
+    profile_id: UUID | None = Field(
+        description="Profile a named invitation hands over; None for a general link."
+    )
 
 
 class InvitationCreated(InvitationRead):
@@ -75,7 +104,21 @@ class InvitationAccept(InvitationToken):
     display_name: DisplayName | None = Field(
         default=None,
         max_length=100,
-        description=f"Name on the new profile; `{PLACEHOLDER_NAME}` when omitted.",
+        description=(
+            f"Name on the new profile; `{PLACEHOLDER_NAME}` when omitted. "
+            "Not used when a profile is taken over."
+        ),
+    )
+    profile_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Take over this profile (from the preview's `claimable_profiles`) "
+            "instead of creating a new one: your account is linked to it in "
+            "the same transaction as the membership. 404 when it is not on "
+            "the trip, 409 when it has an account, was taken a moment ago, or "
+            "the invitation is named for a different profile. Ignored when "
+            "you already have a profile on the trip."
+        ),
     )
 
 
@@ -85,6 +128,21 @@ class InvitationPreview(BaseModel):
     trip_name: str
     destination: str | None
     already_member: bool = Field(description="The caller is on the trip already.")
+    claimable_profiles: list[ClaimableProfile] = Field(
+        description=(
+            "People on the trip without an account that you may take over: id, "
+            "name and age group only. For a named invitation only its profile. "
+            "Empty when you are on the trip already."
+        )
+    )
+    named_profile_id: UUID | None = Field(
+        description=(
+            "The profile this invitation is made for, or null for an open "
+            "invitation. Set also when that profile is no longer free "
+            "(`claimable_profiles` is then empty) and when you are on the "
+            "trip already."
+        )
+    )
 
 
 class JoinResult(BaseModel):
@@ -95,4 +153,8 @@ class JoinResult(BaseModel):
     role: TripRole
     already_member: bool = Field(
         description="The caller was on the trip; nothing was created."
+    )
+    profile_claimed: bool = Field(
+        default=False,
+        description="An existing profile was taken over by this request.",
     )

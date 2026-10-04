@@ -229,7 +229,11 @@ class PlacePriceRead(BaseModel):
     bounds the defaults apply: child up to 17, senior from 65, family 2+2.
     """
 
-    model_config = ConfigDict(from_attributes=True)
+    # One schema for both directions: the linter takes places in a request body,
+    # and a Decimal would otherwise split it into -Input and -Output.
+    model_config = ConfigDict(
+        from_attributes=True, json_schema_mode_override="serialization"
+    )
 
     ticket_category: TicketCategory
     unit: PriceUnit = Field(description="Charged per person, per night or per group.")

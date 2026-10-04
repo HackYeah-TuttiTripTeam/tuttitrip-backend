@@ -12,6 +12,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "dbos>=3.2.0",
     "fastapi>=0.142.2",
+    "fastmcp-slim[server]>=4.0.10",
     "pgvector>=0.5.0",
     "pydantic>=2.13.5",
     "pydantic-ai>=2.54.0",
@@ -134,6 +135,11 @@ testpaths = ["tests"]
 strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers", "--import-mode=importlib"]
 filterwarnings = ["error"]
+# CI runs `pytest -m "not integration and not e2e"`; the smoke step runs the rest locally.
+markers = [
+    "integration: needs a real Postgres, DBOS runtime or other service; local smoke step, not CI",
+    "e2e: end to end against a running stack, network or real models; local smoke step, not CI",
+]
 
 # --------------------------------------------------------------------------- #
 # Alembic (migrations live in ./migrations; the DB URL comes from Settings)

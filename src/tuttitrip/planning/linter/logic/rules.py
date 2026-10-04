@@ -1,35 +1,71 @@
-"""Lint rules. Each rule takes the request and returns its violations."""
+"""Rule registry and the linter entry point.
 
-from decimal import Decimal
+A rule is one module with ``RULE`` (code, explicit weight, pure check). To add
+one, write the module and list it in ``RULES``; the order here is the order of
+the report.
+"""
 
-from tuttitrip.planning.linter.schemas import LintRequest, Violation
+from tuttitrip.planning.linter.logic import (
+    accessibility,
+    budget,
+    closed_day,
+    distance,
+    opening_hours,
+    pace,
+    rest_window,
+    transfer,
+    unknown_place,
+)
+from tuttitrip.planning.linter.logic.rule import Rule
+from tuttitrip.planning.linter.schemas import (
+    LintContext,
+    LintPlan,
+    LintReport,
+    RuleResult,
+    Severity,
+)
+from tuttitrip.planning.plans.logic.hashing import compute_plan_hash
+
+RULES: tuple[Rule, ...] = (
+    closed_day.RULE,
+    opening_hours.RULE,
+    transfer.RULE,
+    budget.RULE,
+    unknown_place.RULE,
+    distance.RULE,
+    pace.RULE,
+    rest_window.RULE,
+    accessibility.RULE,
+)
 
 
-def budget_rule(request: LintRequest) -> list[Violation]:
-    """Flag plans whose total cost exceeds the budget.
+def lint(plan: LintPlan, context: LintContext) -> LintReport:
+    """Run every rule; each appears in the result, also with zero violations.
 
     Args:
-        request: Plan and budget.
+        plan: The plan.
+        context: Places, zone and budget.
 
     Returns:
-        One violation if over budget, otherwise none.
+        Results in registry order, the weighted score and a digest of them.
     """
-    total = sum((item.cost for item in request.items), Decimal(0))
-    if total <= request.budget:
-        return []
-    return [Violation(rule="budget", message=f"Total {total} exceeds {request.budget}")]
-
-
-RULES = (budget_rule,)
-
-
-def lint(request: LintRequest) -> list[Violation]:
-    """Run every rule.
-
-    Args:
-        request: Plan and budget.
-
-    Returns:
-        All violations, in rule order.
-    """
-    return [violation for rule in RULES for violation in rule(request)]
+    results: list[RuleResult] = []
+    for rule in RULES:
+        findings = rule.check(plan, context)
+        violations = [f for f in findings if f.severity is Severity.VIOLATION]
+        results.append(
+            RuleResult(
+                rule=rule.code,
+                weight=rule.weight,
+                count=len(violations),
+                violations=violations,
+                warnings=[f for f in findings if f.severity is Severity.WARNING],
+            )
+        )
+    digest = compute_plan_hash([r.model_dump(mode="json") for r in results])
+    return LintReport(
+        results=results,
+        count=sum(r.count for r in results),
+        score=sum(r.weight * r.count for r in results),
+        digest=digest,
+    )
