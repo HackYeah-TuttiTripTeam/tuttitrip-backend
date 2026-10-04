@@ -119,6 +119,7 @@ def _stops(
                     kind=PlaceKind.FOOD
                     if place_domain(place) is ImportanceDomain.FOOD
                     else PlaceKind.ATTRACTION,
+                    address=place.address,
                     lat=place.lat,
                     lon=place.lon,
                     start=visit.start.time(),
