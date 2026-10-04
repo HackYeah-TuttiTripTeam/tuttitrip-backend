@@ -60,6 +60,8 @@ def group_objective(  # ruff: ignore[too-many-arguments] the whole input of J
     candidates: Sequence[PlaceRead],
     has_lodging: bool = True,
     requirements: Mapping[UUID, Sequence[TagRequirement]] | None = None,
+    matches: Mapping[UUID, Mapping[UUID, float]] | None = None,
+    presorted: bool = False,
     alpha: float = 1.0,
     params: AlgorithmParams = DEFAULT_PARAMS,
 ) -> GroupObjective:
@@ -73,13 +75,19 @@ def group_objective(  # ruff: ignore[too-many-arguments] the whole input of J
         has_lodging: Whether the lodging domain is active.
         requirements: Tag minima per person id from ``tag_requirements``; the
             solver computes them once, here they are derived when missing.
+        matches: ``m_ip`` by person id and place id, if the caller computed them.
+        presorted: The outcomes are already in person id order (saves the sort).
         alpha: Fairness slider in 0 to 3.
         params: Algorithm parameters (``violation_penalty``).
 
     Returns:
         ``W``, ``V``, ``J`` and the violations per person.
     """
-    ordered = sorted(outcomes, key=lambda o: str(o.person.id))
+    ordered = (
+        list(outcomes)
+        if presorted
+        else sorted(outcomes, key=lambda o: str(o.person.id))
+    )
     alone = len(ordered) == 1  # E4: for n = 1 the floor is 0 (nobody to protect from)
     needs = requirements or {
         o.person.id: tag_requirements(
@@ -97,6 +105,7 @@ def group_objective(  # ruff: ignore[too-many-arguments] the whole input of J
             places=places,
             requirements=needs[o.person.id],
             params=params,
+            matches=None if matches is None else matches[o.person.id],
         )
         for o in ordered
     )

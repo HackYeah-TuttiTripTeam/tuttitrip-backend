@@ -5,8 +5,9 @@ and requires a group of ``n`` identical clones to get "exactly the same plan
 (the same hash)" as one person (section 4, test 5). So the hash covers the plan
 itself and nothing that depends on who or how many take part: the days, the
 visits in time order (then id) with their times rounded to 5 minutes, and the
-number of nights. It does not cover people, scores or amounts (the cost of ``n``
-clones is ``n`` times that of one, and their rows are ``n`` times as many).
+lodging base of each night. It does not cover people, scores or amounts (the
+cost of ``n`` clones is ``n`` times that of one, and their rows are ``n`` times
+as many).
 
 The hash is the first 12 hex characters of the SHA-256 of a canonical JSON with
 sorted keys. Nothing here iterates a set, so it is the same in every process
@@ -33,14 +34,14 @@ def _minutes(moment: datetime, zone: tzinfo) -> int:
 
 def canonical_plan(
     days: Sequence[tuple[date, Sequence[tuple[UUID, datetime, datetime]]]],
-    nights: int,
+    lodging: Sequence[str],
     zone: tzinfo,
 ) -> dict[str, object]:
     """The plan as JSON-ready data in canonical order.
 
     Args:
         days: Per day its date and the visits as ``(place id, start, end)``.
-        nights: Number of nights of the lodging base (0 without one).
+        lodging: The base of each night (place ids as text), empty without nights.
         zone: The city's time zone; times are taken in it, so the hash does not
             depend on the zone the instants happen to be expressed in.
 
@@ -64,24 +65,24 @@ def canonical_plan(
             }
             for day, visits in days
         ],
-        "nights": nights,
+        "lodging": list(lodging),
     }
 
 
 def plan_hash(
     days: Sequence[tuple[date, Sequence[tuple[UUID, datetime, datetime]]]],
-    nights: int,
+    lodging: Sequence[str],
     zone: tzinfo,
 ) -> str:
     """12-character hash of a plan.
 
     Args:
         days: Per day its date and the visits as ``(place id, start, end)``.
-        nights: Number of nights of the lodging base (0 without one).
+        lodging: The base of each night (place ids as text), empty without nights.
         zone: The city's time zone; times are taken in it, so the hash does not
             depend on the zone the instants happen to be expressed in.
 
     Returns:
         The first 12 hex characters of the SHA-256 of the canonical JSON.
     """
-    return compute_plan_hash(canonical_plan(days, nights, zone))
+    return compute_plan_hash(canonical_plan(days, lodging, zone))
