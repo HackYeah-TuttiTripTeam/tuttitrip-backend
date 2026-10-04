@@ -153,6 +153,7 @@ def _expense(payer: uuid.UUID, amount: str, people: tuple[uuid.UUID, ...]) -> Ex
         payer_profile_id=payer,
         amount=Decimal(amount),
         currency="PLN",
+        trip_amount=Decimal(amount),
         description="",
         spent_on=date(2026, 11, 7),
         category=None,

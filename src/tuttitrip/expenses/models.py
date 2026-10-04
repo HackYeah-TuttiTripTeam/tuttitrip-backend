@@ -28,6 +28,8 @@ class Expense(Base):
     __tablename__ = "expenses"
     __table_args__ = (
         CheckConstraint("amount > 0", name="amount_positive"),
+        CheckConstraint("trip_amount > 0", name="trip_amount_positive"),
+        CheckConstraint("rate_source IN ('nbp', 'manual')", name="rate_source"),
         CheckConstraint(_in("split_method", SplitMethod), name="split_method"),
         CheckConstraint(
             _in("category", ExpenseCategory),
@@ -50,6 +52,13 @@ class Expense(Base):
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3))
+    # `amount` converted to the trip's currency (equal to `amount` when the same).
+    trip_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # Set only for a foreign currency; frozen at save (see `rates.py`).
+    rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 8))
+    rate_source: Mapped[str | None] = mapped_column(String(8))
+    rate_table: Mapped[str | None] = mapped_column(String(80))
+    rate_date: Mapped[date | None]
     description: Mapped[str] = mapped_column(String(500), default="")
     spent_on: Mapped[date]
     category: Mapped[ExpenseCategory | None] = mapped_column(String(16))

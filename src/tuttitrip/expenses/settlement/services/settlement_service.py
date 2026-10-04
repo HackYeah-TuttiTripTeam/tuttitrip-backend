@@ -30,7 +30,7 @@ def _money(cents: int) -> Decimal:
 def _spending(expense: Expense) -> Spending:
     return Spending(
         payer=expense.payer_profile_id,
-        cents=to_cents(expense.amount),
+        cents=to_cents(expense.trip_amount),
         method=expense.split_method,
         shares=[Share(s.profile_id, s.value) for s in expense.shares],
     )

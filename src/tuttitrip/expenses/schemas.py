@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum, unique
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -14,6 +14,7 @@ from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 Money = Annotated[Decimal, Field(max_digits=12, decimal_places=2)]
 ShareValue = Annotated[Decimal, Field(max_digits=10, decimal_places=4)]
 Currency = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+Rate = Annotated[Decimal, Field(gt=0, max_digits=18, decimal_places=8)]
 
 
 @unique
@@ -51,7 +52,9 @@ class ExpenseErrorCode(StrEnum):
     NULL_NOT_ALLOWED = "expense.null_not_allowed"
     AMOUNT_NOT_POSITIVE = "expense.amount_not_positive"
     CURRENCY_REQUIRED = "expense.currency_required"
-    CURRENCY_MISMATCH = "expense.currency_mismatch"
+    CURRENCY_UNSUPPORTED = "expense.currency_unsupported"
+    RATE_NOT_FOUND = "expense.rate_not_found"
+    RATE_UNAVAILABLE = "expense.rate_unavailable"
     PAYER_NOT_ON_TRIP = "expense.payer_not_on_trip"
     PARTICIPANTS_REQUIRED = "expense.participants_required"
     PARTICIPANT_NOT_ON_TRIP = "expense.participant_not_on_trip"
@@ -99,7 +102,11 @@ class ExpenseCreate(BaseModel):
     payer_profile_id: UUID
     amount: Money = Field(description="Positive, at most 2 decimal places.")
     currency: Currency | None = Field(
-        default=None, description="The trip's currency (taken from the trip if empty)."
+        default=None,
+        description=(
+            "Currency of `amount` (the trip's if empty). A foreign currency is "
+            "converted at the NBP average rate of `spent_on`."
+        ),
     )
     description: str = Field(default="", max_length=500)
     spent_on: date = Field(description="The day the money was spent.")
@@ -107,6 +114,14 @@ class ExpenseCreate(BaseModel):
     split_method: SplitMethod = SplitMethod.EQUAL
     participants: list[ShareInput] = Field(
         min_length=1, description="Who shares the cost; anyone left out does not pay."
+    )
+    manual_rate: Rate | None = Field(
+        default=None,
+        description=(
+            "Trip-currency units per unit of `currency`. Used instead of the NBP "
+            "rate (source `manual`), e.g. when NBP does not answer (422 "
+            "`expense.rate_unavailable`). Ignored for the trip's own currency."
+        ),
     )
 
 
@@ -125,6 +140,14 @@ class ExpenseUpdate(BaseModel):
     category: ExpenseCategory | None = None
     split_method: SplitMethod | None = None
     participants: list[ShareInput] | None = Field(default=None, min_length=1)
+    manual_rate: Rate | None = Field(
+        default=None,
+        description=(
+            "Trip-currency units per unit of `currency`. Used instead of the NBP "
+            "rate (source `manual`), e.g. when NBP does not answer (422 "
+            "`expense.rate_unavailable`). Ignored for the trip's own currency."
+        ),
+    )
 
     @model_validator(mode="after")
     def _no_null_for_required(self) -> Self:
@@ -157,19 +180,40 @@ class ParticipantRead(BaseModel):
     amount: Decimal = Field(description="Their part of the cost, rounded to cents.")
 
 
+class ExchangeRateRead(BaseModel):
+    """The rate an expense in a foreign currency was converted at (never changes)."""
+
+    rate: Decimal = Field(description="Trip-currency units per unit of `currency`.")
+    source: Literal["nbp", "manual"]
+    table_no: str | None = Field(
+        description="NBP table number(s), e.g. `187/A/NBP/2026`; empty if manual."
+    )
+    effective_date: date | None = Field(
+        description="Day of the NBP quote (may precede `spent_on`); empty if manual."
+    )
+
+
 class ExpenseRead(BaseModel):
     """An expense as returned by the API."""
 
     id: UUID
     trip_id: UUID
     payer_profile_id: UUID
-    amount: Decimal = Field(description="In `currency`.")
+    amount: Decimal = Field(description="In `currency`, as paid.")
     currency: str
+    trip_amount: Decimal = Field(
+        description="`amount` in the trip's currency; settlement uses this."
+    )
+    exchange_rate: ExchangeRateRead | None = Field(
+        description="Set when `currency` differs from the trip's."
+    )
     description: str
     spent_on: date
     category: ExpenseCategory | None
     split_method: SplitMethod
-    participants: list[ParticipantRead]
+    participants: list[ParticipantRead] = Field(
+        description="Their parts are in the trip's currency."
+    )
     created_by_sub: str
     created_at: datetime
 

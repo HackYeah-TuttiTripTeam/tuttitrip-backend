@@ -1,11 +1,14 @@
 """Expenses of a trip: list, add, change and remove."""
 
+from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.expenses import db
+from tuttitrip.expenses.logic.rates import PLN, convert_cents, cross_rate
 from tuttitrip.expenses.logic.split import (
     CENTS,
     Share,
@@ -16,13 +19,16 @@ from tuttitrip.expenses.logic.split import (
 )
 from tuttitrip.expenses.models import Expense, ExpenseShare
 from tuttitrip.expenses.schemas import (
+    ExchangeRateRead,
     ExpenseCreate,
+    ExpenseErrorCode,
     ExpenseQuery,
     ExpenseRead,
     ExpenseUpdate,
     ParticipantRead,
     ShareInput,
 )
+from tuttitrip.expenses.services import nbp_client
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips.schemas import TripMembership, TripRole
@@ -50,9 +56,30 @@ class ExpenseInvalidError(Exception):
         self.violations = violations
 
 
+@dataclass(frozen=True, slots=True)
+class Pricing:
+    """An expense in the trip's currency and the rate that got it there."""
+
+    trip_amount: Decimal
+    rate: Decimal | None = None
+    source: str | None = None
+    table: str | None = None
+    rate_date: date | None = None
+
+
 def _read(expense: Expense) -> ExpenseRead:
     shares = [Share(s.profile_id, s.value) for s in expense.shares]
-    cents = allocate(to_cents(expense.amount), expense.split_method, shares)
+    cents = allocate(to_cents(expense.trip_amount), expense.split_method, shares)
+    rate = (
+        ExchangeRateRead(
+            rate=expense.rate,
+            source=expense.rate_source,  # ty: ignore[invalid-argument-type] CHECKed
+            table_no=expense.rate_table,
+            effective_date=expense.rate_date,
+        )
+        if expense.rate is not None
+        else None
+    )
     participants = [
         ParticipantRead(
             profile_id=s.profile_id,
@@ -67,6 +94,8 @@ def _read(expense: Expense) -> ExpenseRead:
         payer_profile_id=expense.payer_profile_id,
         amount=expense.amount,
         currency=expense.currency,
+        trip_amount=expense.trip_amount,
+        exchange_rate=rate,
         description=expense.description,
         spent_on=expense.spent_on,
         category=expense.category,
@@ -82,16 +111,12 @@ def _rows(participants: list[ShareInput]) -> list[ExpenseShare]:
 
 
 async def _check(
-    session: AsyncSession,
-    membership: TripMembership,
-    expense: ExpenseCreate,
-    *,
-    check_currency: bool = True,
-) -> str:
+    session: AsyncSession, membership: TripMembership, expense: ExpenseCreate
+) -> tuple[str, str | None]:
     """Check the expense against the trip.
 
     Returns:
-        The currency the expense is stored in.
+        The currency the expense is stored in and the trip's currency.
 
     Raises:
         ExpenseInvalidError: A rule is broken.
@@ -111,7 +136,78 @@ async def _check(
     )
     if violations:
         raise ExpenseInvalidError(violations)
-    return expense.currency or str(trip.currency)
+    return expense.currency or str(trip.currency), trip.currency
+
+
+def _rate_error(code: ExpenseErrorCode, message: str) -> ExpenseInvalidError:
+    return ExpenseInvalidError([Violation(code, "manual_rate", message)])
+
+
+async def price(  # ruff: ignore[too-many-arguments] one conversion, explicit inputs
+    *,
+    amount: Decimal,
+    currency: str,
+    trip_currency: str | None,
+    spent_on: date,
+    manual_rate: Decimal | None,
+    stored: Expense | None = None,
+) -> Pricing:
+    """Convert to the trip's currency: manual rate, stored rate or NBP.
+
+    A rate stored on the expense is reused unless the day or the currency
+    changed or a manual rate is sent, so editing a description never moves it.
+
+    Args:
+        amount: The cost in ``currency``.
+        currency: Currency of the expense.
+        trip_currency: The trip's currency, if it has one.
+        spent_on: The day of the expense.
+        manual_rate: A rate the caller supplies, if any.
+        stored: The expense being changed, if any.
+
+    Returns:
+        The trip-currency amount and the rate used.
+
+    Raises:
+        ExpenseInvalidError: NBP has no rate or does not answer.
+    """
+    if trip_currency in {None, currency}:
+        return Pricing(amount)
+    if (
+        stored is not None
+        and stored.rate is not None
+        and manual_rate is None
+        and (stored.currency, stored.spent_on) == (currency, spent_on)
+    ):
+        return Pricing(
+            Decimal(convert_cents(to_cents(amount), stored.rate)) / CENTS,
+            stored.rate,
+            stored.rate_source,
+            stored.rate_table,
+            stored.rate_date,
+        )
+    if manual_rate is not None:
+        rate, source, table, day = manual_rate, "manual", None, None
+    else:
+        try:
+            client = nbp_client.get_client()
+            foreign = await client.quote(currency, spent_on)
+            base = await client.quote(trip_currency or PLN, spent_on)
+        except nbp_client.RateNotFoundError as exc:
+            raise _rate_error(
+                ExpenseErrorCode.RATE_NOT_FOUND,
+                "NBP publishes no rate for this currency; send manual_rate",
+            ) from exc
+        except nbp_client.RateUnavailableError as exc:
+            raise _rate_error(
+                ExpenseErrorCode.RATE_UNAVAILABLE,
+                "The NBP rate is unavailable; send manual_rate",
+            ) from exc
+        rate = cross_rate(foreign.mid, base.mid)
+        tables = [q.table_no for q in (foreign, base) if q.table_no]
+        source, table, day = "nbp", ", ".join(tables) or None, foreign.effective_date
+    cents = convert_cents(to_cents(amount), rate)
+    return Pricing(Decimal(cents) / CENTS, rate, source, table, day)
 
 
 async def list_expenses(
@@ -153,12 +249,24 @@ async def create_expense(
     Raises:
         ExpenseInvalidError: A rule is broken.
     """
-    currency = await _check(session, membership, data)
+    currency, trip_currency = await _check(session, membership, data)
+    pricing = await price(
+        amount=data.amount,
+        currency=currency,
+        trip_currency=trip_currency,
+        spent_on=data.spent_on,
+        manual_rate=data.manual_rate,
+    )
     expense = Expense(
         trip_id=membership.trip_id,
         payer_profile_id=data.payer_profile_id,
         amount=data.amount,
         currency=currency,
+        trip_amount=pricing.trip_amount,
+        rate=pricing.rate,
+        rate_source=pricing.source,
+        rate_table=pricing.table,
+        rate_date=pricing.rate_date,
         description=data.description,
         spent_on=data.spent_on,
         category=data.category,
@@ -213,7 +321,9 @@ async def update_expense(
     """
     expense = await _get(session, membership, expense_id)
     _require_author_or_host(membership, expense)
-    changes = data.model_dump(exclude_unset=True, exclude={"participants"})
+    changes = data.model_dump(
+        exclude_unset=True, exclude={"participants", "manual_rate"}
+    )
     participants = (
         data.participants
         if data.participants is not None
@@ -232,16 +342,25 @@ async def update_expense(
             "split_method": expense.split_method,
             **changes,
             "participants": participants,
+            "manual_rate": data.manual_rate,
         }
     )
-    await _check(
-        session,
-        membership,
-        merged,
-        check_currency="currency" in changes or "amount" in changes,
+    currency, trip_currency = await _check(session, membership, merged)
+    pricing = await price(
+        amount=merged.amount,
+        currency=currency,
+        trip_currency=trip_currency,
+        spent_on=merged.spent_on,
+        manual_rate=data.manual_rate,
+        stored=expense,
     )
     for field, value in changes.items():
         setattr(expense, field, value)
+    expense.trip_amount = pricing.trip_amount
+    expense.rate = pricing.rate
+    expense.rate_source = pricing.source
+    expense.rate_table = pricing.table
+    expense.rate_date = pricing.rate_date
     if data.participants is not None:
         await db.replace_shares(session, expense, _rows(participants))
     await session.commit()

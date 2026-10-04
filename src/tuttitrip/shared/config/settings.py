@@ -124,6 +124,13 @@ class JobsSettings(BaseModel):
     worker_missing_after_seconds: int = Field(default=600, ge=1)
 
 
+class NbpSettings(BaseModel):
+    """National Bank of Poland exchange-rate API (average rates, tables A and B)."""
+
+    base_url: str = "https://api.nbp.pl/api"
+    timeout_seconds: float = Field(default=5.0, gt=0)
+
+
 class DemoSettings(BaseModel):
     """One-link jury login onto a regular demo account (``POST /auth/demo``).
 
@@ -222,6 +229,7 @@ class Settings(BaseSettings):
     llm: LlmSettings = Field(default_factory=LlmSettings)
     dbos: DbosSettings = Field(default_factory=DbosSettings)
     jobs: JobsSettings = Field(default_factory=JobsSettings)
+    nbp: NbpSettings = Field(default_factory=NbpSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
 

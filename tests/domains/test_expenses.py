@@ -113,7 +113,8 @@ def test_people_must_be_on_the_trip_and_listed_once() -> None:
     ("amount", "currency", "trip_currency", "codes"),
     [
         ("0", "PLN", "PLN", [ExpenseErrorCode.AMOUNT_NOT_POSITIVE]),
-        ("10", "EUR", "PLN", [ExpenseErrorCode.CURRENCY_MISMATCH]),
+        ("10", "EUR", "PLN", []),
+        ("10", "JPY", "PLN", [ExpenseErrorCode.CURRENCY_UNSUPPORTED]),
         ("10", None, None, [ExpenseErrorCode.CURRENCY_REQUIRED]),
         ("10", "EUR", None, []),
         ("10", None, "PLN", []),
@@ -192,6 +193,7 @@ def _expense() -> Expense:
         payer_profile_id=KASIA,
         amount=Decimal("142.00"),
         currency="PLN",
+        trip_amount=Decimal("142.00"),
         description="Kolacja",
         spent_on=date(2026, 11, 7),
         category=None,
