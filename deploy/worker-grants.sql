@@ -10,6 +10,7 @@ GRANT USAGE ON SCHEMA public TO tuttitrip_worker;
 -- Read-only: domain data the workflows need as input.
 GRANT SELECT
     ON public.trips, public.profiles, public.pasted_documents, public.expense_evidence,
+       public.plan_versions,
        public.places, public.cities, public.place_prices, public.transit_fares
     TO tuttitrip_worker;
 

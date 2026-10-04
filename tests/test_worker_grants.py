@@ -72,6 +72,11 @@ def test_worker_reads_pasted_texts_and_the_catalog() -> None:
     } <= _granted("SELECT")
 
 
+def test_worker_reads_plan_versions_for_justifications() -> None:
+    assert "plan_versions" in _granted("SELECT")
+    assert "plan_versions" not in _granted("SELECT, INSERT, UPDATE, DELETE")
+
+
 def test_catalog_import_may_insert_but_never_delete() -> None:
     assert _granted("INSERT") == {"places", "cities", "place_prices"}
     assert not {"places", "cities", "pasted_documents"} & _granted(

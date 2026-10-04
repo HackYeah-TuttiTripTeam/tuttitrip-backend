@@ -241,6 +241,36 @@ def test_person_without_limits_is_never_flagged_on_access() -> None:
     )
 
 
+def test_unknown_stairs_are_a_warning_for_a_stairs_sensitive_person() -> None:
+    unknown = place(1).model_copy(update={"stairs": None, "wheelchair": None})
+    items = [stop(unknown, "10:00", "11:00")]
+    found = run(
+        accessibility.check, items, [unknown], people=[person(stairs_sensitivity=0.3)]
+    )
+    assert kinds(found) == [Severity.WARNING]
+    assert "unknown stairs" in found[0].message
+    # Not "no stairs": zero sensitivity or confirmed step-free access say nothing.
+    assert not run(accessibility.check, items, [unknown], people=[person()])
+    ramp = unknown.model_copy(update={"wheelchair": True})
+    assert not run(
+        accessibility.check, items, [ramp], people=[person(stairs_sensitivity=1.0)]
+    )
+
+
+def test_unknown_stairs_for_a_wheelchair_user_without_confirmation_is_a_violation() -> (
+    None
+):
+    unknown = place(1).model_copy(update={"stairs": None, "wheelchair": None})
+    found = run(
+        accessibility.check,
+        [stop(unknown, "10:00", "11:00")],
+        [unknown],
+        people=[person(wheelchair=True)],
+    )
+    assert kinds(found) == [Severity.VIOLATION]
+    assert "unknown stairs" in found[0].message
+
+
 def test_lint_reports_all_four_rules_and_scores_violations() -> None:
     far = place(1, km=3.0)
     plan = LintPlan(days=[LintDay(day=DAY, items=[stop(far, "10:00", "11:00")])])

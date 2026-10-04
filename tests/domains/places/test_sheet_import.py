@@ -166,6 +166,23 @@ async def test_importing_twice_changes_nothing(tmp_path: Path) -> None:
 
 
 @integration
+async def test_an_empty_stairs_cell_is_unknown_not_zero(tmp_path: Path) -> None:
+    rows = city_rows()
+    rows["miejsca"][1]["schody"] = 0.0  # a confirmed "no stairs"
+    rows["miejsca"][0]["schody"] = 0.4
+    async with database() as maker:
+        await load(workbook(tmp_path, rows), maker)
+        async with maker() as session:
+            found = await session.execute(
+                select(Place.source_key, Place.stairs).where(Place.city_slug == CITY)
+            )
+        stairs = dict(found.all())
+    assert stairs[f"{CITY}:a"] == pytest.approx(0.4)
+    assert stairs[f"{CITY}:b"] == pytest.approx(0)
+    assert stairs[f"{CITY}:h"] is None  # lodging row: the sheet leaves it empty
+
+
+@integration
 async def test_a_corrected_sheet_updates_rows_and_drops_removed_prices(
     tmp_path: Path,
 ) -> None:

@@ -196,7 +196,7 @@ class Place(Base):
     segment_km: Mapped[float] = mapped_column(default=0.0, server_default=text("0"))
     transfer_min: Mapped[int] = mapped_column(default=0, server_default=text("0"))
     queue_min: Mapped[int] = mapped_column(default=0, server_default=text("0"))
-    stairs: Mapped[float] = mapped_column(default=0.0, server_default=text("0"))
+    stairs: Mapped[float | None]  # NULL = unknown, which is not "no stairs"
     wheelchair: Mapped[bool | None]
     indoor: Mapped[bool | None]  # NULL = unknown, which is not "outdoors"
     iconic: Mapped[bool] = mapped_column(default=False, server_default=text("false"))

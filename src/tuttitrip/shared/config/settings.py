@@ -145,6 +145,15 @@ class InterviewSettings(BaseModel):
             "most (once per turn); past it the fixed question order is used."
         ),
     )
+    card_nudges: int = Field(
+        default=1,
+        ge=0,
+        description=(
+            "How often a text turn sends the assistant back to put the next "
+            "question on a card when it only typed it (0: never). Each costs a "
+            "model call."
+        ),
+    )
     voice_model: str = Field(
         default="openai:gpt-realtime-2.1-mini",
         description="Pydantic AI realtime model of the voice interview.",
@@ -294,6 +303,21 @@ class DemoSettings(BaseModel):
         return self
 
 
+class SampleTripSettings(BaseModel):
+    """The sample trip every new account gets with its first trip list.
+
+    The trip ("Przykład: ...") is copied once per account, with a computed plan,
+    ratings, an expense and a notification, so a new user sees what the app does.
+    The jury accounts get it from the demo reset.
+    """
+
+    # false = nobody gets the sample trip (accounts that already have it keep it).
+    enabled: bool = True
+    # Catalog city of the sample trip; if it has no places yet, nobody gets the
+    # trip until it has (a missing city never breaks the trip list).
+    city_slug: str = "warszawa"
+
+
 class PlanningSettings(BaseModel):
     """Which solver computes the plans (docs/algorytm.md, section 9)."""
 
@@ -380,6 +404,7 @@ class Settings(BaseSettings):
     nbp: NbpSettings = Field(default_factory=NbpSettings)
     expenses: ExpensesSettings = Field(default_factory=ExpensesSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
+    sample_trip: SampleTripSettings = Field(default_factory=SampleTripSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
     photos: PhotoSettings = Field(default_factory=PhotoSettings)
     locations: LocationSettings = Field(default_factory=LocationSettings)

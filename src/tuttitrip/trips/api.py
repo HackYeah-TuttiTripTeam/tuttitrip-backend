@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
+from tuttitrip.demo.services import sample_trip_service
 from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.pagination.schemas import Page
@@ -95,7 +96,10 @@ INVALID_TRIP: dict[int | str, dict[str, Any]] = {
 
 @router.get("", dependencies=[requires(Feature.TRIPS_CORE, Access.READ)])
 async def list_trips(
-    query: Annotated[TripListQuery, Query()], user: CurrentUser, session: SessionDep
+    query: Annotated[TripListQuery, Query()],
+    user: CurrentUser,
+    session: SessionDep,
+    accept_language: Annotated[str | None, Header()] = None,
 ) -> Page[TripRead]:
     """List a page of the caller's trips, with their role on each.
 
@@ -108,14 +112,20 @@ async def list_trips(
     the trips still ahead (or without dates). `status=pending` finds the trips
     the caller was added to and has not confirmed yet.
 
+    The first call of a new account also creates its sample trip ("Przykład: ...",
+    `is_sample`), in Polish or English by `Accept-Language`; it comes back in this
+    very list, the host can delete it and it is never created twice.
+
     Args:
         query: Paging, sort and filters.
         user: The authenticated caller.
         session: Database session.
+        accept_language: Language of the sample trip for a new account.
 
     Returns:
         The page of trips.
     """
+    await sample_trip_service.ensure_sample_trip(session, user.sub, accept_language)
     return await trip_service.list_trips(session, user.sub, query)
 
 

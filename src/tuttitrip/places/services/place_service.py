@@ -7,11 +7,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.places import db
 from tuttitrip.places.cities.logic.resolve import city_slug_for
-from tuttitrip.places.schemas import CityRead, PlaceCategory, PlaceRead
+from tuttitrip.places.schemas import CityRead, PlaceCategory, PlaceRead, TransitFareRead
 
 
 class PlaceNotFoundError(Exception):
     """The place does not exist."""
+
+
+ALL_PLACES_PAGE = 200
 
 
 async def list_cities(session: AsyncSession) -> list[CityRead]:
@@ -35,7 +38,7 @@ async def find_city_slug(session: AsyncSession, destination: str) -> str | None:
         destination: E.g. ``"Kraków"``; case and diacritics do not matter.
 
     Returns:
-        The slug (``"krakow"``), the catalog city's or ``slugify(destination)``; None for no letters.
+        The catalog city's slug or ``slugify(destination)``; None for no letters.
     """
     cities = await db.select_cities(session)
     return city_slug_for(destination, ((c.slug, c.name) for c in cities))
@@ -71,6 +74,26 @@ async def list_places(
     return [PlaceRead.model_validate(place) for place in places]
 
 
+async def list_all_places(session: AsyncSession, city_slug: str) -> list[PlaceRead]:
+    """Every catalog place of a city, read page by page.
+
+    Args:
+        session: Open session.
+        city_slug: City slug.
+
+    Returns:
+        The places ordered by name; empty for an unknown city.
+    """
+    found: list[PlaceRead] = []
+    while page := await list_places(
+        session, city_slug, None, limit=ALL_PLACES_PAGE, offset=len(found)
+    ):
+        found.extend(page)
+        if len(page) < ALL_PLACES_PAGE:
+            break
+    return found
+
+
 async def get_place(session: AsyncSession, place_id: UUID) -> PlaceRead:
     """Fetch one place.
 
@@ -104,3 +127,19 @@ async def get_places(
     """
     places = await db.select_places_by_ids(session, set(place_ids))
     return {place.id: PlaceRead.model_validate(place) for place in places}
+
+
+async def list_fares(session: AsyncSession, city_slug: str) -> list[TransitFareRead]:
+    """Public transport fares of a city.
+
+    Args:
+        session: Open session.
+        city_slug: City slug.
+
+    Returns:
+        The fares; empty for a city without a tariff in the sheet.
+    """
+    return [
+        TransitFareRead.model_validate(fare)
+        for fare in await db.select_fares(session, city_slug)
+    ]

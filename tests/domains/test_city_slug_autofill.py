@@ -40,6 +40,7 @@ def _stored(destination: str | None, city_slug: str | None) -> SimpleNamespace:
         destination=destination,
         city_slug=city_slug,
         created_at=datetime.now(UTC),
+        is_sample=False,
     )
 
 

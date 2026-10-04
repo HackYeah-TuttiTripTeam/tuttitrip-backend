@@ -1,0 +1,1 @@
+"""Candidate fetch services."""

@@ -69,7 +69,7 @@ def test_an_empty_trip_starts_with_the_destination() -> None:
     assert question is not None
     assert (question.field, question.card_kind) == (
         QuestionField.DESTINATION,
-        CardKind.CHOICE,
+        CardKind.CITY,
     )
     assert question.person_id is None
 
@@ -133,8 +133,8 @@ def test_person_questions_walk_the_table_once_each() -> None:
     assert next_question.next_question(panel, asked) is None
 
 
-def test_each_card_kind_of_the_table_is_one_of_the_eight() -> None:
-    assert len(CardKind) == 8
+def test_each_card_kind_of_the_table_is_one_of_the_ten() -> None:
+    assert len(CardKind) == 10  # eight of plan.md, the city and the date range
     assert set(constants.CARD_OF_FIELD.values()) <= set(CardKind)
     assert set(constants.CARD_OF_FIELD) == set(QuestionField)
 

@@ -12,6 +12,7 @@ from sqlalchemy.dialects import postgresql
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
+from tuttitrip.demo.services import sample_trip_service
 from tuttitrip.main import create_app
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
@@ -319,6 +320,9 @@ def _post_client(
     host = AsyncMock()
     monkeypatch.setattr(trip_service.db, "insert_trip", insert)
     monkeypatch.setattr(profile_service, "create_host_profile", host)
+    monkeypatch.setattr(
+        trip_service.place_service, "find_city_slug", AsyncMock(return_value=None)
+    )
     app = create_app()
     authorize(app, BOB)
     app.dependency_overrides[get_session] = lambda: session
@@ -457,6 +461,7 @@ def test_openapi_lists_the_trip_error_codes() -> None:
 def list_client(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, AsyncMock]:
     listing = AsyncMock(return_value=Page[TripRead].of([], 0, PageParams()))
     monkeypatch.setattr(trip_service, "list_trips", listing)
+    monkeypatch.setattr(sample_trip_service, "ensure_sample_trip", AsyncMock())
     app = create_app()
     authorize(app, BOB)
     app.dependency_overrides[get_session] = lambda: None

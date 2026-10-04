@@ -104,6 +104,24 @@ async def select_place(session: AsyncSession, place_id: UUID) -> Place | None:
     )
 
 
+async def select_fares(session: AsyncSession, city_slug: str) -> Sequence[TransitFare]:
+    """Transit fares of a city in a stable order.
+
+    Args:
+        session: Open session.
+        city_slug: City slug.
+
+    Returns:
+        The fares by ticket type and passenger category.
+    """
+    result = await session.scalars(
+        select(TransitFare)
+        .where(TransitFare.city_slug == city_slug)
+        .order_by(TransitFare.ticket_type, TransitFare.person_category)
+    )
+    return result.all()
+
+
 async def select_places_by_ids(
     session: AsyncSession, place_ids: Collection[UUID]
 ) -> Sequence[Place]:
@@ -164,9 +182,8 @@ def _place_row(place: PlaceValues) -> dict[str, object]:
     row["tags"] = list(place.tags)
     row["diet_tags"] = list(place.diet_tags)
     row["amenities"] = list(place.amenities)
-    # Empty cells fall back to the column defaults (a NULL would be rejected).
+    # Empty visit length falls back to the column default; stairs stay NULL (unknown).
     row["typical_visit_min"] = place.typical_visit_min or _DEFAULT_VISIT_MIN
-    row["stairs"] = place.stairs or 0.0
     return {**row, "source": _SHEET, "source_key": place.source_key}
 
 
@@ -379,3 +396,33 @@ async def count_orphan_sheet_places(
         Place.source == _SHEET, Place.source_key.not_in(keys)
     )
     return await session.scalar(query) or 0
+
+
+async def count_places(session: AsyncSession, city_slug: str) -> int:
+    """Number of catalog places of a city.
+
+    Args:
+        session: Open session.
+        city_slug: City slug.
+
+    Returns:
+        The count (0 for an unknown city).
+    """
+    return (
+        await session.scalar(
+            select(func.count()).select_from(Place).where(Place.city_slug == city_slug)
+        )
+    ) or 0
+
+
+async def city_exists(session: AsyncSession, slug: str) -> bool:
+    """Whether the catalog lists the city.
+
+    Args:
+        session: Open session.
+        slug: City slug.
+
+    Returns:
+        True when a ``cities`` row has this slug.
+    """
+    return await session.get(City, slug) is not None

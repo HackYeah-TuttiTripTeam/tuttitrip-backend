@@ -99,7 +99,8 @@ def effort(
         patience counts any queue as the full burden.
     """
     distance = min(1.0, place.segment_km / person.segment_km)
-    stairs = place.stairs * person.stairs_sensitivity
+    # Unknown stairs add no burden here (E0 already screens the strict cases).
+    stairs = (place.stairs or 0.0) * person.stairs_sensitivity
     if person.queue_patience_min > 0:
         queue = min(1.0, place.queue_min / person.queue_patience_min)
     else:

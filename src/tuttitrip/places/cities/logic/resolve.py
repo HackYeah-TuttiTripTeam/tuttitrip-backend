@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 
-from tuttitrip.places.cities.logic.slug import slugify
+from tuttitrip.places.candidates.logic.slug import slugify
 
 MAX_SLUG_LENGTH = 64  # the trip's `city_slug` limit
 
