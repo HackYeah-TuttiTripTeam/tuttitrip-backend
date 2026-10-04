@@ -151,6 +151,7 @@ def test_clones_with_a_proportional_budget_equal_solo() -> None:
     )
     group = plan_group(single.model_copy(update={"people": clones, "trip": trip}))
     assert schedule_of(group.plan) == schedule_of(alone.plan)
+    assert group.plan.plan_hash == alone.plan.plan_hash
     assert {round(r.u, 4) for r in group.people} == {round(alone.people[0].u, 4)}
 
 
