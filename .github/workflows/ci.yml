@@ -26,10 +26,13 @@ permissions:
 # uv keeps its package cache in ~/.cache/uv, which stays on the self-hosted
 # runners between runs, so the GitHub cache upload/download step is off.
 
+# CI_SKIP_CHECKS (org variable): 'true' skips lint, tests and contract checks everywhere
+# except main, so the self-hosted runners only build and deploy. Temporary, for the
+# hackathon finish; set it back to 'false' (or delete it) to restore full CI.
 jobs:
   lint:
     name: lint
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (vars.CI_SKIP_CHECKS != 'true' || github.ref == 'refs/heads/main')
     runs-on: [self-hosted, hackathon]
     timeout-minutes: 10
     concurrency:
@@ -51,7 +54,7 @@ jobs:
 
   tests:
     name: tests
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (vars.CI_SKIP_CHECKS != 'true' || github.ref == 'refs/heads/main')
     runs-on: [self-hosted, hackathon]
     timeout-minutes: 15
     concurrency:
@@ -70,7 +73,7 @@ jobs:
         run: uv run pytest -m "not integration and not e2e"
 
   contracts-check:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (vars.CI_SKIP_CHECKS != 'true' || github.ref == 'refs/heads/main')
     name: contracts-check
     runs-on: [self-hosted, hackathon]
     timeout-minutes: 5
@@ -164,7 +167,9 @@ jobs:
   deploy:
     name: deploy
     needs: [lint, tests]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
+    if: >-
+      always() && !cancelled() && !contains(needs.*.result, 'failure') &&
+      github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
     runs-on: [self-hosted, tuttitrip-deploy]
     timeout-minutes: 20
     concurrency:
