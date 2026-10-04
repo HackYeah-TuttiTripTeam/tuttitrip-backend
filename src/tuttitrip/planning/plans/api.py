@@ -3,9 +3,12 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 
 from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
 from tuttitrip.planning.plans.schemas import (
+    NotApprovedDetail,
+    NotApprovedError,
     PlanCreate,
     PlanRead,
     ReplanRead,
@@ -14,6 +17,7 @@ from tuttitrip.planning.plans.schemas import (
 from tuttitrip.planning.plans.services import plan_service, replan_service
 from tuttitrip.planning.plans.services.plan_service import (
     PlanInputError,
+    PlanNotApprovedError,
     PlanNotFoundError,
 )
 from tuttitrip.shared.db.api import SessionDep
@@ -159,6 +163,59 @@ async def get_plan(
         return await plan_service.get_plan(session, membership, plan_id)
     except PlanNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
+
+
+@router.get(
+    "/{plan_id}/calendar.ics",
+    summary="Approved plan as an iCalendar file",
+    description=(
+        "One event per stop, in the local time of the city (`TZID` and "
+        "`VTIMEZONE`). Only a version that every member with an account "
+        "approved (`PUT .../proposals/{id}/response`) can be exported. The same "
+        "version gives the same bytes: `UID` is a UUIDv5 of the version and the "
+        "stop, `DTSTAMP` the time the version was stored and `SEQUENCE` its "
+        "number. The file does not sync; download a new one after the plan "
+        "changes."
+    ),
+    response_class=Response,
+    responses={
+        200: {"content": {"text/calendar": {}}, "description": "The .ics file."},
+        404: {"description": "Plan, trip not found or caller not on it."},
+        409: {
+            "model": NotApprovedError,
+            "description": "The version has no approved proposal.",
+        },
+    },
+    dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
+)
+async def get_plan_calendar(
+    session: SessionDep, membership: TripMember, plan_id: UUID
+) -> Response:
+    """The approved version as an ``.ics`` file.
+
+    Args:
+        session: Database session.
+        membership: The caller's membership of ``{trip_id}``.
+        plan_id: Version id.
+
+    Returns:
+        The file as an attachment, or a 409 body when it is not approved.
+
+    Raises:
+        HTTPException: 404 when the trip has no such version.
+    """
+    try:
+        file = await plan_service.export_calendar(session, membership, plan_id)
+    except PlanNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
+    except PlanNotApprovedError as exc:
+        body = NotApprovedError(detail=NotApprovedDetail(message=str(exc)))
+        return JSONResponse(body.model_dump(mode="json"), status.HTTP_409_CONFLICT)
+    return Response(
+        file.content,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{file.filename}"'},
+    )
 
 
 @router.post(

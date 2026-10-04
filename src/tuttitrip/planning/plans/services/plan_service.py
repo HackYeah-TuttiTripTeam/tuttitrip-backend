@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from functools import partial
+from typing import Any
 from uuid import UUID
 
 import anyio.to_thread
@@ -19,11 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tuttitrip.accommodation.services import requirements_service
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.places.services import place_service
+from tuttitrip.planning.budget_approvals.services import approval_service
 from tuttitrip.planning.logic import what_if
 from tuttitrip.planning.logic.budget_consent import plan_with_consent
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
+from tuttitrip.planning.logic.upgrades import find_upgrades
 from tuttitrip.planning.overrides import db as overrides_db
 from tuttitrip.planning.plans import db
+from tuttitrip.planning.plans.logic.ics import build_ics
 from tuttitrip.planning.plans.logic.input_builder import (
     ALGORITHM_VERSION,
     PlanInputError,
@@ -32,14 +36,16 @@ from tuttitrip.planning.plans.logic.input_builder import (
     lodging_options,
 )
 from tuttitrip.planning.plans.logic.read_model import build_content
+from tuttitrip.planning.plans.logic.stored import stored_plan
 from tuttitrip.planning.plans.logic.verdict import build_verdicts
 from tuttitrip.planning.plans.models import PlanVersion
 from tuttitrip.planning.plans.schemas import (
+    ApprovalStatus,
     PlanAssumptions,
     PlanCreate,
-    PlanParams,
     PlanRead,
 )
+from tuttitrip.planning.proposals.services import proposal_service
 from tuttitrip.planning.schemas import PlanningInput, WhatIfTarget
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.preferences.schemas import PreferencesRead
@@ -50,20 +56,9 @@ from tuttitrip.trips.schemas import TripMembership, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
 
 PAGE = 200
-_RESULT_KEYS = (
-    "days",
-    "lodging",
-    "fairness",
-    "floors_missed",
-    "violation",
-    "conflicts",
-    "explain",
-    "verdicts",
-    "budget",
-    "transit",
-    "transit_tickets",
-    "telemetry",
-)
+
+CALENDAR_PREFIX = "TuttiTrip:"
+FILE_PREFIX = "tuttitrip-plan"
 
 
 class PlanNotFoundError(Exception):
@@ -98,17 +93,27 @@ async def _read(
             for e in result["explain"]
             if own is not None and e["profile_id"] == str(own)
         ]
-    return PlanRead.model_validate(
-        {
-            "id": row.id,
-            "trip_id": row.trip_id,
-            "version": row.version,
-            "input_hash": row.input_hash,
-            "plan_hash": row.plan_hash,
-            "created_at": row.created_at,
-            "params": PlanParams.model_validate(row.params),
-            **{key: result[key] for key in _RESULT_KEYS if key in result},
-        }
+    plan = _stored(row, result)
+    if plan.budget.needs_approval:
+        decided = await approval_service.status_of_plan(session, row.id)
+        if decided is not None:
+            budget = plan.budget.model_copy(
+                update={"approval_status": ApprovalStatus(decided.value)}
+            )
+            plan = plan.model_copy(update={"budget": budget})
+    return plan
+
+
+def _stored(row: PlanVersion, result: dict[str, Any] | None = None) -> PlanRead:
+    return stored_plan(
+        plan_id=row.id,
+        trip_id=row.trip_id,
+        version=row.version,
+        input_hash=row.input_hash,
+        plan_hash=row.plan_hash,
+        created_at=row.created_at,
+        params=row.params,
+        result=row.result if result is None else result,
     )
 
 
@@ -228,6 +233,7 @@ def _compute(
     decision = plan_with_consent(planning, params, alpha=alpha)
     chosen = decision.chosen
     verdicts = build_verdicts(planning, chosen.plan.place_ids)
+    upgrades = find_upgrades(planning, chosen, params, alpha=alpha)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     alternative = None
     if decision.needs_approval and decision.alternative is not None:
@@ -249,6 +255,7 @@ def _compute(
         decision=decision,
         strict_plan_id=alternative_id,
         verdicts=verdicts,
+        upgrades=upgrades,
         elapsed_ms=elapsed_ms,
     )
     return _Computed(chosen.plan.plan_hash, content, alternative)
@@ -328,22 +335,26 @@ async def generate_plan(
         result=computed.result,
         created_by_sub=membership.sub,
     )
+    # The plan changed: what was proposed or asked about the old one is obsolete.
+    await proposal_service.on_plan_changed(session, membership.trip_id)
+    await approval_service.on_plan_changed(session, membership.trip_id)
     session.add(row)
     if computed.alternative is not None:
         await session.flush()
-        session.add(
-            PlanVersion(
-                id=alternative_id,
-                trip_id=membership.trip_id,
-                version=row.version,
-                input_hash=digest,
-                plan_hash=computed.alternative.plan_hash,
-                params=row.params,
-                result=computed.alternative.result,
-                created_by_sub=membership.sub,
-                alternative_of=row.id,
-            )
+        strict = PlanVersion(
+            id=alternative_id,
+            trip_id=membership.trip_id,
+            version=row.version,
+            input_hash=digest,
+            plan_hash=computed.alternative.plan_hash,
+            params=row.params,
+            result=computed.alternative.result,
+            created_by_sub=membership.sub,
+            alternative_of=row.id,
         )
+        session.add(strict)
+        await session.flush()
+        await approval_service.open_for_plan(session, row, strict)
     await session.commit()
     await session.refresh(row)
     return await _read(session, membership, row), True
@@ -443,6 +454,55 @@ async def measure_impacts(
             impact_cache.pop(next(iter(impact_cache)))
         impact_cache[key] = scores
     return scores
+
+
+class PlanNotApprovedError(Exception):
+    """The plan version has no approved proposal, so it cannot be exported."""
+
+
+@dataclass(frozen=True, slots=True)
+class CalendarFile:
+    """An ``.ics`` file and the name to save it under."""
+
+    content: bytes
+    filename: str
+
+
+async def export_calendar(
+    session: AsyncSession, membership: TripMembership, plan_id: UUID
+) -> CalendarFile:
+    """The approved plan version as an iCalendar file.
+
+    Only a version that every member with an account approved can be exported;
+    the file is the same for the same version, byte for byte.
+
+    Args:
+        session: Open session.
+        membership: Proof that the caller may use the trip.
+        plan_id: The version.
+
+    Returns:
+        The file and its name.
+
+    Raises:
+        PlanNotFoundError: When the trip has no such version.
+        PlanNotApprovedError: When the version has no approved proposal.
+    """
+    row = await db.select_by_id(session, membership.trip_id, plan_id)
+    if row is None:
+        raise PlanNotFoundError(str(plan_id))
+    if await proposal_service.approved_at(session, membership, plan_id) is None:
+        raise PlanNotApprovedError(str(plan_id))
+    host_view = membership.model_copy(update={"role": TripRole.HOST})
+    trip = await trip_service.get_trip(session, host_view)
+    cities = {c.slug: c for c in await place_service.list_cities(session)}
+    city = cities[trip.city_slug or ""]
+    return CalendarFile(
+        content=build_ics(
+            _stored(row), city.timezone, f"{CALENDAR_PREFIX} {trip.name}"
+        ),
+        filename=f"{FILE_PREFIX}-v{row.version}-{row.plan_hash}.ics",
+    )
 
 
 async def latest_place_ids(session: AsyncSession, trip_id: UUID) -> list[UUID]:
