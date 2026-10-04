@@ -1,7 +1,7 @@
 """Expenses: spent_on, author, split method, category and per-person shares.
 
 Revision ID: b28a37ba42ff
-Revises: b81e5c2a7d14, 0f8ab2d0e440
+Revises: 6b826a460bb7
 Create Date: 2026-10-04 01:56:26.297779
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b28a37ba42ff"
-down_revision: str | Sequence[str] | None = ("b81e5c2a7d14", "0f8ab2d0e440")
+down_revision: str | Sequence[str] | None = "6b826a460bb7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
