@@ -146,6 +146,7 @@ def days_without_own_place(
     days: Sequence[DayPlan],
     places: Mapping[UUID, PlaceRead],
     params: AlgorithmParams = DEFAULT_PARAMS,
+    matches: Mapping[UUID, float] | None = None,
 ) -> int:
     """Days with no place the person likes (``m_ip >= 0.6``).
 
@@ -154,13 +155,17 @@ def days_without_own_place(
         days: The days of the plan.
         places: Places by id.
         params: Algorithm parameters (``own_place_match``).
+        matches: ``m_ip`` of this person by place id, if the caller has them
+            (the solver computes them once); otherwise they are computed here.
 
     Returns:
         How many days have none, empty days included.
     """
+    threshold = params.own_place_match
     return sum(
         not any(
-            match(person, places[pid], params) >= params.own_place_match
+            (matches[pid] if matches else match(person, places[pid], params))
+            >= threshold
             for pid in day.place_ids
         )
         for day in days
@@ -230,6 +235,7 @@ def person_violation(  # ruff: ignore[too-many-arguments] the whole input of V
     places: Mapping[UUID, PlaceRead],
     requirements: Sequence[TagRequirement],
     params: AlgorithmParams = DEFAULT_PARAMS,
+    matches: Mapping[UUID, float] | None = None,
 ) -> PersonViolation:
     """The bracket of ``V(P)`` for one person.
 
@@ -241,6 +247,7 @@ def person_violation(  # ruff: ignore[too-many-arguments] the whole input of V
         places: Places by id.
         requirements: The person's tag minima from ``tag_requirements``.
         params: Algorithm parameters.
+        matches: ``m_ip`` of this person by place id, if already computed.
 
     Returns:
         The three kinds of violation.
@@ -248,6 +255,6 @@ def person_violation(  # ruff: ignore[too-many-arguments] the whole input of V
     return PersonViolation(
         person_id=person.id,
         floor_term=floor_term(utility, floor_eff),
-        own_days_missing=days_without_own_place(person, days, places, params),
+        own_days_missing=days_without_own_place(person, days, places, params, matches),
         tags=tag_shortfalls(requirements, days, places),
     )

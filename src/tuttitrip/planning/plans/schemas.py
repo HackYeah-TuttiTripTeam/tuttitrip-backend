@@ -14,7 +14,7 @@ from enum import StrEnum, unique
 from typing import Annotated, Self
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from tuttitrip.accommodation.schemas import RequirementStatus
 from tuttitrip.profiles.feedback.schemas import ReasonCode
@@ -122,6 +122,71 @@ class VerdictKind(StrEnum):
     SKIP = "skip"
 
 
+@unique
+class ReplanContext(StrEnum):
+    """Why the rest of a day is replanned (backend#74; an extension)."""
+
+    RAIN = "rain"
+
+
+@unique
+class ReplanStatus(StrEnum):
+    """Whether a replan is in force."""
+
+    ACTIVE = "active"
+    PENDING_HOST = "pending_host"
+
+
+@unique
+class ReplanChangeKind(StrEnum):
+    """What happened to a stop."""
+
+    REMOVED = "removed"
+    ADDED = "added"
+    MOVED = "moved"
+
+
+class ReplanRequest(BaseModel):
+    """Replan the rest of a day, from a moment on."""
+
+    context: ReplanContext = ReplanContext.RAIN
+    day: int = Field(ge=1, description="1-based day of the plan.")
+    as_of: AwareDatetime = Field(
+        description="The moment of the replan; stops that started before it stay."
+    )
+
+
+class ReplanChange(BaseModel):
+    """One change in the rest of the day."""
+
+    kind: ReplanChangeKind
+    place_id: UUID
+    name: str
+    shift_min: int | None = Field(
+        default=None, description="For `moved`: minutes later (+) or earlier (-)."
+    )
+
+
+class ReplanRead(BaseModel):
+    """The rest of a day, replanned. Nothing is stored; applying it is up to the client.
+
+    A host's replan is `active`; a member's replan that touches other people
+    waits for the host (`pending_host`). Extension outside v1.0.
+    """
+
+    context: ReplanContext
+    day: int
+    as_of: AwareDatetime
+    status: ReplanStatus
+    stops: list[PlanStop] = Field(description="The whole day after the replan.")
+    changes: list[ReplanChange]
+    affected: list[UUID] = Field(
+        description="People whose welfare changes by half a point or more."
+    )
+    j_replan: float
+    elapsed_ms: int = Field(ge=0)
+
+
 class PlanCreate(BaseModel):
     """Optional knobs for generating a plan."""
 
@@ -132,6 +197,15 @@ class PlanCreate(BaseModel):
         description=(
             "Fairness slider: 0 utility, 1 Nash, 3 near-egalitarian. Omitted: the "
             "trip's own `fairness_alpha`."
+        ),
+    )
+    exceptional_nights: int = Field(
+        default=0,
+        ge=0,
+        le=3,
+        description=(
+            "Extension (backend#71), outside v1.0: how many nights may be spent in "
+            "another lodging than the base. 0 gives one base for all nights."
         ),
     )
     weight_preset: WeightPreset = Field(
@@ -188,6 +262,35 @@ class PlanParams(BaseModel):
     )
 
 
+@unique
+class PriceDiscount(StrEnum):
+    """Why one person pays what they pay: the discount their price carries."""
+
+    NONE = "none"
+    CHILD = "child"
+    SENIOR = "senior"
+    STUDENT = "student"
+    FREE = "free"
+    FAMILY = "family"
+
+
+class PriceLine(BaseModel):
+    """One person's entry price at a stop (backend#54)."""
+
+    profile_id: UUID
+    price: Money = Field(description="After the unverified-price markup (delta).")
+    discount: PriceDiscount
+
+
+class FamilyTicket(BaseModel):
+    """A family ticket that is cheaper than the single tickets of the group."""
+
+    total: Money = Field(description="The whole group's price with the family ticket.")
+    singles_total: Money = Field(
+        description="What the same group pays with single tickets."
+    )
+
+
 class StopTransfer(BaseModel):
     """The leg to a stop from the previous one."""
 
@@ -227,6 +330,13 @@ class PlanStop(BaseModel):
     hours_verified: bool
     hours_source_url: str | None = None
     hours_verified_at: dt.datetime | None = None
+    price_lines: list[PriceLine] | None = Field(
+        default=None,
+        description="Each person's price with the discount; null: no price data.",
+    )
+    family_ticket: FamilyTicket | None = Field(
+        default=None, description="Set when a family ticket is cheaper than singles."
+    )
     google_place_id: str | None = Field(
         default=None,
         description="For the Places UI Kit card; no Places data is returned.",
@@ -241,9 +351,50 @@ class RequirementState(BaseModel):
     status: RequirementStatus
 
 
-class PlanLodging(BaseModel):
-    """The lodging base (one for all nights)."""
+class SearchArea(BaseModel):
+    """Where to look for lodging: the centre of the stay's attractions and a radius.
 
+    Computed from the chosen plan (the visit time ``tau_p`` weights the centre),
+    not part of ``J``; it feeds the search link and the map.
+    """
+
+    lat: float
+    lon: float
+    radius_m: int = Field(ge=0)
+
+
+class ExceptionalNight(BaseModel):
+    """A night spent in another base than the rest (backend#71, an extension)."""
+
+    night: int = Field(ge=1, description="1-based night.")
+    place_id: UUID
+    name: str
+
+
+class PersonPoints(BaseModel):
+    """Points of one person."""
+
+    profile_id: UUID
+    points: float
+
+
+class PlanLodging(BaseModel):
+    """The lodging base (one for all nights, section 9; exceptional nights apart)."""
+
+    place_id: UUID | None = Field(
+        default=None, description="Catalog place of the base; null if unknown."
+    )
+    search_area: SearchArea | None = Field(
+        default=None, description="Null for a plan without visits."
+    )
+    exceptional: list[ExceptionalNight] = Field(default_factory=list)
+    extra_cost: Money | None = Field(
+        default=None, description="What the exceptional nights add to c(P)."
+    )
+    extra_points: list[PersonPoints] = Field(
+        default_factory=list,
+        description="u_i with the exceptional nights minus without, per person.",
+    )
     name: str
     lat: float
     lon: float
@@ -253,6 +404,58 @@ class PlanLodging(BaseModel):
     )
     s_h: float = Field(ge=0, le=1, description="Lodging contract S_h.")
     requirements: list[RequirementState] = Field(default_factory=list)
+
+
+class TransitCategoryTicket(BaseModel):
+    """What one kind of passenger buys for the rides of the trip."""
+
+    category: str = Field(description="adult, child or senior (by age).")
+    ticket_type: str = Field(description="single, 24h, 72h or weekly.")
+    count: int = Field(ge=0, description="Tickets per person.")
+    people: int = Field(ge=1)
+    cost: Money = Field(description="For all people of the category.")
+
+
+@unique
+class TransitTicketKind(StrEnum):
+    """A public transport ticket."""
+
+    SINGLE = "single"
+    DAY = "day"
+    H72 = "h72"
+    WEEK = "week"
+    FAMILY = "family"
+
+
+class TransitTicket(BaseModel):
+    """A transport ticket bought on a day; information only, never in `c(P)`.
+
+    A ticket that covers several days (72 hours, a week) appears on the first
+    day it is used.
+    """
+
+    day: int = Field(ge=1, description="1-based day of the plan.")
+    ticket: TransitTicketKind
+    cost: Money = Field(description="For the whole group.")
+    verified: bool
+    source_url: str | None = None
+
+
+class PlanTransit(BaseModel):
+    """What getting around costs: information, never part of `c(P)` or the budget.
+
+    Tickets are chosen per kind of passenger from the city's tariff (a single per
+    ride, a 24-hour ticket per day, 72-hour or weekly tickets over the span of
+    the rides). A city without a tariff has `total` null and `verified` false.
+    """
+
+    total: Money | None = Field(description="Null when the tariff is unknown.")
+    verified: bool = Field(description="Every fare used comes from a source.")
+    source_url: str | None = None
+    rides_per_day: list[int] = Field(
+        description="Rides between the stops of each day (stops minus one)."
+    )
+    by_category: list[TransitCategoryTicket] = Field(default_factory=list)
 
 
 class PlanDay(BaseModel):
@@ -474,4 +677,12 @@ class PlanRead(BaseModel):
         default=None, description="Null until backend#51; then one per candidate."
     )
     budget: PlanBudget
+    transit: PlanTransit | None = Field(
+        default=None,
+        description="Ticket costs for getting around, for information only.",
+    )
+    transit_tickets: list[TransitTicket] = Field(
+        default_factory=list,
+        description="The tickets by day (information; empty without a tariff).",
+    )
     telemetry: PlanTelemetry

@@ -5,8 +5,13 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Response, status
 
 from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
-from tuttitrip.planning.plans.schemas import PlanCreate, PlanRead
-from tuttitrip.planning.plans.services import plan_service
+from tuttitrip.planning.plans.schemas import (
+    PlanCreate,
+    PlanRead,
+    ReplanRead,
+    ReplanRequest,
+)
+from tuttitrip.planning.plans.services import plan_service, replan_service
 from tuttitrip.planning.plans.services.plan_service import (
     PlanInputError,
     PlanNotFoundError,
@@ -154,3 +159,48 @@ async def get_plan(
         return await plan_service.get_plan(session, membership, plan_id)
     except PlanNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
+
+
+@router.post(
+    "/{plan_id}/replan",
+    summary="Replan the rest of a day (rain), from a moment on",
+    description=(
+        "Extension outside v1.0: replaces the rest of a day with the best plan under "
+        "rain (`u_ip` times `0.3 + 0.7 * [indoor]`), by the same goal `J` and the "
+        "same hard rules, penalising the number of changes and the shift of kept "
+        "visits. Stops that started before `as_of` stay. Nothing is stored. A "
+        "co-host's or host's replan is `active`; a member's that touches other "
+        "people is `pending_host`. Weather is not fetched: rain is a person's "
+        "decision."
+    ),
+    responses={
+        **NOT_FOUND,
+        422: {
+            "description": "The day is not in the plan, or the trip cannot be planned."
+        },
+    },
+    dependencies=[requires(Feature.PLANNING_PLANS, Access.WRITE)],
+)
+async def replan_day(
+    session: SessionDep, membership: TripMember, plan_id: UUID, data: ReplanRequest
+) -> ReplanRead:
+    """Replan the rest of a day.
+
+    Args:
+        session: Database session.
+        membership: The caller's membership of ``{trip_id}``.
+        plan_id: The version to start from.
+        data: Context, day and ``as_of``.
+
+    Returns:
+        The day after the replan and what changed.
+
+    Raises:
+        HTTPException: 404 for an unknown version, 422 for an impossible request.
+    """
+    try:
+        return await replan_service.replan(session, membership, plan_id, data)
+    except PlanNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
+    except PlanInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc

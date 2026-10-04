@@ -44,8 +44,17 @@ def solo_input(data: PlanningInput, person: PlanningPerson) -> PlanningInput:
             "budget_to": data.trip.budget_to / share,
         }
     )
+    options = tuple(
+        o.model_copy(update={"price_per_night": o.price_per_night / share})
+        for o in data.lodgings
+    )
     return data.model_copy(
-        update={"trip": trip, "people": (person,), "must": frozenset()}
+        update={
+            "trip": trip,
+            "people": (person,),
+            "must": frozenset(),
+            "lodgings": options,
+        }
     )
 
 

@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.places import db
-from tuttitrip.places.schemas import CityRead, PlaceCategory, PlaceRead
+from tuttitrip.places.schemas import CityRead, PlaceCategory, PlaceRead, TransitFareRead
 
 
 class PlaceNotFoundError(Exception):
@@ -89,3 +89,19 @@ async def get_places(
     """
     places = await db.select_places_by_ids(session, set(place_ids))
     return {place.id: PlaceRead.model_validate(place) for place in places}
+
+
+async def list_fares(session: AsyncSession, city_slug: str) -> list[TransitFareRead]:
+    """Public transport fares of a city.
+
+    Args:
+        session: Open session.
+        city_slug: City slug.
+
+    Returns:
+        The fares; empty for a city without a tariff in the sheet.
+    """
+    return [
+        TransitFareRead.model_validate(fare)
+        for fare in await db.select_fares(session, city_slug)
+    ]

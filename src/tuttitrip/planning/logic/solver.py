@@ -39,8 +39,9 @@ person with ``1/N`` of the budget and the lodging, ``floors={id: 0}`` and no
 "must"; ``reference.solo_utility`` builds exactly that input.
 """
 
+import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
@@ -52,10 +53,10 @@ from zoneinfo import ZoneInfo
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.planning.fairness.logic.measure import build_report
 from tuttitrip.planning.fairness.logic.objective import (
+    ROUNDING,
     GroupObjective,
     PersonOutcome,
     group_objective,
-    rank_key,
 )
 from tuttitrip.planning.fairness.logic.violations import (
     TagRequirement,
@@ -63,7 +64,7 @@ from tuttitrip.planning.fairness.logic.violations import (
 )
 from tuttitrip.planning.fairness.schemas import FairnessReport
 from tuttitrip.planning.logic.cost import PlaceCost, PlanCost, place_cost, plan_cost
-from tuttitrip.planning.logic.domains import RequirementOutcome
+from tuttitrip.planning.logic.domains import RequirementOutcome, lodging_score
 from tuttitrip.planning.logic.hard_constraints import filter_places
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.plan_hash import plan_hash
@@ -72,13 +73,16 @@ from tuttitrip.planning.logic.schedule import (
     DayWindow,
     Infeasible,
     Person,
+    ScheduledVisit,
     schedule_day,
 )
-from tuttitrip.planning.logic.utility import utility
+from tuttitrip.planning.logic.utility import match, utility
 from tuttitrip.planning.logic.welfare_person import person_scores
 from tuttitrip.planning.schemas import (
     DayPlan,
     DomainScores,
+    LodgingOption,
+    LodgingOutcome,
     LodgingStay,
     PlanningInput,
     PlanningPerson,
@@ -95,7 +99,7 @@ _CENT = Decimal("0.01")
 
 Assignment = tuple[tuple[UUID, ...], ...]
 """Per day (in date order) the chosen place ids, sorted by id."""
-_Key = tuple[float, Decimal, tuple[str, ...], tuple[tuple[int, str], ...]]
+_Key = tuple[float, Decimal, tuple[str, ...], tuple[tuple[int, str], ...], int]
 """``rank_key`` plus the (day, id) slots, so equal itineraries differ by their days."""
 _DayKey = tuple[int, tuple[UUID, ...]]
 
@@ -150,11 +154,31 @@ class PlanResult:
     conflicts: tuple[tuple[SolverConflict, UUID | None], ...]
     plan_hash: str
     telemetry: Telemetry
+    lodging: tuple[LodgingOption, ...] = ()
+    """The base of each night, in night order (empty without nights)."""
+    lodging_delta: LodgingDelta | None = None
+    """What the exceptional nights add over the plain base (backend#71)."""
 
     @property
     def place_ids(self) -> tuple[UUID, ...]:
         """All places of the plan in visiting order."""
-        return tuple(v.place_id for d in self.days for v in d.schedule.visits)
+        return tuple(v.place_id for v in self.all_visits)
+
+    @property
+    def all_visits(self) -> tuple[ScheduledVisit, ...]:
+        """All visits of the plan, day after day."""
+        return tuple(v for d in self.days for v in d.schedule.visits)
+
+
+@dataclass(frozen=True, slots=True)
+class LodgingDelta:
+    """Exceptional nights: the extra cost and the points they give each person."""
+
+    nights: tuple[int, ...]
+    """1-based nights that use another base."""
+    extra_cost: Decimal
+    extra_points: tuple[tuple[UUID, float], ...]
+    """``u_i`` with the exceptional nights minus without, per person (id order)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,14 +191,129 @@ class Evaluation:
     objective: GroupObjective
     cost: Decimal
     key: _Key
+    lodging_index: int = 0
 
 
-def _sorted_ids(ids: Sequence[UUID]) -> tuple[UUID, ...]:
+@dataclass(frozen=True, slots=True)
+class LodgingPlan:
+    """The base of each night; its cost and its mean satisfaction (E2, E6)."""
+
+    nights: tuple[LodgingOption, ...]
+
+    @property
+    def total(self) -> Decimal:
+        """``sum_nights price`` (E6)."""
+        return sum((o.price_per_night for o in self.nights), Decimal(0))
+
+    @property
+    def q(self) -> float:
+        """Mean over the nights of ``100 * S_h`` of that night's base (E2)."""
+        return math.fsum(_option_score(o) for o in self.nights) / len(self.nights)
+
+
+def _option_score(option: LodgingOption) -> float:
+    return lodging_score(
+        [RequirementOutcome(o.hard, o.status) for o in option.outcomes]
+    )
+
+
+def lodging_plans(
+    options: Sequence[LodgingOption], nights: int, max_exceptional: int
+) -> list[LodgingPlan]:
+    """Every lodging plan the search may choose from.
+
+    One base for all nights (section 9) for each option, and, with an
+    allowance of exceptional nights (backend#71, an extension), a base with the
+    last ``k`` nights spent in another option, ``1 <= k <= max_exceptional``.
+
+    Args:
+        options: The lodging options, in id order.
+        nights: Number of nights.
+        max_exceptional: ``N_max``; 0 gives the plain section 9 plans.
+
+    Returns:
+        The plans in a fixed order (all-one-base first), without the ones another
+        plan beats on both cost and satisfaction.
+    """
+    plans = [LodgingPlan((o,) * nights) for o in options]
+    plans.extend(
+        LodgingPlan((base,) * (nights - k) + (other,) * k)
+        for base in options
+        for other in options
+        if other.place_id != base.place_id
+        for k in range(1, min(max_exceptional, nights - 1) + 1)
+    )
+    return _undominated(plans)
+
+
+def _undominated(plans: list[LodgingPlan]) -> list[LodgingPlan]:
+    # A plan that costs at least as much and satisfies no more than another one
+    # can never give a better J (E2 lodging and E6 cost both move the right way
+    # for the other plan, and a lower cost only loosens the cap), so it is not
+    # searched. Equal plans keep the first.
+    kept: list[LodgingPlan] = []
+    for plan in plans:
+        if any(other.q >= plan.q and other.total <= plan.total for other in kept):
+            continue
+        kept = [
+            other
+            for other in kept
+            if not (plan.q >= other.q and plan.total <= other.total)
+        ]
+        kept.append(plan)
+    return kept
+
+
+def sorted_ids(ids: Iterable[UUID]) -> tuple[UUID, ...]:
+    """Place ids in the canonical (text) order.
+
+    Args:
+        ids: The ids.
+
+    Returns:
+        The ids as a sorted tuple.
+    """
     return tuple(sorted(ids, key=str))
+
+
+def _lodging_plans_of(
+    data: PlanningInput,
+    params: AlgorithmParams,
+    lodging: LodgingStay | None,
+    outcomes: Sequence[RequirementOutcome] | None,
+) -> list[LodgingPlan]:
+    # A given stay is the one base; otherwise the plans come from the options.
+    trip = data.trip
+    if lodging is not None:
+        option = LodgingOption(
+            place_id=lodging.place_id or UUID(int=0),
+            name="",
+            lat=0.0,
+            lon=0.0,
+            price_per_night=lodging.price_per_night,
+            outcomes=tuple(
+                LodgingOutcome(feature="", hard=o.hard, status=o.status)
+                for o in outcomes or ()
+            ),
+        )
+        return [LodgingPlan((option,) * lodging.nights)]
+    nights = len(trip.days) - 1
+    if not trip.has_lodging or nights < 1 or not data.lodgings:
+        return []
+    options = sorted(data.lodgings, key=lambda o: str(o.place_id))
+    return lodging_plans(options, nights, params.max_exceptional_nights)
 
 
 class PlanEvaluator:
     """Hard constraints and ``J`` of a plan, with everything precomputed once."""
+
+    def choose_lodging(self, index: int) -> None:
+        """Evaluate the following plans with the given lodging plan.
+
+        Args:
+            index: Index into ``lodging_plans``.
+        """
+        self.lodging_index = index
 
     def __init__(  # ruff: ignore[too-many-arguments] the whole input of the search
         self,
@@ -186,6 +325,7 @@ class PlanEvaluator:
         lodging: LodgingStay | None = None,
         lodging_outcomes: Sequence[RequirementOutcome] | None = None,
         floors: Mapping[UUID, float] | None = None,
+        utility_factors: Mapping[UUID, float] | None = None,
     ) -> None:
         """Precompute utilities, prices and the E0 candidates.
 
@@ -197,20 +337,23 @@ class PlanEvaluator:
             lodging: The lodging base, exactly when the trip has nights.
             lodging_outcomes: Requirements checked against it (default none).
             floors: ``f_i^eff`` by person id (E4); default each person's ``f_i``.
+            utility_factors: Factor on ``u_ip`` by place id (the rain extension,
+                backend#74); default 1.
 
         Raises:
             ValueError: When ``lodging`` and ``trip.has_lodging`` disagree.
         """
         trip = data.trip
-        if (lodging is not None) != trip.has_lodging:
+        plans = _lodging_plans_of(data, params, lodging, lodging_outcomes)
+        if bool(plans) != trip.has_lodging:
             msg = "lodging must be given exactly when the trip has nights"
             raise ValueError(msg)
         self.trip = trip
         self.floors = floors or {}
         self.params = params
         self.alpha = alpha
-        self.lodging = lodging
-        self.outcomes = list(lodging_outcomes or []) if lodging is not None else None
+        self.lodging_plans = plans
+        self.lodging_index = 0
         self.people: tuple[PlanningPerson, ...] = tuple(
             sorted(data.people, key=lambda p: str(p.id))
         )
@@ -228,9 +371,15 @@ class PlanEvaluator:
             )
             for person in self.people
         }
+        self.matches: dict[UUID, dict[UUID, float]] = {
+            person.id: {p.id: match(person, p, params) for p in self.candidates}
+            for person in self.people
+        }
+        self.sid = {p.id: str(p.id) for p in self.candidates}
         self.utilities: dict[UUID, dict[UUID, float]] = {
             person.id: {
                 p.id: utility(person, p, has_lodging=trip.has_lodging, params=params)
+                * (utility_factors or {}).get(p.id, 1.0)
                 for p in self.candidates
             }
             for person in self.people
@@ -239,10 +388,12 @@ class PlanEvaluator:
             p.id: place_cost(p, self.people, trip.currency, params)
             for p in self.candidates
         }
-        self.stay = lodging.price_per_night * lodging.nights if lodging else Decimal(0)
+        self.stays = [p.total for p in plans] or [Decimal(0)]
+        self.lodging_q = [p.q for p in plans] or [None]
         cap = trip.budget_max if cost_cap is None else cost_cap
-        self.cap = max(cap, self.stay)  # lodging alone over the cap: places only lose
-        self.lodging_over_cap = self.stay > cap
+        # Lodging alone over the cap: places only lose (the plan still exists).
+        self.caps = [max(cap, stay) for stay in self.stays]
+        self.over_cap = [stay > cap for stay in self.stays]
         zone = ZoneInfo(trip.timezone)
         self.windows = tuple(
             DayWindow(day, zone, trip.day_start, trip.day_end) for day in trip.days
@@ -251,7 +402,7 @@ class PlanEvaluator:
             Person(p.id, p.daily_km, p.nap_start, p.nap_minutes) for p in self.people
         )
         self._schedule_cache: dict[_DayKey, DaySchedule | None] = {}
-        self._cache: dict[Assignment, Evaluation | None] = {}
+        self._cache: dict[tuple[int, Assignment], Evaluation | None] = {}
         self.evaluations = 0
 
     def _schedule(self, day: int, ids: tuple[UUID, ...]) -> DaySchedule | None:
@@ -270,6 +421,8 @@ class PlanEvaluator:
     def evaluate(self, assignment: Assignment) -> Evaluation | None:
         """Check the hard constraints and compute ``J``.
 
+        Uses the lodging plan chosen with ``choose_lodging``.
+
         Args:
             assignment: The places of each day.
 
@@ -277,24 +430,26 @@ class PlanEvaluator:
             The evaluation, or None when a hard constraint fails (a closed
             place, a day that does not fit, the daily distance, the cost cap).
         """
-        if assignment in self._cache:
-            return self._cache[assignment]
+        key = (self.lodging_index, assignment)
+        if key in self._cache:
+            return self._cache[key]
         self.evaluations += 1
         result = self._evaluate(assignment)
         if len(self._cache) >= MAX_CACHE_ENTRIES:
             self._cache.clear()
-        self._cache[assignment] = result
+        self._cache[key] = result
         return result
 
     def _evaluate(self, assignment: Assignment) -> Evaluation | None:
         ids = [i for day in assignment for i in day]
-        total = sum((self.prices[i].total for i in ids), Decimal(0)) + self.stay
+        index = self.lodging_index
+        total = sum((self.prices[i].total for i in ids), Decimal(0)) + self.stays[index]
         total = total.quantize(_CENT, ROUND_HALF_UP)
-        if total > self.cap:
+        if total > self.caps[index]:
             return None
         schedules: list[DaySchedule] = []
-        for index, day_ids in enumerate(assignment):
-            schedule = self._schedule(index, day_ids)
+        for day_index, day_ids in enumerate(assignment):
+            schedule = self._schedule(day_index, day_ids)
             if schedule is None:
                 return None
             schedules.append(schedule)
@@ -314,7 +469,7 @@ class PlanEvaluator:
                 self.utilities[person.id],
                 trip=self.trip,
                 cost=total,
-                lodging=self.outcomes,
+                lodging=self.lodging_q[index],
                 params=self.params,
             )
             for person in self.people
@@ -331,6 +486,8 @@ class PlanEvaluator:
             candidates=self.candidates,
             has_lodging=self.trip.has_lodging,
             requirements=self.requirements,
+            matches=self.matches,
+            presorted=True,
             alpha=self.alpha,
             params=self.params,
         )
@@ -341,25 +498,44 @@ class PlanEvaluator:
             objective,
             total,
             (
-                *rank_key(objective, total, ids),
+                -round(objective.value, ROUNDING),
+                total,
+                tuple(sorted(self.sid[i] for i in ids)),
                 tuple(
-                    (d, str(i)) for d, day_ids in enumerate(assignment) for i in day_ids
+                    (d, self.sid[i])
+                    for d, day_ids in enumerate(assignment)
+                    for i in day_ids
                 ),
+                index,
             ),
+            index,
         )
 
 
-def _with(
+def with_places(
     current: Assignment, day: int, add: Sequence[UUID] = (), drop: Sequence[UUID] = ()
 ) -> Assignment:
+    """One day of an assignment with places added and dropped.
+
+    Args:
+        current: The assignment.
+        day: 0-based day to change.
+        add: Places to add to the day.
+        drop: Places to take out of the day.
+
+    Returns:
+        The new assignment (days stay sorted by id).
+    """
     return tuple(
-        _sorted_ids([*(i for i in ids if i not in drop), *add]) if index == day else ids
+        sorted_ids([*(i for i in ids if i not in drop), *add]) if index == day else ids
         for index, ids in enumerate(current)
     )
 
 
 def _adds(current: Assignment, unplaced: Sequence[UUID]) -> list[Assignment]:
-    return [_with(current, d, add=(p,)) for p in unplaced for d in range(len(current))]
+    return [
+        with_places(current, d, add=(p,)) for p in unplaced for d in range(len(current))
+    ]
 
 
 def _neighbours(
@@ -371,20 +547,20 @@ def _neighbours(
         for p in ids:
             if p in must:
                 continue
-            moves.append(_with(current, d, drop=(p,)))
-            moves.extend(_with(current, d, add=(b,), drop=(p,)) for b in unplaced)
+            moves.append(with_places(current, d, drop=(p,)))
+            moves.extend(with_places(current, d, add=(b,), drop=(p,)) for b in unplaced)
     for d, ids in enumerate(current):
         for p in ids:
             moves.extend(
-                _with(_with(current, d, drop=(p,)), d2, add=(p,))
+                with_places(with_places(current, d, drop=(p,)), d2, add=(p,))
                 for d2 in range(len(current))
                 if d2 != d
             )
     for (d1, first), (d2, second) in combinations(enumerate(current), 2):
         for a in first:
             for b in second:
-                moved = _with(current, d1, add=(b,), drop=(a,))
-                moves.append(_with(moved, d2, add=(a,), drop=(b,)))
+                moved = with_places(current, d1, add=(b,), drop=(a,))
+                moves.append(with_places(moved, d2, add=(a,), drop=(b,)))
     return moves
 
 
@@ -438,7 +614,7 @@ def _place_musts(
                 for d in range(len(current.assignment))
                 if (
                     e := evaluator.evaluate(
-                        _with(current.assignment, d, add=(must[index],))
+                        with_places(current.assignment, d, add=(must[index],))
                     )
                 )
             ),
@@ -494,20 +670,58 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
     conflicts: list[tuple[SolverConflict, UUID | None]] = [
         (SolverConflict.MUST_REJECTED, pid) for pid in evaluator.filtered.must_blocked
     ]
-    if evaluator.lodging_over_cap:
-        conflicts.append((SolverConflict.LODGING_OVER_CAP, None))
-    must = _sorted_ids([m for m in data.must if m in evaluator.places])
+    must = sorted_ids([m for m in data.must if m in evaluator.places])
     limit = max_evaluations or max(
         DEFAULT_MAX_EVALUATIONS,
         EVALUATIONS_PER_SLOT * len(evaluator.candidates) * len(evaluator.windows),
     )
-    best, steps, exhausted = _search(evaluator, must, limit)
+    best, steps, exhausted = _search_with_lodging(evaluator, must, limit)
+    if evaluator.over_cap[best.lodging_index]:
+        conflicts.append((SolverConflict.LODGING_OVER_CAP, None))
     placed = {i for ids in best.assignment for i in ids}
     conflicts.extend(
         (SolverConflict.MUST_UNPLACEABLE, pid) for pid in must if pid not in placed
     )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     return _result(evaluator, best, conflicts, steps, elapsed_ms, exhausted=exhausted)
+
+
+def _search_with_lodging(
+    evaluator: PlanEvaluator, must: Sequence[UUID], max_evaluations: int
+) -> tuple[Evaluation, int, bool]:
+    """Search the places for every lodging plan and keep the best.
+
+    Each lodging plan changes the cost and the lodging satisfaction, so a base
+    that does not fit the places of another one may fit its own (a cheaper day
+    plan). The schedule cache is shared, so only the scoring is repeated. A plan
+    whose lodging alone breaks the cap is searched only when none fits.
+
+    Args:
+        evaluator: The evaluator.
+        must: The "must" places that passed E0.
+        max_evaluations: Work limit of each search.
+
+    Returns:
+        The best evaluation (it knows its lodging plan), the improving steps and
+        whether the work limit ended any search.
+    """
+    indices = list(range(len(evaluator.lodging_plans) or 1))
+    fitting = [i for i in indices if not evaluator.over_cap[i]]
+    steps = 0
+    exhausted = False
+    best: Evaluation | None = None
+    for index in fitting or indices:
+        evaluator.choose_lodging(index)
+        found, more, hit = _search(
+            evaluator, must, evaluator.evaluations + max_evaluations
+        )
+        steps += more
+        exhausted = exhausted or hit
+        if best is None or found.key < best.key:
+            best = found
+    assert best is not None  # ruff: ignore[assert] there is at least one plan
+    evaluator.choose_lodging(best.lodging_index)
+    return best, steps, exhausted
 
 
 def _search(
@@ -567,16 +781,22 @@ def _result(  # ruff: ignore[too-many-arguments] the pieces of one result
         evaluator.places,
         evaluator.people,
         trip=trip,
-        lodging=evaluator.lodging,
+        lodging=evaluator.stays[best.lodging_index]
+        if evaluator.lodging_plans
+        else None,
         params=evaluator.params,
     )
-    stay = evaluator.lodging
+    chosen = (
+        evaluator.lodging_plans[best.lodging_index].nights
+        if evaluator.lodging_plans
+        else ()
+    )
     digest = plan_hash(
         [
             (day, [(v.place_id, v.start, v.end) for v in s.visits])
             for day, s in zip(trip.days, best.schedules, strict=True)
         ],
-        0 if stay is None else stay.nights,
+        [str(o.place_id) for o in chosen],
         evaluator.windows[0].timezone,
     )
     return PlanResult(
@@ -591,6 +811,37 @@ def _result(  # ruff: ignore[too-many-arguments] the pieces of one result
         plan_hash=digest,
         telemetry=Telemetry(
             SOLVER_NAME, steps, evaluator.evaluations, elapsed_ms, exhausted
+        ),
+        lodging=chosen,
+        lodging_delta=_delta(evaluator, best),
+    )
+
+
+def _delta(evaluator: PlanEvaluator, best: Evaluation) -> LodgingDelta | None:
+    # Exceptional nights: the cost and the points they add over the plain base.
+    if not evaluator.lodging_plans:
+        return None
+    nights = evaluator.lodging_plans[best.lodging_index].nights
+    base = nights[0]
+    odd = tuple(i for i, o in enumerate(nights, start=1) if o.place_id != base.place_id)
+    if not odd:
+        return None
+    plain = next(
+        i
+        for i, plan in enumerate(evaluator.lodging_plans)
+        if all(o.place_id == base.place_id for o in plan.nights)
+    )
+    evaluator.choose_lodging(plain)
+    without = evaluator.evaluate(best.assignment)
+    evaluator.choose_lodging(best.lodging_index)
+    if without is None:  # the plain base breaks the cap: no comparison
+        return None
+    return LodgingDelta(
+        nights=odd,
+        extra_cost=best.cost - without.cost,
+        extra_points=tuple(
+            (a.person_id, a.welfare - b.welfare)
+            for a, b in zip(best.scores, without.scores, strict=True)
         ),
     )
 

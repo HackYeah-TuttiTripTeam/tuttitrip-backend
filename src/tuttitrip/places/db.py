@@ -91,6 +91,24 @@ async def select_place(session: AsyncSession, place_id: UUID) -> Place | None:
     )
 
 
+async def select_fares(session: AsyncSession, city_slug: str) -> Sequence[TransitFare]:
+    """Transit fares of a city in a stable order.
+
+    Args:
+        session: Open session.
+        city_slug: City slug.
+
+    Returns:
+        The fares by ticket type and passenger category.
+    """
+    result = await session.scalars(
+        select(TransitFare)
+        .where(TransitFare.city_slug == city_slug)
+        .order_by(TransitFare.ticket_type, TransitFare.person_category)
+    )
+    return result.all()
+
+
 async def select_places_by_ids(
     session: AsyncSession, place_ids: Collection[UUID]
 ) -> Sequence[Place]:

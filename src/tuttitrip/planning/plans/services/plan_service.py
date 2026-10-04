@@ -9,18 +9,19 @@ advisory lock around the check-and-insert, so none ends in a 500.
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import partial
 from uuid import UUID
 
 import anyio.to_thread
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.accommodation.services import requirements_service
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.places.services import place_service
 from tuttitrip.planning.logic import what_if
 from tuttitrip.planning.logic.budget_consent import plan_with_consent
-from tuttitrip.planning.logic.params import DEFAULT_PARAMS
+from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.overrides import db as overrides_db
 from tuttitrip.planning.plans import db
 from tuttitrip.planning.plans.logic.input_builder import (
@@ -28,6 +29,7 @@ from tuttitrip.planning.plans.logic.input_builder import (
     PlanInputError,
     build_input,
     input_hash,
+    lodging_options,
 )
 from tuttitrip.planning.plans.logic.read_model import build_content
 from tuttitrip.planning.plans.logic.verdict import build_verdicts
@@ -58,6 +60,8 @@ _RESULT_KEYS = (
     "explain",
     "verdicts",
     "budget",
+    "transit",
+    "transit_tickets",
     "telemetry",
 )
 
@@ -103,7 +107,7 @@ async def _read(
             "plan_hash": row.plan_hash,
             "created_at": row.created_at,
             "params": PlanParams.model_validate(row.params),
-            **{key: result[key] for key in _RESULT_KEYS},
+            **{key: result[key] for key in _RESULT_KEYS if key in result},
         }
     )
 
@@ -179,6 +183,7 @@ async def gather_input(
     feedback = await feedback_service.list_for_trip(session, membership.trip_id)
     places = await _city_places(session, slug)
     active = await overrides_db.select_active(session, membership.trip_id)
+    required = await requirements_service.get_requirements(session, membership.trip_id)
     planning = build_input(
         trip,
         city=cities[slug],
@@ -188,6 +193,12 @@ async def gather_input(
         places=places,
         must=frozenset(o.place_id for o in active if o.kind == "must"),
         blocked=frozenset(o.place_id for o in active if o.kind == "block"),
+        fares=await place_service.list_fares(session, trip.city_slug),
+        lodgings=lodging_options(
+            places,
+            required.requirements,
+            trip.currency or cities[trip.city_slug].currency,
+        ),
     )
     names = {p.id: p.display_name for p in profiles}
     return planning, names, trip.fairness_alpha
@@ -206,6 +217,7 @@ class _Computed(_Stored):
 
 def _compute(
     planning: PlanningInput,
+    params: AlgorithmParams,
     alpha: float,
     names: Mapping[UUID, str],
     alternative_id: UUID,
@@ -213,7 +225,7 @@ def _compute(
     # Runs in a worker thread: N solo runs, the group plan and, when the plan goes
     # over B_do, P_strict and the cheaper alternative (E6).
     started = time.perf_counter()
-    decision = plan_with_consent(planning, DEFAULT_PARAMS, alpha=alpha)
+    decision = plan_with_consent(planning, params, alpha=alpha)
     chosen = decision.chosen
     verdicts = build_verdicts(planning, chosen.plan.place_ids)
     elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -282,8 +294,10 @@ async def generate_plan(
     draft = assumptions is not None
     planning, names, trip_alpha = await gather_input(session, membership, assumptions)
     alpha = trip_alpha if data is None or data.alpha is None else data.alpha
-    preset = (data or PlanCreate()).weight_preset
-    digest = input_hash(planning, alpha, preset.value, DEFAULT_PARAMS)
+    knobs = data or PlanCreate()
+    preset = knobs.weight_preset
+    params = replace(DEFAULT_PARAMS, max_exceptional_nights=knobs.exceptional_nights)
+    digest = input_hash(planning, alpha, preset.value, params)
 
     latest = await db.select_latest(session, membership.trip_id)
     if latest is not None and _is_current(latest, digest, draft=draft):
@@ -292,7 +306,7 @@ async def generate_plan(
 
     alternative_id = uuid.uuid4()
     computed = await anyio.to_thread.run_sync(
-        partial(_compute, planning, alpha, names, alternative_id)
+        partial(_compute, planning, params, alpha, names, alternative_id)
     )
 
     await db.lock_trip_plans(session, membership.trip_id)
@@ -309,7 +323,7 @@ async def generate_plan(
             "weight_preset": preset.value,
             "draft": draft,
             "algorithm_version": ALGORITHM_VERSION,
-            "algorithm": asdict(DEFAULT_PARAMS),
+            "algorithm": asdict(params),
         },
         result=computed.result,
         created_by_sub=membership.sub,
