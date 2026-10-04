@@ -425,6 +425,8 @@ ROUTES = [
     ("post", "start_session"),
     ("get", "get_current_session"),
     ("get", "get_knowledge"),
+    ("post", "run_turn"),
+    ("post", "voice_offer"),
 ]
 
 
@@ -524,10 +526,13 @@ def test_knowledge_returns_data_missing_fields_and_sources(
     assert by_field["destination", None] == "host"
 
 
-def test_openapi_documents_the_three_routes(client: TestClient) -> None:
+def test_openapi_documents_the_interview_routes(client: TestClient) -> None:
     paths = client.get("/api/v1/openapi.json").json()["paths"]
     base = "/api/v1/trips/{trip_id}/interview"
     assert set(paths[f"{base}/sessions"]) == {"post"}
     assert set(paths[f"{base}/sessions/current"]) == {"get"}
     assert set(paths[f"{base}/knowledge"]) == {"get"}
+    assert set(paths[f"{base}/agui"]) == {"post"}
+    assert set(paths[f"{base}/voice/offer"]) == {"post"}
+    assert set(paths[f"{base}/voice/{{call_id}}/hangup"]) == {"post"}
     assert set(paths[f"{base}/sessions"]["post"]["responses"]) >= {"200", "201"}

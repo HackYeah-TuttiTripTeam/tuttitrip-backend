@@ -116,3 +116,19 @@ ERROR_CODE_UNAVAILABLE: Final = "unavailable"
 
 ERROR_CODE_GENERIC: Final = "error"
 """``RUN_ERROR`` code for anything else."""
+
+OPENAI_HANGUP_URL: Final = "https://api.openai.com/v1/realtime/calls/{call_id}/hangup"
+"""OpenAI endpoint that ends a WebRTC call."""
+
+OPENAI_KEY_ENV: Final = "OPENAI_API_KEY"
+"""Environment variable Pydantic AI reads the OpenAI key from."""
+
+HANGUP_TIMEOUT_SECONDS: Final = 5.0
+"""How long the best-effort provider hangup may take."""
+
+VOICE_INSTRUCTIONS: Final = (
+    "This is a live voice call. Speak in short, natural sentences, ask one "
+    "question at a time and do not read lists aloud. Do not use show_card: "
+    "ask the question out loud instead."
+)
+"""Added to the interview instructions for the voice agent."""

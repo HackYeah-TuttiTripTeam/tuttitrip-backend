@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Final
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,6 +11,9 @@ from tuttitrip.profiles.preferences.schemas import PreferencesRead
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.shared.pagination.schemas import ListFilters, Page, PageParams
 from tuttitrip.trips.schemas import TripRead
+
+MAX_SDP_CHARS: Final = 100_000
+"""Longest SDP offer the voice endpoint accepts, in characters."""
 
 
 class CardKind(StrEnum):
@@ -214,3 +218,16 @@ class InterviewState(BaseModel):
         default=None, description='The "What we already know" panel.'
     )
     card: ShownCard | None = Field(default=None, description="The card to render.")
+
+
+class VoiceOffer(BaseModel):
+    """The browser's WebRTC offer."""
+
+    sdp: str = Field(min_length=1, max_length=MAX_SDP_CHARS, description="SDP offer.")
+
+
+class VoiceAnswer(BaseModel):
+    """The provider's answer; the server's sideband is already attached."""
+
+    sdp: str = Field(description="SDP answer: set it as the remote description.")
+    call_id: str = Field(description="Use it to hang up.")

@@ -11,11 +11,19 @@ from fastapi.responses import StreamingResponse
 
 from tuttitrip.interview.schemas import (
     InterviewSessionRead,
+    InterviewState,
     KnowledgeRead,
     MessagesQuery,
     SessionRead,
+    VoiceAnswer,
+    VoiceOffer,
 )
-from tuttitrip.interview.services import agui_service, run_guard, session_service
+from tuttitrip.interview.services import (
+    agui_service,
+    run_guard,
+    session_service,
+    voice_service,
+)
 from tuttitrip.interview.services.session_service import (
     HistoryIncompatibleError,
     SessionNotFoundError,
@@ -26,10 +34,20 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.api import TRIP_NOT_FOUND, TripCoHost
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
+
+class EventStreamResponse(StreamingResponse):
+    """A streamed response documented as ``text/event-stream`` in OpenAPI."""
+
+    media_type = "text/event-stream"
+
+
 router = APIRouter(prefix="/trips/{trip_id}/interview", tags=["interview"])
 
 NO_SESSION = "The trip has no open interview session"
 BUSY = "Another turn of this interview is still running"
+VOICE_BUSY = "This interview already has a live call"
+VOICE_UNAVAILABLE = "The voice assistant is not available"
+NO_CALL = "No such call on this trip"
 
 
 @router.post(
@@ -113,11 +131,14 @@ async def get_knowledge(membership: TripCoHost, session: SessionDep) -> Knowledg
 
 @router.post(
     "/agui",
-    response_class=StreamingResponse,
+    response_class=EventStreamResponse,
     responses={
         status.HTTP_200_OK: {
-            "content": {"text/event-stream": {}},
-            "description": "AG-UI 1.0 events (SSE) of one turn.",
+            "model": InterviewState,
+            "description": (
+                "AG-UI 1.0 events (SSE) of one turn. The schema is the "
+                "`snapshot` of `STATE_SNAPSHOT`."
+            ),
         },
         status.HTTP_404_NOT_FOUND: {"description": "No such session on this trip."},
         status.HTTP_409_CONFLICT: {
@@ -131,7 +152,7 @@ async def get_knowledge(membership: TripCoHost, session: SessionDep) -> Knowledg
 )
 async def run_turn(
     request: Request, membership: TripCoHost, session: SessionDep
-) -> StreamingResponse:
+) -> EventStreamResponse:
     """Run one turn of the text interview and stream it as AG-UI events (SSE).
 
     Body: AG-UI `RunAgentInput` with `threadId` = the session id from
@@ -169,6 +190,63 @@ async def run_turn(
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except run_guard.SessionBusyError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from exc
-    return StreamingResponse(
+    return EventStreamResponse(
         stream.body, media_type=stream.media_type, headers=dict(stream.headers or {})
     )
+
+
+@router.post(
+    "/voice/offer",
+    responses={
+        status.HTTP_409_CONFLICT: {"description": "This interview has a live call."},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "The voice service refused, or the assistant did not join."
+        },
+    },
+    dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
+)
+async def voice_offer(body: VoiceOffer, membership: TripCoHost) -> VoiceAnswer:
+    """Start a voice interview: relay the browser's WebRTC offer.
+
+    The browser sends audio straight to OpenAI; the server attaches a sideband
+    that runs the interview tools with the caller's membership. The answer is
+    returned once the sideband is attached. The conversation is stored in the
+    interview session when it ends (hang-up, time limit). The panel is not
+    pushed during a call: re-read `GET .../knowledge`.
+
+    Args:
+        body: The SDP offer.
+        membership: The caller's membership (co-host or above).
+
+    Returns:
+        The SDP answer and the call id.
+    """
+    try:
+        return await voice_service.answer_offer(membership, body.sdp)
+    except voice_service.VoiceBusyError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, VOICE_BUSY) from exc
+    except voice_service.VoiceUnavailableError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, VOICE_UNAVAILABLE
+        ) from exc
+
+
+@router.post(
+    "/voice/{call_id}/hangup",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "No such call on this trip."}
+    },
+    dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
+)
+async def voice_hangup(call_id: str, membership: TripCoHost) -> None:
+    """End a voice interview and store its transcript in the session.
+
+    Args:
+        call_id: The id from the offer's answer.
+        membership: The caller's membership (co-host or above).
+    """
+    try:
+        await voice_service.hang_up(membership, call_id)
+    except voice_service.CallNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_CALL) from exc
