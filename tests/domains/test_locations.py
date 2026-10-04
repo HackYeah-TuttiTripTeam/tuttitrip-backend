@@ -97,6 +97,15 @@ def state(monkeypatch: pytest.MonkeyPatch) -> State:
         ),
     )
     monkeypatch.setattr(
+        profile_service,
+        "get_profile",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                id=MY_PROFILE, user_sub=ME.sub, display_name="Ja"
+            )
+        ),
+    )
+    monkeypatch.setattr(
         locations_db, "select_active_consent", AsyncMock(side_effect=consent)
     )
     monkeypatch.setattr(
