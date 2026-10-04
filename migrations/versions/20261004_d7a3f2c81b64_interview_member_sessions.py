@@ -1,13 +1,12 @@
 """Interview sessions of a trip member, apart from the host's.
 
-Merges the heads of the plan versions (306bfea56fc5) and the interview run guard
-(c4d9e1f07a52). A session with ``profile_id`` is the member's own interview
-about their interests; the trip's interview (host and co-hosts) keeps
+A session with ``profile_id`` is the member's own interview about their
+interests; the trip's interview (host and co-hosts) keeps
 ``profile_id`` empty. One open session per trip for the host side, one per
 profile for a member.
 
 Revision ID: d7a3f2c81b64
-Revises: 306bfea56fc5, c4d9e1f07a52
+Revises: c4d9e1f07a52
 Create Date: 2026-10-04 15:10:00.000000
 """
 
@@ -17,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d7a3f2c81b64"
-down_revision: str | Sequence[str] | None = ("306bfea56fc5", "c4d9e1f07a52")
+down_revision: str | None = "c4d9e1f07a52"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
