@@ -51,11 +51,16 @@ def script(*steps: ToolCallPart | str) -> FunctionModel:
     return FunctionModel(respond)
 
 
-def run(world: World, *steps: ToolCallPart | str) -> list[ModelMessage]:
+def run(
+    world: World,
+    *steps: ToolCallPart | str,
+    history: list[ModelMessage] | None = None,
+    prompt: str = "x",
+) -> list[ModelMessage]:
     async def go() -> list[ModelMessage]:
         with interview_agent.override(model=script(*steps)):
             result = await interview_agent.run(
-                "x", deps=world.deps(), message_history=[]
+                prompt, deps=world.deps(), message_history=history or []
             )
         return result.all_messages()
 
@@ -217,26 +222,48 @@ def test_a_value_the_host_corrected_is_not_overwritten_without_asking(
     )
     # the host fixes the city in the panel, through the trips endpoint
     world.trip = world.trip.model_copy(update={"destination": "Sopot"})
-    messages = run(
+    basics = {"city": "Gdańsk", "start_date": "2026-10-10", "days": 3}
+    asked = run(world, call("set_trip_basics", **basics), "Sopot to Twoje, zmienić?")
+    (result,) = tool_returns(asked)
+    assert str(result.content).startswith("NOT SAVED")
+    assert "[destination:-]" in str(result.content)
+    assert world.trip.destination == "Sopot"
+
+    # the model may not overwrite in the same turn it was refused
+    same_turn = run(
         world,
-        call("set_trip_basics", city="Gdańsk", start_date="2026-10-10", days=3),
+        call("set_trip_basics", **basics),
+        call("set_trip_basics", **basics, overwrite_host_values=True),
         "ok",
     )
-    (result,) = tool_returns(messages)
-    assert str(result.content).startswith("NOT SAVED")
+    assert all(str(r.content).startswith("NOT SAVED") for r in tool_returns(same_turn))
     assert world.trip.destination == "Sopot"
+
+    # after the host answered in a later message it may
     run(
         world,
         call(
             "set_trip_basics",
-            city="Gdynia",
-            start_date="2026-10-10",
-            days=3,
+            **{**basics, "city": "Gdynia"},
             overwrite_host_values=True,
         ),
-        "ok",
+        "Zmienione.",
+        history=asked,
+        prompt="Tak, zmień",
     )
     assert world.trip.destination == "Gdynia"
+
+
+def test_overwrite_without_any_refusal_before_is_refused(world: World) -> None:
+    basics = {"city": "Gdańsk", "start_date": "2026-10-10", "days": 3}
+    run(world, call("set_trip_basics", **basics), "ok")
+    world.trip = world.trip.model_copy(update={"destination": "Sopot"})
+    messages = run(
+        world, call("set_trip_basics", **basics, overwrite_host_values=True), "ok"
+    )
+    (result,) = tool_returns(messages)
+    assert str(result.content).startswith("NOT SAVED")
+    assert world.trip.destination == "Sopot"
 
 
 async def _tool_definitions(world: World) -> list[Any]:

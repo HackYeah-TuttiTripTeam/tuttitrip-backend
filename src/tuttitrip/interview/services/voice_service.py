@@ -27,22 +27,18 @@ from pydantic_ai.realtime.openai import OpenAIRealtimeModelSettings
 
 from tuttitrip.interview import constants
 from tuttitrip.interview.schemas import VoiceAnswer
-from tuttitrip.interview.services import session_service
+from tuttitrip.interview.services import history_repair, run_guard, session_service
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.interview.services.interview_deps import InterviewDeps
 from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.db.session import get_sessionmaker
-from tuttitrip.trips.schemas import TripMembership
+from tuttitrip.trips.schemas import TripMembership, TripRole
 
 logger = logging.getLogger(__name__)
 
 
 class VoiceUnavailableError(Exception):
     """The call could not be set up (no key, provider error, sideband not attached)."""
-
-
-class VoiceBusyError(Exception):
-    """This interview session already has a live call."""
 
 
 class CallNotFoundError(Exception):
@@ -55,6 +51,7 @@ class Call:
 
     deps: InterviewDeps
     provider_session: WebRTCSession
+    claim: run_guard.Claim
     task: asyncio.Task[None] | None = None
     attached: asyncio.Event = field(default_factory=asyncio.Event)
     attach_error: BaseException | None = None
@@ -129,7 +126,7 @@ async def _provider_hangup(call_id: str) -> None:
 
 
 async def _store(call: Call, transcript: list[ModelMessage]) -> None:
-    messages = without_system_prompts(transcript)
+    messages = history_repair.redact(without_system_prompts(transcript))
     if not messages:
         return
     deps = call.deps
@@ -175,6 +172,7 @@ async def _sideband(call: Call, realtime: AgentRealtime[InterviewDeps]) -> None:
             await _store(call, transcript)
         except Exception:
             logger.exception("Could not store the transcript of call %s", call_id)
+        await run_guard.release(call.claim, voice=True)
         await _provider_hangup(call_id)
 
 
@@ -192,26 +190,41 @@ async def answer_offer(membership: TripMembership, sdp: str) -> VoiceAnswer:
         The SDP answer and the call id.
 
     Raises:
-        VoiceBusyError: The trip's interview already has a live call.
+        SessionBusyError: The interview has a live call or a running text turn.
+        VoiceBudgetError: The trip's voice time is used up.
         VoiceUnavailableError: The provider refused, or the sideband did not
             attach within ``interview.voice_attach_timeout_seconds``.
     """
     sessions = get_sessionmaker()
     async with sessions() as session:
         interview_session, _ = await session_service.open_session(session, membership)
-    if any(c.deps.session_id == interview_session.id for c in CALLS.values()):
-        raise VoiceBusyError(str(interview_session.id))
+    interview = get_settings().interview
+    claim = await run_guard.acquire(
+        sessions,
+        membership,
+        interview_session.id,
+        limit_seconds=interview.voice_max_seconds
+        + interview.voice_attach_timeout_seconds,
+        voice_limit=interview.voice_trip_seconds,
+    )
     deps = InterviewDeps(
-        membership=membership, session_id=interview_session.id, sessions=sessions
+        membership=membership,
+        session_id=interview_session.id,
+        sessions=sessions,
+        voice=True,
     )
     realtime = realtime_for(deps)
     try:
         answer = await realtime.answer_webrtc_offer(sdp)
     except (UserError, ModelAPIError, httpx.HTTPError) as exc:
+        await run_guard.release(claim)
         logger.warning("The provider refused the offer", exc_info=exc)
         msg = "The voice service is not available"
         raise VoiceUnavailableError(msg) from exc
-    call = Call(deps=deps, provider_session=answer.session)
+    except BaseException:
+        await run_guard.release(claim)
+        raise
+    call = Call(deps=deps, provider_session=answer.session, claim=claim)
     call_id = answer.session.call_id
     CALLS[call_id] = call
     call.task = asyncio.create_task(_sideband(call, realtime))
@@ -249,9 +262,13 @@ async def hang_up(membership: TripMembership, call_id: str) -> None:
 
     Raises:
         CallNotFoundError: No such live call on this trip (also for another
-            trip's call, so ids do not leak).
+            trip's call, so ids do not leak), or the caller neither started
+            it nor is the trip's host.
     """
     call = CALLS.get(call_id)
     if call is None or call.deps.membership.trip_id != membership.trip_id:
+        raise CallNotFoundError(call_id)
+    owner = call.deps.membership.sub == membership.sub
+    if not owner and not membership.role.satisfies(TripRole.HOST):
         raise CallNotFoundError(call_id)
     await _end(call)

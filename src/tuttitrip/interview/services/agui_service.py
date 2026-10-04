@@ -26,16 +26,25 @@ from dataclasses import KW_ONLY, dataclass
 from typing import Any, override
 from uuid import UUID
 
+import anyio
+import httpx
 from ag_ui.core import BaseEvent, RunAgentInput, RunErrorEvent
 from pydantic import ValidationError
+from pydantic_ai import capture_run_messages
 from pydantic_ai.agent import AgentRunResult
-from pydantic_ai.exceptions import UsageLimitExceeded, UserError
+from pydantic_ai.exceptions import (
+    FallbackExceptionGroup,
+    ModelAPIError,
+    UsageLimitExceeded,
+    UserError,
+)
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.ui import NativeEvent
 from pydantic_ai.ui.ag_ui import AGUIAdapter, AGUIEventStream
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.interview import constants
-from tuttitrip.interview.services import run_guard, session_service
+from tuttitrip.interview.services import history_repair, run_guard, session_service
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.interview.services.interview_deps import InterviewDeps
 from tuttitrip.shared.config.settings import get_settings
@@ -114,6 +123,10 @@ def new_deps(membership: TripMembership, session_id: UUID) -> InterviewDeps:
     )
 
 
+UNAVAILABLE_ERRORS = (UserError, ModelAPIError, FallbackExceptionGroup, httpx.HTTPError)
+"""Failures to reach a model: nothing the host did wrong, try again later."""
+
+
 def run_error(error: BaseException) -> tuple[str, str]:
     """Turn a failed run into the client's message and code.
 
@@ -128,7 +141,7 @@ def run_error(error: BaseException) -> tuple[str, str]:
         return constants.ERROR_SPEND_PL, constants.ERROR_CODE_SPEND
     if isinstance(error, TimeoutError):
         return constants.ERROR_TIMEOUT_PL, constants.ERROR_CODE_TIMEOUT
-    if isinstance(error, UserError):
+    if isinstance(error, UNAVAILABLE_ERRORS):
         return constants.ERROR_UNAVAILABLE_PL, constants.ERROR_CODE_UNAVAILABLE
     return constants.ERROR_GENERIC_PL, constants.ERROR_CODE_GENERIC
 
@@ -152,27 +165,49 @@ class InterviewAdapter(AGUIAdapter[InterviewDeps, str]):
     _: KW_ONLY
     text: str = ""
     deps: InterviewDeps | None = None
+    claim: run_guard.Claim | None = None
+    completed: bool = False
 
     @override
     def build_event_stream(self) -> InterviewEventStream:
         return InterviewEventStream(self.run_input, accept=self.accept)
 
+    async def _keep_partial(self, captured: list[ModelMessage], skip: int) -> None:
+        """Store what a failed turn did, so a retry does not repeat tool calls."""
+        deps = self.deps
+        messages = history_repair.settle(captured[skip:])
+        if deps is None or not messages:
+            return
+        with anyio.CancelScope(shield=True):
+            try:
+                async with deps.sessions() as session:
+                    await session_service.append_messages(
+                        session, deps.membership, deps.session_id, messages
+                    )
+            except Exception:
+                logger.exception("Could not store the partial turn")
+
     @override
     def run_stream_native(self, **kwargs: Any) -> AsyncIterator[NativeEvent]:
-        deps = self.deps
         timeout = get_settings().interview.run_timeout_seconds
+        skip = len(kwargs.get("message_history") or [])
 
         async def stream() -> AsyncIterator[NativeEvent]:
             try:
-                async with (
-                    asyncio.timeout(timeout),
-                    self.agent.run_stream_events(self.text, **kwargs) as events,
-                ):
-                    async for event in events:
-                        yield event  # ruff: ignore[yield-in-context-manager-in-async-generator] as in the adapter's own stream
+                with capture_run_messages() as captured:
+                    try:
+                        async with (
+                            asyncio.timeout(timeout),
+                            self.agent.run_stream_events(self.text, **kwargs) as events,
+                        ):
+                            async for event in events:
+                                yield event  # ruff: ignore[yield-in-context-manager-in-async-generator] as in the adapter's own stream
+                    finally:
+                        if not self.completed:
+                            await self._keep_partial(captured, skip)
             finally:
-                if deps is not None:
-                    run_guard.release(deps.session_id)
+                if self.claim is not None:
+                    await run_guard.release(self.claim)
 
         return stream()
 
@@ -184,6 +219,7 @@ class InterviewStream:
     body: AsyncIterator[str]
     media_type: str
     headers: Mapping[str, str] | None
+    claim: run_guard.Claim
 
 
 def start(
@@ -191,6 +227,7 @@ def start(
     accept: str | None,
     deps: InterviewDeps,
     history: Sequence[ModelMessage],
+    claim: run_guard.Claim,
 ) -> InterviewStream:
     """Prepare one turn: the run is started when the client reads the stream.
 
@@ -199,12 +236,10 @@ def start(
         accept: The ``Accept`` header of the request.
         deps: The turn's dependencies (membership, session id, sessions).
         history: The stored history of the session (``load_history``).
+        claim: The session claim; the stream gives it back when it ends.
 
     Returns:
         The encoded SSE stream.
-
-    Raises:
-        SessionBusyError: Another run of this session is in progress.
     """
     adapter = InterviewAdapter(
         agent=interview_agent,
@@ -212,10 +247,11 @@ def start(
         accept=accept,
         text=request.text,
         deps=deps,
+        claim=claim,
     )
-    run_guard.acquire(deps.session_id)
 
     async def store(result: AgentRunResult[str]) -> None:
+        adapter.completed = True
         async with deps.sessions() as session:
             await session_service.append_messages(
                 session, deps.membership, deps.session_id, result.new_messages()
@@ -232,4 +268,48 @@ def start(
         body=adapter.encode_stream(events),
         media_type=stream.content_type,
         headers=stream.response_headers,
+        claim=claim,
     )
+
+
+async def begin(
+    request: RunRequest,
+    accept: str | None,
+    membership: TripMembership,
+    session: AsyncSession,
+) -> InterviewStream:
+    """Claim the session, read its history and prepare the turn.
+
+    The claim comes first, so two turns can never both read the same history.
+    It is given back on any failure here; afterwards the stream (and the
+    response's background task) gives it back.
+
+    Args:
+        request: The parsed request.
+        accept: The ``Accept`` header of the request.
+        membership: The caller's checked membership.
+        session: The request's database session (for the history).
+
+    Returns:
+        The encoded SSE stream.
+
+    Raises:
+        SessionNotFoundError: No such session on this trip.
+        HistoryIncompatibleError: The stored history cannot be read.
+        SessionBusyError: Another run holds the session.
+    """
+    deps = new_deps(membership, request.thread_id)
+    claim = await run_guard.acquire(
+        deps.sessions,
+        membership,
+        request.thread_id,
+        limit_seconds=get_settings().interview.run_timeout_seconds,
+    )
+    try:
+        history = await session_service.load_history(
+            session, membership, request.thread_id
+        )
+        return start(request, accept, deps, history, claim)
+    except BaseException:
+        await run_guard.release(claim)
+        raise

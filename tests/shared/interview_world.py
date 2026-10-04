@@ -6,10 +6,12 @@ production ones. Only the table access (``db`` modules) and the preferences
 service are replaced.
 """
 
+import time
 import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -80,6 +82,10 @@ class World:
         self.saved: dict[uuid.UUID, PreferencesWrite] = {}
         self.digests: dict[FieldRef, str] = {}
         self.writes = 0
+        self.running: dict[uuid.UUID, tuple[datetime, float]] = {}
+        self.voice_used: dict[uuid.UUID, int] = {}
+        self.known_sessions: set[uuid.UUID] | None = None
+        self._claims = 0
         self.session = MagicMock()
         self.session.commit = AsyncMock()
         self.session.rollback = AsyncMock()
@@ -102,6 +108,9 @@ class World:
         )
         monkeypatch.setattr(interview_db, "select_assistant_digests", self._digests)
         monkeypatch.setattr(interview_db, "upsert_assistant_digest", self._upsert)
+        monkeypatch.setattr(interview_db, "try_start_run", self._try_start)
+        monkeypatch.setattr(interview_db, "end_run", self._end_run)
+        monkeypatch.setattr(interview_db, "select_session", self._select_session)
 
     def deps(self) -> InterviewDeps:
         """Deps whose sessions are the fake one.
@@ -220,6 +229,49 @@ class World:
 
     async def _upsert(self, _s: object, _t: object, ref: FieldRef, digest: str) -> None:
         self.digests[ref] = digest
+
+    # --- run guard (the atomic UPDATE of ``interview.db``, in memory) ---------
+
+    async def _try_start(
+        self,
+        _s: object,
+        trip_id: uuid.UUID,
+        session_id: uuid.UUID,
+        ttl: float,
+        voice_limit: int | None,
+    ) -> datetime | None:
+        if trip_id != self.trip_id or not self._exists(session_id):
+            return None
+        held = self.running.get(session_id)
+        if held is not None and held[1] > time.monotonic():
+            return None
+        used = self.voice_used.get(session_id, 0)
+        if voice_limit is not None and used >= voice_limit:
+            return None
+        self._claims += 1
+        token = NOW + timedelta(seconds=self._claims)
+        self.running[session_id] = (token, time.monotonic() + ttl)
+        return token
+
+    async def _end_run(
+        self, _s: object, session_id: uuid.UUID, token: datetime, voice_seconds: int
+    ) -> None:
+        held = self.running.get(session_id)
+        if held is not None and held[0] == token:
+            del self.running[session_id]
+        if voice_seconds:
+            used = self.voice_used.get(session_id, 0)
+            self.voice_used[session_id] = used + voice_seconds
+
+    async def _select_session(
+        self, _s: object, trip_id: uuid.UUID, session_id: uuid.UUID, **_kw: object
+    ) -> SimpleNamespace | None:
+        if trip_id != self.trip_id or not self._exists(session_id):
+            return None
+        return SimpleNamespace(voice_seconds=self.voice_used.get(session_id, 0))
+
+    def _exists(self, session_id: uuid.UUID) -> bool:
+        return self.known_sessions is None or session_id in self.known_sessions
 
 
 def model_of(

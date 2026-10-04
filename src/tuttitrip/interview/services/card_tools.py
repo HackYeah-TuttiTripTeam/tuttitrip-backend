@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from pydantic_ai import ModelRetry, RunContext, ToolReturn
+from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset
 
 from tuttitrip.interview.schemas import CardKind, QuestionField, ShownCard
@@ -12,7 +13,22 @@ from tuttitrip.interview.services.tool_support import snapshot, tool_session
 card_toolset = FunctionToolset[InterviewDeps]()
 
 
-@card_toolset.tool
+async def hide_in_voice(  # ruff: ignore[unused-async] a tool prepare hook is async
+    ctx: RunContext[InterviewDeps], tool_def: ToolDefinition
+) -> ToolDefinition | None:
+    """Offer ``show_card`` only where there is a screen to show it on.
+
+    Args:
+        ctx: The run context.
+        tool_def: The tool as defined.
+
+    Returns:
+        The tool, or None on a voice call.
+    """
+    return None if ctx.deps.voice else tool_def
+
+
+@card_toolset.tool(prepare=hide_in_voice)
 async def show_card(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] the tool schema
     ctx: RunContext[InterviewDeps],
     kind: CardKind,

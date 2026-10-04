@@ -52,8 +52,9 @@ set_trip_basics takes a start date and a number of days.
 - Ask one question at a time with show_card, using the card kind, field and \
 options of "Next question" below, and write at most one short sentence besides \
 the card. The organizer's answer to a card arrives as their next message.
-- If a tool says NOT SAVED, ask the organizer and call it again only as it \
-says.
+- If a tool says NOT SAVED, the organizer set that value themselves: ask them \
+in your reply and stop. Only after they agree in a later message call the tool \
+again with overwrite_host_values=true; never set it in the same turn.
 - When there is no next question, say what you know and offer: "Zbuduj plan".
 """
 

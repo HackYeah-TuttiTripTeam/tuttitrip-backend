@@ -9,9 +9,11 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic_ai.exceptions import FallbackExceptionGroup, ModelAPIError, ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelResponse,
@@ -24,6 +26,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from tests.shared.fakes import authorize
 from tests.shared.interview_world import World, model_of
 from tests.shared.paths import path
+from tuttitrip.interview import constants
 from tuttitrip.interview.services import (
     agui_service,
     run_guard,
@@ -275,29 +278,89 @@ def test_an_unknown_session_is_404_and_the_agent_does_not_run(
     assert not called
 
 
-@pytest.mark.usefixtures("store")
-def test_a_second_turn_of_a_running_session_is_409_and_the_marker_clears(
-    client: TestClient, world: World
+def claim_of(world: World, limit: float = 60) -> run_guard.Claim:
+    return asyncio.run(
+        run_guard.acquire(
+            world.deps().sessions, world.membership, THREAD, limit_seconds=limit
+        )
+    )
+
+
+def test_a_busy_session_is_409_before_the_history_is_read(
+    client: TestClient, world: World, store: Store
 ) -> None:
-    run_guard.acquire(THREAD)
-    try:
-        assert turn(client, world).status_code == 409
-    finally:
-        run_guard.release(THREAD)
+    claim = claim_of(world)
+    assert turn(client, world).status_code == 409
+    session_service.load_history.assert_not_awaited()  # ty: ignore[unresolved-attribute]
+    asyncio.run(run_guard.release(claim))
     with interview_agent.override(model=scripted("Ok.", "Ok again.")):
         events(turn(client, world))
-        events(turn(client, world))  # the first run released the session
+        events(turn(client, world))  # each finished run released the session
+    assert not world.running
+    assert len(store.appended) == 2
 
 
-def test_an_abandoned_marker_expires(monkeypatch: pytest.MonkeyPatch) -> None:
-    session = uuid.uuid4()
-    run_guard.acquire(session)
+def test_the_claim_is_given_back_when_the_history_cannot_be_read(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for error, status in [
+        (session_service.SessionNotFoundError("x"), 404),
+        (session_service.HistoryIncompatibleError("x"), 409),
+    ]:
+        monkeypatch.setattr(
+            session_service, "load_history", AsyncMock(side_effect=error)
+        )
+        assert turn(client, world).status_code == status
+        assert not world.running
+
+
+def test_an_expired_claim_can_be_taken_over_and_the_old_release_is_harmless(
+    world: World,
+) -> None:
+    stale = claim_of(world, limit=-30)  # expires at once (margin 30 s)
+    fresh = claim_of(world)
+    asyncio.run(run_guard.release(stale))  # the old holder finishes late
+    assert world.running  # the new holder still holds the session
     with pytest.raises(run_guard.SessionBusyError):
-        run_guard.acquire(session)
-    settings = SimpleNamespace(interview=SimpleNamespace(run_lock_ttl_seconds=0))
-    monkeypatch.setattr(run_guard, "get_settings", lambda: settings)
-    run_guard.acquire(session)
-    run_guard.release(session)
+        claim_of(world)
+    asyncio.run(run_guard.release(fresh))
+    asyncio.run(run_guard.release(fresh))  # twice is fine
+    assert not world.running
+
+
+def test_a_session_of_another_trip_cannot_be_claimed(world: World) -> None:
+    other = World()
+    with pytest.raises(session_service.SessionNotFoundError):
+        asyncio.run(
+            run_guard.acquire(
+                world.deps().sessions, other.membership, THREAD, limit_seconds=60
+            )
+        )
+
+
+@pytest.mark.usefixtures("store")
+@pytest.mark.parametrize(
+    "error",
+    [
+        ModelHTTPError(503, "qwen"),
+        ModelAPIError("qwen", "down"),
+        FallbackExceptionGroup("all failed", [ModelHTTPError(500, "x")]),
+        httpx.ConnectError("refused"),
+    ],
+    ids=["http", "api", "fallback", "httpx"],
+)
+def test_an_unreachable_model_is_the_unavailable_error(
+    client: TestClient, world: World, error: Exception
+) -> None:
+    def down(_m: list[ModelMessage], _i: AgentInfo) -> ModelResponse:
+        raise error
+
+    with interview_agent.override(model=model_of(down)):
+        stream = events(turn(client, world))
+    assert types(stream)[-1] == "RUN_ERROR"
+    assert stream[-1]["code"] == "unavailable"
+    assert "niedostępny" in stream[-1]["message"]
+    assert not world.running
 
 
 def test_a_spent_budget_ends_the_stream_with_a_polish_error_not_a_500(
@@ -328,7 +391,19 @@ def test_a_spent_budget_ends_the_stream_with_a_polish_error_not_a_500(
     assert error["code"] == "spend_limit"
     assert "Limit kosztów" in error["message"]
     assert "RUN_FINISHED" not in types(stream)
-    assert not store.appended  # an unfinished turn is not stored
+    # what the failed turn did is kept, closed so the next run can continue
+    (kept,) = store.appended
+    assert isinstance(kept[0].parts[0], UserPromptPart)
+    assert kept[0].parts[0].content == "Gdańsk, trzy dni"
+    assert any(
+        isinstance(m, ModelResponse)
+        and any(isinstance(p, ToolCallPart) for p in m.parts)
+        for m in kept
+    )
+    last = kept[-1]
+    assert isinstance(last, ModelResponse)
+    assert last.parts[0].content == constants.INTERRUPTED_NOTE  # ty: ignore[unresolved-attribute]
+    assert not world.running
 
 
 @pytest.mark.usefixtures("store")

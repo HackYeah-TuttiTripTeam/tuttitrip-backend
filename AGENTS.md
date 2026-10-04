@@ -467,14 +467,23 @@ stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
   input used is the text of the last user message (the `user_prompt` of the run);
   the stored session history is the `message_history`, `result.new_messages()` is
   appended on completion, and the client's `messages`, `state`, `tools` and
-  `resume` are ignored. One run per session (`run_guard`, 409), at most
-  `interview.run_timeout_seconds` long. Run errors are a Polish `RUN_ERROR`
+  `resume` are ignored. One run per session, text or voice (`run_guard`: one
+  atomic `UPDATE` of `interview_sessions.running_until`, 409; acquired before the
+  history is read, released in a `finally` around the stream and by the response's
+  background task, expiring a margin after the run's time limit), at most
+  `interview.run_timeout_seconds` long. A failed turn keeps what it did
+  (`history_repair.settle`). Voice time per trip is limited
+  (`interview.voice_trip_seconds`, booked in `voice_seconds`, 429). Run errors are a Polish `RUN_ERROR`
   with a `code` (`spend_limit`, `timeout`, `unavailable`, `error`).
 - The adapter subclass lives in `services`, so `api.py` imports no `pydantic_ai`
   and the architecture rules need no exception.
 - The next question is `interview/logic/next_question.py` (pure, explicit
   table in `constants.py`); the model only words it and shows it with the
   `show_card` tool. The host's answer to a card is the text of their next message.
+- `SpendLimits` keeps its counters in this process (`InMemorySpendStore`): a deploy
+  resets the per-trip text budget. A shared store would need Redis; accepted for now.
+  `overwrite_host_values` is honoured only after a NOT SAVED result of that tool for
+  the same values followed by a later user message.
 - Tests: `FunctionModel` through `tests/shared/interview_world.py` (real
   services over an in-memory trip). Voice: `services/voice_service.py`, tested
   with the realtime session replaced; the real session is checked on a deployment.

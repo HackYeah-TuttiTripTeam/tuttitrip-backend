@@ -101,11 +101,6 @@ class InterviewSettings(BaseModel):
         gt=0,
         description="One text turn is cut off after this long (gateway: 300 s).",
     )
-    run_lock_ttl_seconds: float = Field(
-        default=180.0,
-        gt=0,
-        description="A run marker older than this is treated as abandoned.",
-    )
     trip_budget_usd: Decimal = Field(
         default=Decimal(2),
         gt=0,
@@ -138,6 +133,11 @@ class InterviewSettings(BaseModel):
         default=10.0,
         gt=0,
         description="How long the offer waits for the server sideband to attach.",
+    )
+    voice_trip_seconds: int = Field(
+        default=1800,
+        ge=1,
+        description="Voice time one trip's interview may use in all (all calls).",
     )
     voice_budget_usd: Decimal = Field(
         default=Decimal(1),

@@ -79,10 +79,14 @@ async def _save(
 
 
 async def _guard(
-    ctx: RunContext[InterviewDeps], session: AsyncSession, person_id: UUID
+    ctx: RunContext[InterviewDeps],
+    session: AsyncSession,
+    person_id: UUID,
+    *,
+    overwrite: bool,
 ) -> str | None:
     ref = FieldRef(field=KnowledgeField.PREFERENCES, profile_id=person_id)
-    return await host_conflict(ctx, session, [ref])
+    return await host_conflict(ctx, session, [ref], overwrite=overwrite)
 
 
 async def _set_constraint(
@@ -94,7 +98,7 @@ async def _set_constraint(
     overwrite: bool,
 ) -> ToolReturn | str:
     async with tool_session(ctx) as session:
-        if not overwrite and (clash := await _guard(ctx, session, person_id)):
+        if clash := await _guard(ctx, session, person_id, overwrite=overwrite):
             return clash
         write = await _current(ctx, session, person_id)
         write.constraints = write.constraints.model_copy(update={kind.value: value})
@@ -110,7 +114,7 @@ async def _set_diet(
     overwrite: bool,
 ) -> ToolReturn | str:
     async with tool_session(ctx) as session:
-        if not overwrite and (clash := await _guard(ctx, session, person_id)):
+        if clash := await _guard(ctx, session, person_id, overwrite=overwrite):
             return clash
         write = await _current(ctx, session, person_id)
         tags = {t for t in write.diet.tags if t != diet}
@@ -258,8 +262,8 @@ async def add_interest(
         The saved interest and a fresh snapshot.
     """
     async with tool_session(ctx) as session:
-        if not overwrite_host_values and (
-            clash := await _guard(ctx, session, person_id)
+        if clash := await _guard(
+            ctx, session, person_id, overwrite=overwrite_host_values
         ):
             return clash
         write = await _current(ctx, session, person_id)
@@ -294,8 +298,8 @@ async def set_importance_points(
         The whole pool after the change and a fresh snapshot.
     """
     async with tool_session(ctx) as session:
-        if not overwrite_host_values and (
-            clash := await _guard(ctx, session, person_id)
+        if clash := await _guard(
+            ctx, session, person_id, overwrite=overwrite_host_values
         ):
             return clash
         read = await preference_service.get_preferences(

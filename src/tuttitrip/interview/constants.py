@@ -130,3 +130,9 @@ VOICE_INSTRUCTIONS: Final = (
     "ask the question out loud instead."
 )
 """Added to the interview instructions for the voice agent."""
+
+GUARD_MARGIN_SECONDS: Final = 30.0
+"""Slack added to a run's time limit before its claim counts as abandoned."""
+
+INTERRUPTED_NOTE: Final = "(Odpowiedź asystenta została przerwana.)"
+"""Closes a stored turn that failed half-way, so the next run can continue."""

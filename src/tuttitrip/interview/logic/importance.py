@@ -36,18 +36,17 @@ def set_points(
     others = {d: v for d, v in pool.items() if d != domain}
     share = total - points
     weight = sum(others.values())
-    # Proportional (or even, when the others are all zero) with largest remainders.
-    raw = {
-        d: share * (v / weight if weight else 1 / len(others))
-        for d, v in others.items()
-    }
-    out = {d: int(r) for d, r in raw.items()}
-    leftover = share - sum(out.values())
+    # Integer shares in proportion (even when the others are all zero); the
+    # points left over go to the largest remainders, ties to the larger old
+    # value and then to the earlier domain.
+    scaled = {d: share * (v if weight else 1) for d, v in others.items()}
+    base = weight or len(others)
+    out = {d: n // base for d, n in scaled.items()}
     order = sorted(
-        raw,
-        key=lambda d: (raw[d] - out[d], others[d], -list(raw).index(d)),
+        scaled,
+        key=lambda d: (scaled[d] % base, others[d], -list(scaled).index(d)),
         reverse=True,
     )
-    for d in order[:leftover]:
+    for d in order[: share - sum(out.values())]:
         out[d] += 1
     return {d: points if d == domain else out[d] for d in pool}

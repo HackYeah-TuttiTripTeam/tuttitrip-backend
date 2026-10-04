@@ -8,6 +8,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from tuttitrip.interview.schemas import (
     InterviewSessionRead,
@@ -45,7 +46,7 @@ router = APIRouter(prefix="/trips/{trip_id}/interview", tags=["interview"])
 
 NO_SESSION = "The trip has no open interview session"
 BUSY = "Another turn of this interview is still running"
-VOICE_BUSY = "This interview already has a live call"
+VOICE_BUDGET = "The voice time of this trip's interview is used up"
 VOICE_UNAVAILABLE = "The voice assistant is not available"
 NO_CALL = "No such call on this trip"
 
@@ -175,12 +176,8 @@ async def run_turn(
     """
     try:
         parsed = agui_service.read_request(await request.body())
-        history = await session_service.load_history(
-            session, membership, parsed.thread_id
-        )
-        deps = agui_service.new_deps(membership, parsed.thread_id)
-        stream = agui_service.start(
-            parsed, request.headers.get("accept"), deps, history
+        stream = await agui_service.begin(
+            parsed, request.headers.get("accept"), membership, session
         )
     except agui_service.PromptError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
@@ -191,14 +188,18 @@ async def run_turn(
     except run_guard.SessionBusyError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from exc
     return EventStreamResponse(
-        stream.body, media_type=stream.media_type, headers=dict(stream.headers or {})
+        stream.body,
+        media_type=stream.media_type,
+        headers=dict(stream.headers or {}),
+        background=BackgroundTask(run_guard.release, stream.claim),
     )
 
 
 @router.post(
     "/voice/offer",
     responses={
-        status.HTTP_409_CONFLICT: {"description": "This interview has a live call."},
+        status.HTTP_409_CONFLICT: {"description": "A call or a text turn is running."},
+        status.HTTP_429_TOO_MANY_REQUESTS: {"description": "Voice time used up."},
         status.HTTP_503_SERVICE_UNAVAILABLE: {
             "description": "The voice service refused, or the assistant did not join."
         },
@@ -223,8 +224,12 @@ async def voice_offer(body: VoiceOffer, membership: TripCoHost) -> VoiceAnswer:
     """
     try:
         return await voice_service.answer_offer(membership, body.sdp)
-    except voice_service.VoiceBusyError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, VOICE_BUSY) from exc
+    except run_guard.SessionBusyError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from exc
+    except run_guard.VoiceBudgetError as exc:
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, VOICE_BUDGET) from exc
+    except SessionNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SESSION) from exc
     except voice_service.VoiceUnavailableError as exc:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, VOICE_UNAVAILABLE

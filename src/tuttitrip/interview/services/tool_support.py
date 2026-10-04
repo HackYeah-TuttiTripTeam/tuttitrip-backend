@@ -1,10 +1,11 @@
 """Shared parts of the interview tools: snapshots, the host's-values guard, errors."""
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 
 from ag_ui.core import EventType, StateSnapshotEvent
 from pydantic_ai import ModelRetry, RunContext, ToolReturn
+from pydantic_ai.messages import ModelMessage, ToolReturnPart, UserPromptPart
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.interview.logic import knowledge
@@ -20,8 +21,9 @@ from tuttitrip.trips.services.trip_service import TripInvalidError
 type Ctx = RunContext[InterviewDeps]
 
 NOT_SAVED = (
-    "NOT SAVED: the host set {what} themselves. Ask the host whether to overwrite "
-    "it, then call this tool again with overwrite_host_values=true."
+    "NOT SAVED: the host set {what} themselves. Ask the host in your reply whether "
+    "to overwrite it. Only when they agree in a later message, call this tool "
+    "again with overwrite_host_values=true. Refs: {refs}"
 )
 UNKNOWN_PERSON = "There is no such person on this trip; use a person_id from the tools."
 
@@ -50,15 +52,57 @@ async def tool_session(ctx: Ctx) -> AsyncGenerator[AsyncSession]:
             raise ModelRetry(message) from exc
 
 
+def _ref_key(ref: FieldRef) -> str:
+    return f"[{ref.field.value}:{ref.profile_id or '-'}]"
+
+
+def overwrite_confirmed(
+    messages: Sequence[ModelMessage], tool: str, keys: set[str]
+) -> bool:
+    """Whether the host was asked: this tool refused these values, then they spoke.
+
+    Args:
+        messages: The run's messages including the stored history.
+        tool: The tool asking to overwrite.
+        keys: The refs it wants to overwrite.
+
+    Returns:
+        True when the latest refusal of this tool for all the refs is followed
+        by a new user message.
+    """
+    refused_at = -1
+    for index, message in enumerate(messages):
+        for part in message.parts:
+            if (
+                isinstance(part, ToolReturnPart)
+                and part.tool_name == tool
+                and isinstance(part.content, str)
+                and part.content.startswith("NOT SAVED")
+                and all(key in part.content for key in keys)
+            ):
+                refused_at = index
+    return refused_at >= 0 and any(
+        isinstance(part, UserPromptPart)
+        for message in messages[refused_at + 1 :]
+        for part in message.parts
+    )
+
+
 async def host_conflict(
-    ctx: Ctx, session: AsyncSession, refs: list[FieldRef]
+    ctx: RunContext[InterviewDeps],
+    session: AsyncSession,
+    refs: list[FieldRef],
+    *,
+    overwrite: bool,
 ) -> str | None:
-    """Tell whether the host already set one of the values.
+    """Tell whether the host already set one of the values and may not be overruled.
 
     Args:
         ctx: The run context.
         session: Open session.
         refs: The values the tool is about to write.
+        overwrite: The model asked to overwrite; honoured only after the host
+            was asked (see ``overwrite_confirmed``).
 
     Returns:
         The message to return to the model, or None when the write is free.
@@ -67,7 +111,11 @@ async def host_conflict(
     clash = knowledge.host_set(current.sources, refs)
     if not clash:
         return None
-    return NOT_SAVED.format(what=", ".join(sorted({r.field.value for r in clash})))
+    keys = {_ref_key(ref) for ref in clash}
+    if overwrite and overwrite_confirmed(ctx.messages, ctx.tool_name or "", keys):
+        return None
+    what = ", ".join(sorted({r.field.value for r in clash}))
+    return NOT_SAVED.format(what=what, refs=" ".join(sorted(keys)))
 
 
 async def saved(

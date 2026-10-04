@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any, override
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -36,7 +37,7 @@ from tests.shared.fakes import authorize
 from tests.shared.interview_world import World
 from tests.shared.paths import path
 from tuttitrip.interview.schemas import SessionStatus
-from tuttitrip.interview.services import session_service, voice_service
+from tuttitrip.interview.services import run_guard, session_service, voice_service
 from tuttitrip.main import create_app
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
@@ -247,7 +248,9 @@ def test_the_time_limit_closes_the_call_and_keeps_the_conversation(
 ) -> None:
     settings = SimpleNamespace(
         interview=SimpleNamespace(
-            voice_max_seconds=0.2, voice_attach_timeout_seconds=5.0
+            voice_max_seconds=0.2,
+            voice_attach_timeout_seconds=5.0,
+            voice_trip_seconds=1800,
         )
     )
     monkeypatch.setattr(voice_service, "get_settings", lambda: settings)
@@ -289,6 +292,117 @@ def test_a_second_call_on_the_same_interview_is_409(
     call_id = offer(client, world).json()["call_id"]
     assert offer(client, world).status_code == 409
     hangup(client, world, call_id)
+    assert not world.running
+
+
+def test_voice_and_text_exclude_each_other(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use(monkeypatch, FakeRealtime())
+    text_turn = asyncio.run(
+        run_guard.acquire(
+            world.deps().sessions, world.membership, SESSION_ID, limit_seconds=60
+        )
+    )
+    assert offer(client, world).status_code == 409  # a text turn is running
+    asyncio.run(run_guard.release(text_turn))
+    call_id = offer(client, world).json()["call_id"]
+    with pytest.raises(run_guard.SessionBusyError):  # a call is running
+        asyncio.run(
+            run_guard.acquire(
+                world.deps().sessions, world.membership, SESSION_ID, limit_seconds=60
+            )
+        )
+    hangup(client, world, call_id)
+
+
+def test_two_offers_at_once_get_one_call(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    realtime = FakeRealtime()
+    use(monkeypatch, realtime)
+
+    async def both() -> list[int]:
+        app: Any = client.app
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://t"
+        ) as http:
+            url = path("voice_offer", trip_id=world.trip_id)
+            responses = await asyncio.gather(
+                http.post(url, json={"sdp": "OFFER"}),
+                http.post(url, json={"sdp": "OFFER"}),
+            )
+        return sorted(r.status_code for r in responses)
+
+    assert client.portal is not None
+    assert client.portal.call(both) == [200, 409]
+    assert realtime.calls == 1  # the loser never reached the provider
+    for call_id in list(voice_service.CALLS):
+        hangup(client, world, call_id)
+
+
+def test_the_trips_voice_time_is_limited_and_booked_per_call(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = SimpleNamespace(
+        interview=SimpleNamespace(
+            voice_max_seconds=60.0,
+            voice_attach_timeout_seconds=5.0,
+            voice_trip_seconds=3,
+        )
+    )
+    monkeypatch.setattr(voice_service, "get_settings", lambda: settings)
+    use(monkeypatch, FakeRealtime())
+    first = offer(client, world).json()["call_id"]
+    assert hangup(client, world, first).status_code == 204
+    assert world.voice_used[SESSION_ID] >= 1  # the call's time is booked
+    world.voice_used[SESSION_ID] = 3  # the limit is reached
+    refused = offer(client, world)
+    assert refused.status_code == 429
+    assert not voice_service.CALLS
+    assert not world.running
+
+
+def test_only_the_caller_who_started_the_call_or_the_host_may_end_it(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+
+    def as_role(sub: str, role: TripRole) -> None:
+        monkeypatch.setattr(
+            trip_service,
+            "get_membership",
+            AsyncMock(
+                return_value=TripMembership(trip_id=world.trip_id, sub=sub, role=role)
+            ),
+        )
+
+    as_role("auth0|other-cohost", TripRole.CO_HOST)
+    assert hangup(client, world, call_id).status_code == 404
+    assert call_id in voice_service.CALLS
+    as_role("auth0|other-host", TripRole.HOST)
+    assert hangup(client, world, call_id).status_code == 204
+
+
+def test_the_stored_transcript_is_redacted_like_the_text_interview(
+    client: TestClient,
+    world: World,
+    stored: list[list[ModelMessage]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "AKIAIOSFODNN7EXAMPLE"  # the documented AWS example key
+    leaked = [ModelRequest(parts=[UserPromptPart(content=f"klucz {secret}")])]
+    monkeypatch.setattr(
+        FakeProviderSession, "all_messages", staticmethod(lambda: leaked)
+    )
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+    hangup(client, world, call_id)
+    (transcript,) = stored
+    text = str(transcript)
+    assert secret not in text
+    assert "REDACTED" in text.upper()
 
 
 def test_a_sideband_that_cannot_attach_is_503_and_leaves_no_call(
@@ -304,7 +418,9 @@ def test_a_sideband_that_never_attaches_times_out_with_503(
 ) -> None:
     settings = SimpleNamespace(
         interview=SimpleNamespace(
-            voice_max_seconds=60.0, voice_attach_timeout_seconds=0.1
+            voice_max_seconds=60.0,
+            voice_attach_timeout_seconds=0.1,
+            voice_trip_seconds=1800,
         )
     )
     monkeypatch.setattr(voice_service, "get_settings", lambda: settings)
@@ -401,14 +517,15 @@ def test_the_interview_agent_resolves_its_tools_and_instructions_for_realtime(
     world: World,
 ) -> None:
     model = RecordingRealtimeModel()
-    realtime = voice_service.realtime_for(world.deps(), model)
+    deps = world.deps()
+    deps.voice = True
+    realtime = voice_service.realtime_for(deps, model)
 
     async def go() -> None:
         await realtime.answer_webrtc_offer("OFFER")
 
     asyncio.run(go())
-    assert {"set_trip_basics", "add_person", "set_diet", "show_card"} <= set(
-        model.tools
-    )
+    assert {"set_trip_basics", "add_person", "set_diet"} <= set(model.tools)
+    assert "show_card" not in model.tools  # a call has no screen
     assert model.instructions is not None
     assert "voice call" in model.instructions

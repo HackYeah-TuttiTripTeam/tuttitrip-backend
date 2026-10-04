@@ -62,10 +62,10 @@ async def set_trip_basics(
         FieldRef(field=KnowledgeField.DATES),
     ]
     async with tool_session(ctx) as session:
-        if not overwrite_host_values:
-            clash = await host_conflict(ctx, session, refs)
-            if clash:
-                return clash
+        if clash := await host_conflict(
+            ctx, session, refs, overwrite=overwrite_host_values
+        ):
+            return clash
         end = start_date + timedelta(days=days - 1)
         trip = await trip_service.update_trip(
             session,
@@ -138,10 +138,10 @@ async def update_person(
     """
     ref = FieldRef(field=KnowledgeField.PEOPLE, profile_id=person_id)
     async with tool_session(ctx) as session:
-        if not overwrite_host_values:
-            clash = await host_conflict(ctx, session, [ref])
-            if clash:
-                return clash
+        if clash := await host_conflict(
+            ctx, session, [ref], overwrite=overwrite_host_values
+        ):
+            return clash
         profile = await profile_service.update_profile(
             session,
             ctx.deps.membership,
@@ -183,10 +183,10 @@ async def set_budget(  # ruff: ignore[too-many-arguments] the tool schema
     """
     ref = FieldRef(field=KnowledgeField.BUDGET)
     async with tool_session(ctx) as session:
-        if not overwrite_host_values:
-            clash = await host_conflict(ctx, session, [ref])
-            if clash:
-                return clash
+        if clash := await host_conflict(
+            ctx, session, [ref], overwrite=overwrite_host_values
+        ):
+            return clash
         current = await trip_service.get_trip(session, ctx.deps.membership)
         total = scope == "total"
         update = TripUpdate(

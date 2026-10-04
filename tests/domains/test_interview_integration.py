@@ -3,6 +3,7 @@
 Needs the database of ``docker compose up -d db`` with ``alembic upgrade head``.
 """
 
+import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
@@ -20,14 +21,15 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from tests.shared.fakes import authorize
 from tests.shared.interview_world import model_of
 from tests.shared.paths import path
+from tuttitrip.interview import db as interview_db
 from tuttitrip.interview.models import InterviewSession
 from tuttitrip.interview.schemas import FieldRef, KnowledgeField
-from tuttitrip.interview.services import session_service
+from tuttitrip.interview.services import run_guard, session_service
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.main import create_app
 from tuttitrip.profiles.logic.age_defaults import DEFAULTS
@@ -313,3 +315,98 @@ def test_a_turn_fills_the_trip_through_the_services_and_is_remembered(
         for message in second_turn
         for part in message.parts
     )
+
+
+# --- the run guard on a real database ---------------------------------------
+
+
+def _claims(client: TestClient) -> tuple[str, str, TripMembership]:
+    trip = _trip(client)
+    session_id = str(client.post(path("start_session", trip_id=trip)).json()["id"])
+    membership = TripMembership(
+        trip_id=uuid.UUID(trip), sub=HOST.sub, role=TripRole.HOST
+    )
+    return trip, session_id, membership
+
+
+def test_two_claims_at_once_give_exactly_one_winner(client: TestClient) -> None:
+    _, session_id, membership = _claims(client)
+
+    async def race() -> list[object]:
+        sessions = get_sessionmaker()
+        return await asyncio.gather(
+            *(
+                run_guard.acquire(
+                    sessions, membership, uuid.UUID(session_id), limit_seconds=60
+                )
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+
+    results = _run(client, race)
+    assert sum(isinstance(r, run_guard.Claim) for r in results) == 1
+    assert sum(isinstance(r, run_guard.SessionBusyError) for r in results) == 7
+
+
+def test_the_claim_is_released_expires_and_is_bound_to_the_trip(
+    client: TestClient,
+) -> None:
+    _, session_id, membership = _claims(client)
+    sid = uuid.UUID(session_id)
+    sessions = get_sessionmaker()
+
+    async def flow() -> None:
+        stale = await run_guard.acquire(sessions, membership, sid, limit_seconds=-30)
+        fresh = await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(stale)  # late release of an expired claim
+        with pytest.raises(run_guard.SessionBusyError):
+            await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(fresh)
+        again = await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(again)
+        elsewhere = membership.model_copy(update={"trip_id": uuid.uuid4()})
+        with pytest.raises(session_service.SessionNotFoundError):
+            await run_guard.acquire(sessions, elsewhere, sid, limit_seconds=60)
+
+    _run(client, flow)
+
+
+def test_voice_time_is_booked_limited_and_excludes_text(client: TestClient) -> None:
+    _, session_id, membership = _claims(client)
+    sid = uuid.UUID(session_id)
+    sessions = get_sessionmaker()
+
+    async def flow() -> None:
+        call = await run_guard.acquire(
+            sessions, membership, sid, limit_seconds=60, voice_limit=5
+        )
+        with pytest.raises(run_guard.SessionBusyError):  # a text turn meanwhile
+            await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await asyncio.sleep(1.1)
+        await run_guard.release(call, voice=True)
+        async with sessions() as session:
+            row = await interview_db.select_session(session, membership.trip_id, sid)
+        assert row is not None
+        assert row.voice_seconds >= 2
+        await run_guard.release(
+            await run_guard.acquire(
+                sessions, membership, sid, limit_seconds=60, voice_limit=5
+            ),
+            voice=True,
+        )
+        async with sessions() as session:
+            await session.execute(
+                update(InterviewSession)
+                .where(InterviewSession.id == sid)
+                .values(voice_seconds=5)
+            )
+            await session.commit()
+        with pytest.raises(run_guard.VoiceBudgetError):
+            await run_guard.acquire(
+                sessions, membership, sid, limit_seconds=60, voice_limit=5
+            )
+        text = await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(text)  # text turns are not limited by voice time
+
+    _run(client, flow)
