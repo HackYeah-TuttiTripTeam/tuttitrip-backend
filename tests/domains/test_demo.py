@@ -23,7 +23,12 @@ from tuttitrip.demo.api import get_client_factory, get_rate_limiter
 from tuttitrip.demo.logic.dataset import DEMO_ACCOUNT_NAME, DEMO_TRIPS
 from tuttitrip.demo.logic.rate_limit import RateLimiter
 from tuttitrip.demo.logic.token import secret_matches, token_matches
-from tuttitrip.demo.services import demo_service, reset_service, seed_command
+from tuttitrip.demo.services import (
+    demo_service,
+    reset_service,
+    sample_trip_service,
+    seed_command,
+)
 from tuttitrip.main import create_app
 from tuttitrip.shared.config.settings import Auth0Settings, DemoSettings, Settings
 from tuttitrip.trips import db as trips_db
@@ -312,10 +317,16 @@ def test_the_reset_replaces_the_accounts_own_trips_with_the_sample_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fakes = _trip_services(monkeypatch)
+    sample = AsyncMock()
+    monkeypatch.setattr(sample_trip_service, "create_sample_trip", sample)
     created = asyncio.run(
         demo_service.reset_demo_account(MagicMock(), "auth0|demo", date(2026, 10, 4))
     )
     assert created == len(DEMO_TRIPS) == fakes.trips.create_trip.await_count
+    sample.assert_awaited_once()  # the sample trip is not one of the demo trips
+    call = sample.await_args
+    assert call is not None
+    assert call.args[1] == "auth0|demo"
     fakes.trips.delete_trips_owned_by.assert_awaited_once()
     assert fakes.trips.delete_trips_owned_by.await_args.args[1] == "auth0|demo"
     people = sum(len(t.people) for t in DEMO_TRIPS)

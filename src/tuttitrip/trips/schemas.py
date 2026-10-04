@@ -274,6 +274,13 @@ class TripRead(TripDetails):
     my_status: MemberStatus = Field(
         description="Whether the caller confirmed they are going (`confirmed`)."
     )
+    is_sample: bool = Field(
+        default=False,
+        description=(
+            "The sample trip a new account gets (named `Przykład: ...`); the host "
+            "can delete it like any trip."
+        ),
+    )
 
 
 @unique
