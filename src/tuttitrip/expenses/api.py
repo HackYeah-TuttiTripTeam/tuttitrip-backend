@@ -18,6 +18,9 @@ from tuttitrip.expenses.services.expense_service import (
     ExpenseInvalidError,
     ExpenseNotFoundError,
 )
+from tuttitrip.expenses.settlement.services.settlement_service import (
+    SettlementClosedError,
+)
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.api import requires
@@ -28,8 +31,16 @@ router = APIRouter(prefix="/trips/{trip_id}/expenses", tags=["expenses"])
 
 EXPENSE_NOT_FOUND = "Expense not found"
 INVALID_EXPENSE: dict[int | str, dict[str, Any]] = {
-    422: {"model": ExpenseValidationErrors, "description": "An expense rule is broken."}
+    409: {"description": "The settlement is closed; the host must reopen it."},
+    422: {
+        "model": ExpenseValidationErrors,
+        "description": "An expense rule is broken.",
+    },
 }
+
+
+def _closed(exc: SettlementClosedError) -> HTTPException:
+    return HTTPException(status.HTTP_409_CONFLICT, str(exc))
 
 
 def _invalid(exc: ExpenseInvalidError) -> HTTPException:
@@ -90,6 +101,8 @@ async def create_expense(
         return await expense_service.create_expense(session, membership, data)
     except ExpenseInvalidError as exc:
         raise _invalid(exc) from exc
+    except SettlementClosedError as exc:
+        raise _closed(exc) from exc
 
 
 @router.patch(
@@ -124,11 +137,14 @@ async def update_expense(
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except ExpenseInvalidError as exc:
         raise _invalid(exc) from exc
+    except SettlementClosedError as exc:
+        raise _closed(exc) from exc
 
 
 @router.delete(
     "/{expense_id}",
     status_code=status.HTTP_204_NO_CONTENT,
+    responses={409: INVALID_EXPENSE[409]},
     dependencies=[requires(Feature.EXPENSES_CORE, Access.WRITE)],
 )
 async def delete_expense(
@@ -150,4 +166,6 @@ async def delete_expense(
         raise HTTPException(status.HTTP_404_NOT_FOUND, EXPENSE_NOT_FOUND) from exc
     except ExpenseForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    except SettlementClosedError as exc:
+        raise _closed(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)

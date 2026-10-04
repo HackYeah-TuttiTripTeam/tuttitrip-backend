@@ -29,6 +29,7 @@ from tuttitrip.expenses.schemas import (
     ShareInput,
 )
 from tuttitrip.expenses.services import nbp_client
+from tuttitrip.expenses.settlement.services import settlement_service
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips.schemas import TripMembership, TripRole
@@ -248,7 +249,9 @@ async def create_expense(
 
     Raises:
         ExpenseInvalidError: A rule is broken.
+        SettlementClosedError: The settlement is closed.
     """
+    await settlement_service.ensure_open(session, membership.trip_id)
     currency, trip_currency = await _check(session, membership, data)
     pricing = await price(
         amount=data.amount,
@@ -321,6 +324,7 @@ async def update_expense(
     """
     expense = await _get(session, membership, expense_id)
     _require_author_or_host(membership, expense)
+    await settlement_service.ensure_open(session, membership.trip_id)
     changes = data.model_dump(
         exclude_unset=True, exclude={"participants", "manual_rate"}
     )
@@ -384,6 +388,7 @@ async def delete_expense(
     """
     expense = await _get(session, membership, expense_id)
     _require_author_or_host(membership, expense)
+    await settlement_service.ensure_open(session, membership.trip_id)
     await db.delete_expense(session, expense)
     await session.commit()
 

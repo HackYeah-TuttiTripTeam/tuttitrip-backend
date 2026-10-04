@@ -49,6 +49,21 @@ def net_balances(spendings: Iterable[Spending]) -> dict[UUID, int]:
     return dict(balances)
 
 
+def apply_payment(balances: dict[UUID, int], payment: Transfer) -> None:
+    """Move a paid transfer into the balances (the payer gains, the receiver loses).
+
+    Args:
+        balances: Cents per person, changed in place.
+        payment: A transfer that was paid, in whole or in part.
+    """
+    balances[payment.from_profile_id] = (
+        balances.get(payment.from_profile_id, 0) + payment.cents
+    )
+    balances[payment.to_profile_id] = (
+        balances.get(payment.to_profile_id, 0) - payment.cents
+    )
+
+
 def settle(balances: dict[UUID, int]) -> list[Transfer]:
     """Smallest list of transfers that zeroes the balances, deterministic.
 

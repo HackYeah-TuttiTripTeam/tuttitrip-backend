@@ -29,6 +29,7 @@ from tuttitrip.expenses.schemas import (
     SplitMethod,
 )
 from tuttitrip.expenses.services import expense_service
+from tuttitrip.expenses.settlement import db as settlement_db
 from tuttitrip.main import create_app
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
@@ -219,6 +220,7 @@ def _patch_service(
     monkeypatch.setattr(
         profile_service, "list_profiles", AsyncMock(return_value=_profiles())
     )
+    monkeypatch.setattr(settlement_db, "select_closure", AsyncMock(return_value=None))
     monkeypatch.setattr(db, "select_expense", AsyncMock(return_value=expense))
     monkeypatch.setattr(db, "insert_expense", AsyncMock())
     monkeypatch.setattr(db, "replace_shares", AsyncMock())
