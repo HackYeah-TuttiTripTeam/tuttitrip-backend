@@ -397,10 +397,12 @@ class _Reader:
                 return float(value.replace(",", "."))
             except ValueError:
                 # "niezweryfikowane" or a typo: unknown, not a reason to drop the sheet.
-                self.warnings.append(
+                warning = (
                     f"{self.label}, kolumna {column}: tekst {value!r} zamiast liczby,"
                     " wartość zostaje nieznana"
                 )
+                if warning not in self.warnings:  # a cell may be read twice
+                    self.warnings.append(warning)
                 return None
         return float(value)
 
