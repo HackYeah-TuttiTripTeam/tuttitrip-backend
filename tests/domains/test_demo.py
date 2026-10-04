@@ -310,6 +310,8 @@ def _trip_services(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(demo_service, "preference_service", fakes.preferences)
     monkeypatch.setattr(demo_service, "requirements_service", fakes.requirements)
     monkeypatch.setattr(demo_service, "place_service", fakes.places)
+    # The sample trip has its own tests (test_sample_trip*.py).
+    monkeypatch.setattr(sample_trip_service, "create_sample_trip", AsyncMock())
     return fakes
 
 
