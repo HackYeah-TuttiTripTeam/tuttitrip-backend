@@ -21,6 +21,8 @@ from tuttitrip.expenses.api import router as expenses_router
 from tuttitrip.expenses.settlement.api import router as settlement_router
 from tuttitrip.interview.api import router as interview_router
 from tuttitrip.mcp.api import create_mcp_app
+from tuttitrip.notifications.api import router as notifications_router
+from tuttitrip.notifications.services import notification_service
 from tuttitrip.places.api import router as places_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.fairness.api import router as fairness_router
@@ -78,19 +80,21 @@ ROUTERS: tuple[APIRouter, ...] = (
     settlement_router,
     search_router,
     places_router,
+    notifications_router,
 )
 
 # Domain data cleared when an administrator deletes an account.
 erasure.register(trip_service.erase_account)
 erasure.register(invitation_service.erase_account)
+erasure.register(notification_service.erase_account)
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    """Release database connections on shutdown.
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Close the notification streams and release database connections on shutdown.
 
     Args:
-        _app: The application (unused).
+        app: The application.
 
     Yields:
         Control while the app is running.
@@ -103,6 +107,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     try:
         yield
     finally:
+        hub = getattr(app.state, "notification_hub", None)
+        if hub is not None:
+            await hub.stop()
         await dispose_engine()
 
 

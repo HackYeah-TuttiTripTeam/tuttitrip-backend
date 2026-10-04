@@ -10,6 +10,10 @@ class AuthenticatedUser(BaseModel):
 
     sub: str = Field(description="Auth0 user id, e.g. 'google-oauth2|123'.")
     scopes: list[str] = Field(default_factory=list)
+    exp: int | None = Field(
+        default=None,
+        description="Token expiry (Unix seconds); long-lived streams end at it.",
+    )
     permissions: list[str] = Field(default_factory=list)
     roles: list[str] = Field(
         default_factory=list,
