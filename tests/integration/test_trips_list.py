@@ -24,6 +24,8 @@ from tuttitrip.shared.db.session import database_url
 from tuttitrip.trips.models import Trip, TripMember
 from tuttitrip.trips.schemas import TripRole
 
+pytestmark = pytest.mark.integration
+
 type Field = date | datetime | str | None
 
 NOW = datetime(2026, 10, 1, 12, tzinfo=UTC).replace(tzinfo=None)
