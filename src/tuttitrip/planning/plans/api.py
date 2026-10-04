@@ -14,7 +14,7 @@ from tuttitrip.planning.plans.services.plan_service import (
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
-from tuttitrip.trips.api import TripCoHost, TripMember
+from tuttitrip.trips.api import TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/plans", tags=["planning"])
 
@@ -51,21 +51,26 @@ def plan_examples() -> dict[str, dict[str, object]]:
         "Runs the algorithm of `docs/algorytm.md` (one solo run per person, then "
         "the group plan) and stores a new version. The same input (trip, people, "
         "preferences, ratings, vetoes, catalog, `alpha`, preset) returns the "
-        "existing version with 200 and the same `plan_hash`. Needs the co-host "
-        "role: the plan reads everybody's health data, so the result must not "
-        "depend on who asks. The examples show the response shape."
+        "latest version with 200 and the same `plan_hash`; an input that went back to "
+        "an older state gets a new version. Any member may ask (a member's veto "
+        "triggers the recompute): the input is read with a host-level view, so the "
+        "result does not depend on who asks. `explain` is limited to the caller's "
+        "own cards below the co-host role, because the effort of a person depends "
+        "on their health limits; the ledger (`u`, `r`, domains) is visible to all. "
+        "The examples show the response shape."
     ),
     responses={
         **NOT_FOUND,
         200: {"model": PlanRead, "description": "Existing version for the same input."},
         201: {"content": {"application/json": {"examples": plan_examples()}}},
+        403: {"description": "Missing the `planning.plans:WRITE` permission."},
         422: {"description": "The trip lacks dates, a city or people."},
     },
     dependencies=[requires(Feature.PLANNING_PLANS, Access.WRITE)],
 )
 async def create_plan(
     session: SessionDep,
-    membership: TripCoHost,
+    membership: TripMember,
     response: Response,
     data: PlanCreate | None = None,
 ) -> PlanRead:
@@ -73,7 +78,7 @@ async def create_plan(
 
     Args:
         session: Database session.
-        membership: The caller's co-host membership of ``{trip_id}``.
+        membership: The caller's membership of ``{trip_id}``.
         response: Used to answer 200 for an existing version.
         data: Optional alpha and weight preset.
 

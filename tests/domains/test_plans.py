@@ -215,7 +215,10 @@ def test_every_variant_passes_the_schema_validators(trip: uuid.UUID) -> None:
     budget = plan.budget
     assert (budget.kappa is not None) == budget.needs_approval
     assert budget.needs_approval == (budget.over_budget > 0)
+    assert budget.b_to is not None
     assert (budget.zone is BudgetZone.IN_MARGIN) == (budget.cost > budget.b_to)
+    assert budget.b_to is not None
+    assert budget.b_max is not None
     assert budget.over_budget == max(Decimal(0), budget.cost - budget.b_to)
     assert budget.cost <= budget.b_max
     assert all(len(p.domains) == 5 for p in plan.fairness.per_person)
@@ -244,6 +247,7 @@ def test_approval_budget_follows_e6() -> None:
     budget = sample_plan(TRIP_APPROVAL).budget
     assert budget.strict_cost is not None
     assert budget.gain_points is not None
+    assert budget.b_to is not None
     assert budget.strict_cost <= budget.b_to
     assert budget.gain_points >= 8
     assert budget.kappa == (

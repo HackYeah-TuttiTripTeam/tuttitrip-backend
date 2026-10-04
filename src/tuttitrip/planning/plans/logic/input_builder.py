@@ -137,11 +137,12 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
             budget_from=trip.budget_total_min or Decimal(0),
             budget_to=trip.budget_total_max if has_budget else NO_BUDGET,
             flex_pct=trip.budget_flex_pct,
-            has_lodging=False,
+            has_lodging=False,  # ponytail: needs a chosen base, arrives with #70
             currency=trip.currency or city.currency,
         ),
         people=tuple(people),
         places=tuple(sorted(places, key=lambda p: str(p.id))),
+        # ponytail: "must" and host blocks come with the overrides of #51 and #52
     )
 
 

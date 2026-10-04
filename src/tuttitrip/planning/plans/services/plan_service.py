@@ -31,7 +31,7 @@ from tuttitrip.planning.schemas import PlanningInput
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.preferences.services import preference_service
 from tuttitrip.profiles.services import profile_service
-from tuttitrip.trips.schemas import TripMembership
+from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import trip_service
 
 PAGE = 200
@@ -53,7 +53,34 @@ class PlanNotFoundError(Exception):
     """The trip has no such plan version."""
 
 
-def _read(row: PlanVersion) -> PlanRead:
+async def _read(
+    session: AsyncSession, membership: TripMembership, row: PlanVersion
+) -> PlanRead:
+    """Build the response for the caller.
+
+    The ledger (``u``, ``r``, the domains) is visible to every member. ``explain``
+    carries each person's effort ``e_ip``, which depends on their stairs, walking
+    and queue limits (health data), so a caller below co-host sees only their own
+    cards.
+
+    Args:
+        session: Open session.
+        membership: The caller's membership.
+        row: The stored version.
+
+    Returns:
+        The plan as the caller may see it.
+    """
+    result = dict(row.result)
+    if not membership.role.satisfies(TripRole.CO_HOST):
+        own = await profile_service.find_account_profile(
+            session, membership.trip_id, membership.sub
+        )
+        result["explain"] = [
+            e
+            for e in result["explain"]
+            if own is not None and e["profile_id"] == str(own)
+        ]
     return PlanRead.model_validate(
         {
             "id": row.id,
@@ -63,7 +90,7 @@ def _read(row: PlanVersion) -> PlanRead:
             "plan_hash": row.plan_hash,
             "created_at": row.created_at,
             "params": PlanParams.model_validate(row.params),
-            **{key: row.result[key] for key in _RESULT_KEYS},
+            **{key: result[key] for key in _RESULT_KEYS},
         }
     )
 
@@ -80,9 +107,13 @@ async def _city_places(session: AsyncSession, slug: str) -> list[PlaceRead]:
 
 
 async def _gather(
-    session: AsyncSession, membership: TripMembership
+    session: AsyncSession, caller: TripMembership
 ) -> tuple[PlanningInput, dict[UUID, str], float]:
-    # The trip, its people, their feedback and the catalog as algorithm input.
+    # The trip, its people, their feedback and the catalog as algorithm input. The
+    # data is read with a host-level view of the trip (not scoped to the caller):
+    # the plan reads everybody's health data, so the result must not depend on who
+    # asks. What the caller may see is decided when the response is built.
+    membership = caller.model_copy(update={"role": TripRole.HOST})
     trip = await trip_service.get_trip(session, membership)
     if trip.city_slug is None:
         msg = "The trip needs a city to plan"
@@ -110,12 +141,19 @@ async def _gather(
 async def generate_plan(
     session: AsyncSession, membership: TripMembership, data: PlanCreate | None
 ) -> tuple[PlanRead, bool]:
-    """Compute a plan for the trip, or return the version of the same input.
+    """Compute a plan for the trip, or return the latest version of the same input.
+
+    Any member may ask (a member's veto triggers the recompute). The input is
+    gathered with a host-level view, so the same data gives the same plan whoever
+    asks; the response hides what the caller may not see (see ``_read``).
+
+    Only the LATEST version is reused: if the input went back to an older state
+    (a veto and its removal), a new version is stored so that "latest" is always
+    the plan of the current input.
 
     Args:
         session: Open session.
-        membership: The caller's membership (co-host or above: the plan reads
-            everybody's health data, so the result must not depend on who asks).
+        membership: The caller's membership (any role).
         data: Knobs of the request, or None for the trip's own ``alpha``.
 
     Returns:
@@ -125,13 +163,14 @@ async def generate_plan(
         PlanInputError: When the trip lacks dates, a city or people.
     """
     planning, names, trip_alpha = await _gather(session, membership)
-    alpha = trip_alpha if data is None else data.alpha
+    alpha = trip_alpha if data is None or data.alpha is None else data.alpha
     preset = (data or PlanCreate()).weight_preset
     digest = input_hash(planning, alpha, preset.value, DEFAULT_PARAMS)
 
-    existing = await db.select_by_input_hash(session, membership.trip_id, digest)
-    if existing is not None:
-        return _read(existing), False
+    latest = await db.select_latest(session, membership.trip_id)
+    if latest is not None and latest.input_hash == digest:
+        return await _read(session, membership, latest), False
+    await session.rollback()  # do not hold a transaction while computing
 
     group = await anyio.to_thread.run_sync(
         partial(plan_group, planning, DEFAULT_PARAMS, alpha=alpha)
@@ -139,12 +178,12 @@ async def generate_plan(
     result = build_content(planning, group, names)
 
     await db.lock_trip_plans(session, membership.trip_id)
-    existing = await db.select_by_input_hash(session, membership.trip_id, digest)
-    if existing is not None:  # a parallel request stored it while we computed
-        return _read(existing), False
+    latest = await db.select_latest(session, membership.trip_id)
+    if latest is not None and latest.input_hash == digest:
+        return await _read(session, membership, latest), False  # a parallel request
     row = PlanVersion(
         trip_id=membership.trip_id,
-        version=await db.next_version(session, membership.trip_id),
+        version=(latest.version if latest else 0) + 1,
         input_hash=digest,
         plan_hash=group.plan.plan_hash,
         params={
@@ -159,7 +198,7 @@ async def generate_plan(
     session.add(row)
     await session.commit()
     await session.refresh(row)
-    return _read(row), True
+    return await _read(session, membership, row), True
 
 
 async def latest_plan(session: AsyncSession, membership: TripMembership) -> PlanRead:
@@ -178,7 +217,7 @@ async def latest_plan(session: AsyncSession, membership: TripMembership) -> Plan
     row = await db.select_latest(session, membership.trip_id)
     if row is None:
         raise PlanNotFoundError(str(membership.trip_id))
-    return _read(row)
+    return await _read(session, membership, row)
 
 
 async def get_plan(
@@ -200,4 +239,4 @@ async def get_plan(
     row = await db.select_by_id(session, membership.trip_id, plan_id)
     if row is None:
         raise PlanNotFoundError(str(plan_id))
-    return _read(row)
+    return await _read(session, membership, row)

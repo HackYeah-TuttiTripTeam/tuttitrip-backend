@@ -14,9 +14,11 @@ from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.planning.fairness.logic.violations import days_without_own_place
 from tuttitrip.planning.fairness.schemas import ConflictCode as FairnessConflict
 from tuttitrip.planning.logic.cost import place_cost
+from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 from tuttitrip.planning.logic.plan_group import GroupPlan, PersonReference
-from tuttitrip.planning.logic.solver import PlanResult, SolverConflict
-from tuttitrip.planning.logic.utility import explain, place_domain
+from tuttitrip.planning.logic.solver import PlannedDay, PlanResult, SolverConflict
+from tuttitrip.planning.logic.utility import explain, match, place_domain
+from tuttitrip.planning.plans.logic.input_builder import NO_BUDGET
 from tuttitrip.planning.plans.schemas import (
     ApprovalStatus,
     BudgetZone,
@@ -61,12 +63,17 @@ _CONFLICT_CODE = {
 }
 
 
+def _unlimited(data: PlanningInput) -> bool:
+    # A trip without a budget is priced against a sentinel B_do (never shown).
+    return data.trip.budget_to >= NO_BUDGET
+
+
 def _money(value: Decimal) -> Decimal:
     return value.quantize(_CENT, ROUND_HALF_UP)
 
 
 def _domain_scores(
-    person: PlanningPerson, scores: DomainScores
+    person: PlanningPerson, scores: DomainScores, *, unlimited: bool
 ) -> list[PlanDomainScore]:
     pool = person.pool
     values = {
@@ -78,16 +85,16 @@ def _domain_scores(
     }
     return [
         PlanDomainScore(domain=_DOMAIN_CODE[d], q=None, not_applicable=True)
-        if q is None or points == 0
+        if q is None or points == 0 or (unlimited and d is ImportanceDomain.COST)
         else PlanDomainScore(domain=_DOMAIN_CODE[d], q=q, not_applicable=False)
         for d, (q, points) in values.items()
     ]
 
 
-def _weakest(domains: Sequence[PlanDomainScore]) -> PlanDomainCode:
+def _weakest(domains: Sequence[PlanDomainScore]) -> PlanDomainCode | None:
     applicable = [d for d in domains if d.q is not None]
     if not applicable:
-        return PlanDomainCode.ATTRACTIONS
+        return None
     return min(applicable, key=lambda d: d.q or 0.0).domain
 
 
@@ -156,7 +163,9 @@ def _fairness(
     rows: list[PersonFairness] = []
     for row in group.people:
         person = people[row.person_id]
-        domains = _domain_scores(person, scores[row.person_id])
+        domains = _domain_scores(
+            person, scores[row.person_id], unlimited=_unlimited(data)
+        )
         missing = days_without_own_place(person, day_plans, places)
         rows.append(
             PersonFairness(
@@ -178,8 +187,11 @@ def _fairness(
     )
 
 
-def _floors_missed(group: GroupPlan) -> list[FloorMiss]:
+def _floors_missed(
+    group: GroupPlan, data: PlanningInput, places: Mapping[UUID, PlaceRead]
+) -> list[FloorMiss]:
     by_person: dict[UUID, PersonReference] = {r.person_id: r for r in group.people}
+    people = {p.id: p for p in data.people}
     result: list[FloorMiss] = []
     for conflict in group.plan.report.conflicts:
         row = by_person[conflict.person_id]
@@ -192,12 +204,15 @@ def _floors_missed(group: GroupPlan) -> list[FloorMiss]:
                 )
             )
         elif conflict.code is FairnessConflict.OWN_PLACE:
-            result.append(
+            result.extend(
                 FloorMiss(
                     kind=FloorMissKind.OWN_PLACE_DAY,
                     profile_id=conflict.person_id,
-                    shortfall=conflict.missing,
+                    shortfall=1.0,
+                    day=index,
                 )
+                for index, day in enumerate(group.plan.days, start=1)
+                if not _has_own_place(people[conflict.person_id], day, places)
             )
         else:
             result.append(
@@ -211,14 +226,42 @@ def _floors_missed(group: GroupPlan) -> list[FloorMiss]:
     return result
 
 
-def _conflicts(plan: PlanResult) -> list[PlanConflict]:
+def _has_own_place(
+    person: PlanningPerson, day: PlannedDay, places: Mapping[UUID, PlaceRead]
+) -> bool:
+    return any(
+        match(person, places[v.place_id]) >= DEFAULT_PARAMS.own_place_match
+        for v in day.schedule.visits
+    )
+
+
+def _conflicts(
+    data: PlanningInput, group: GroupPlan, plan: PlanResult
+) -> list[PlanConflict]:
     found = [
-        PlanConflict(reason_code=_CONFLICT_CODE[kind], place_id=place_id)
+        PlanConflict(
+            reason_code=_CONFLICT_CODE[kind],
+            place_id=place_id,
+            profile_ids=sorted(
+                (p.id for p in data.people if place_id in p.vetoes), key=str
+            )
+            if kind is SolverConflict.MUST_REJECTED
+            else [],
+        )
         for kind, place_id in plan.conflicts
     ]
     found.extend(
         PlanConflict(reason_code=ConflictCode.UNKNOWN_PRICE, place_id=pid)
         for pid in plan.cost.unknown_price_place_ids
+    )
+    found.extend(
+        PlanConflict(
+            reason_code=ConflictCode.FLOOR_UNREACHABLE,
+            profile_ids=[row.person_id],
+            params={"floor": row.floor, "floor_eff": row.floor_eff},
+        )
+        for row in group.people
+        if row.floor_eff < row.floor
     )
     return found
 
@@ -226,9 +269,10 @@ def _conflicts(plan: PlanResult) -> list[PlanConflict]:
 def _budget(data: PlanningInput, plan: PlanResult) -> PlanBudget:
     trip = data.trip
     cost = plan.cost.total
+    unlimited = _unlimited(data)
     if cost <= trip.budget_from:
         zone = BudgetZone.BELOW_B_FROM
-    elif cost <= trip.budget_to:
+    elif unlimited or cost <= trip.budget_to:
         zone = BudgetZone.UP_TO_B_TO
     else:
         zone = BudgetZone.IN_MARGIN
@@ -236,10 +280,13 @@ def _budget(data: PlanningInput, plan: PlanResult) -> PlanBudget:
         currency=Currency(trip.currency),
         cost=cost,
         b_from=_money(trip.budget_from),
-        b_to=_money(trip.budget_to),
-        b_max=_money(trip.budget_max),
+        b_to=None if unlimited else _money(trip.budget_to),
+        b_max=None if unlimited else _money(trip.budget_max),
+        unlimited=unlimited,
         zone=zone,
-        over_budget=max(Decimal(0), cost - _money(trip.budget_to)),
+        over_budget=Decimal(0)
+        if unlimited
+        else max(Decimal(0), cost - _money(trip.budget_to)),
         needs_approval=False,
         kappa=None,
         approval_status=ApprovalStatus.NOT_NEEDED,
@@ -297,9 +344,11 @@ def build_content(
         "days": [d.model_dump(mode="json") for d in _stops(data, plan, places)],
         "lodging": None,
         "fairness": _fairness(data, group, names, places).model_dump(mode="json"),
-        "floors_missed": [f.model_dump(mode="json") for f in _floors_missed(group)],
+        "floors_missed": [
+            f.model_dump(mode="json") for f in _floors_missed(group, data, places)
+        ],
         "violation": plan.objective.violation,
-        "conflicts": [c.model_dump(mode="json") for c in _conflicts(plan)],
+        "conflicts": [c.model_dump(mode="json") for c in _conflicts(data, group, plan)],
         "explain": [e.model_dump(mode="json") for e in explain_entries],
         "verdicts": None,
         "budget": _budget(data, plan).model_dump(mode="json"),

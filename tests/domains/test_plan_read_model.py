@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import Iterator
+from decimal import Decimal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +16,7 @@ from tuttitrip.main import create_app
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.plan_group import plan_group
 from tuttitrip.planning.plans.logic.input_builder import (
+    NO_BUDGET,
     PlanInputError,
     input_hash,
     trip_days,
@@ -23,6 +25,7 @@ from tuttitrip.planning.plans.logic.read_model import build_content
 from tuttitrip.planning.plans.logic.sample_plan import sample_plan
 from tuttitrip.planning.plans.schemas import (
     ConflictCode,
+    PlanCreate,
     PlanParams,
     PlanRead,
     WeightPreset,
@@ -34,7 +37,6 @@ from tuttitrip.shared.permissions.logic.resolution import Grant
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import trip_service
-from tuttitrip.trips.services.trip_service import TripRoleError
 
 BOB = AuthenticatedUser(sub="auth0|bob")
 TRIP = uuid.UUID("00000000-0000-4000-8000-000000000000")
@@ -69,6 +71,7 @@ def test_group_plan_maps_onto_a_valid_plan_read() -> None:
     assert plan.telemetry.solo_runs == 4
     assert plan.telemetry.solver == "local-search-v1"
     assert plan.budget.cost == group.plan.cost.total
+    assert plan.budget.b_max is not None
     assert plan.budget.cost <= plan.budget.b_max
     assert plan.lodging is None
     assert plan.verdicts is None
@@ -192,13 +195,22 @@ def member(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         yield client
 
 
-def test_creating_a_plan_needs_the_co_host_role(
-    monkeypatch: pytest.MonkeyPatch,
+def test_a_plain_member_may_ask_for_a_plan(
+    member: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    error = TripRoleError("Trip role 'co_host' required (you are 'member')")
-    monkeypatch.setattr(trip_service, "get_membership", AsyncMock(side_effect=error))
-    with _client() as client:
-        assert client.post(path("create_plan", trip_id=TRIP)).status_code == 403
+    monkeypatch.setattr(
+        plan_service,
+        "generate_plan",
+        AsyncMock(return_value=(sample_plan(TRIP), True)),
+    )
+    assert member.post(path("create_plan", trip_id=TRIP)).status_code == 201
+
+
+def test_alpha_is_optional_in_the_request() -> None:
+    assert PlanCreate().alpha is None
+    assert PlanCreate(alpha=0).alpha == 0
+    with pytest.raises(ValueError, match="less than or equal"):
+        PlanCreate(alpha=3.5)
 
 
 def test_a_member_may_read_the_latest_plan(
@@ -268,3 +280,57 @@ def test_no_plan_yet_is_404_and_read_permission_is_enough(
         response = c.post(path("create_plan", trip_id=TRIP))
         assert response.status_code == 403
         assert response.json()["detail"] == "Missing permission planning.plans:WRITE"
+
+
+def test_a_trip_without_a_budget_hides_the_sentinel() -> None:
+    data = planning_input(reference(), lodging=False)
+    trip = data.trip.model_copy(
+        update={"budget_to": NO_BUDGET, "budget_from": Decimal(0)}
+    )
+    unlimited = data.model_copy(update={"trip": trip})
+    group = plan_group(unlimited)
+    plan = as_read(build_content(unlimited, group, {}), group.plan.plan_hash)
+    assert plan.budget.unlimited
+    assert plan.budget.b_to is None
+    assert plan.budget.b_max is None
+    assert plan.budget.over_budget == 0
+    for person in plan.fairness.per_person:
+        cost = next(d for d in person.domains if d.domain.value == "cost")
+        assert cost.not_applicable
+
+
+def test_own_place_misses_name_the_day_and_floors_below_the_wish_are_reported() -> None:
+    data = planning_input(solo(), lodging=False)
+    zoo = next(p for p in data.places if p.name == "Ogród zoologiczny")
+    forced = data.model_copy(
+        update={
+            "places": (zoo,),
+            "must": frozenset({zoo.id}),
+            "trip": data.trip.model_copy(update={"days": data.trip.days[:1]}),
+        }
+    )
+    plan_one = plan_group(forced)
+    plan = as_read(build_content(forced, plan_one, {}), plan_one.plan.plan_hash)
+    days = [m.day for m in plan.floors_missed if m.kind.value == "own_place_day"]
+    assert days == [1]
+    data = planning_input(reference(), lodging=False)
+    group = plan_group(data)
+    plan = as_read(build_content(data, group, {}), group.plan.plan_hash)
+    unreachable = [
+        c for c in plan.conflicts if c.reason_code is ConflictCode.FLOOR_UNREACHABLE
+    ]
+    reduced = [r.person_id for r in group.people if r.floor_eff < r.floor]
+    assert [c.profile_ids for c in unreachable] == [[pid] for pid in reduced]
+
+
+def test_a_rejected_must_names_who_vetoed_it() -> None:
+    data = planning_input(reference(), lodging=False)
+    vetoed = next(iter(data.people[3].vetoes))
+    forced = data.model_copy(update={"must": frozenset({vetoed})})
+    group = plan_group(forced)
+    plan = as_read(build_content(forced, group, {}), group.plan.plan_hash)
+    conflict = next(
+        c for c in plan.conflicts if c.reason_code is ConflictCode.VETO_BLOCKS_PLACE
+    )
+    assert conflict.place_id == vetoed
+    assert conflict.profile_ids == [data.people[3].id]

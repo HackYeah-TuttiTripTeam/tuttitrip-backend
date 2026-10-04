@@ -11,7 +11,7 @@ import uuid
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select
 
 from tests.fixtures.city import CITY_SLUG, city, place_id, places
 from tests.fixtures.personas import Persona, reference_family
@@ -20,12 +20,18 @@ from tests.shared.fakes import authorize
 from tuttitrip.main import create_app
 from tuttitrip.places.models import City, Place, PlacePrice
 from tuttitrip.places.schemas import PlaceRead
+from tuttitrip.planning.plans.models import PlanVersion
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.session import dispose_engine, get_engine, get_sessionmaker
+from tuttitrip.shared.permissions.logic.resolution import Grant
+from tuttitrip.shared.permissions.registry import Access, Feature
+from tuttitrip.trips.models import TripMember
+from tuttitrip.trips.schemas import TripRole
 
 pytestmark = pytest.mark.integration
 
 HOST = AuthenticatedUser(sub=f"auth0|plan-{uuid.uuid4()}")
+MEMBER = AuthenticatedUser(sub=f"auth0|plan-member-{uuid.uuid4()}")
 
 
 def _row(place: PlaceRead) -> Place:
@@ -117,7 +123,78 @@ async def _add_person(http: httpx.AsyncClient, base: str, persona: Persona) -> s
     return profile_id
 
 
-async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals] - one story
+async def _privacy_and_permissions(
+    app: FastAPI,
+    http: httpx.AsyncClient,
+    base: str,
+    trip_id: str,
+    ids: dict[str, str],
+) -> None:
+    plans = f"{base}/plans"
+    host_view = (await http.get(f"{plans}/latest")).json()
+    assert {e["profile_id"] for e in host_view["explain"]} >= set(ids.values())
+
+    # A plain member: the ledger is visible, `explain` only for their own profile.
+    async with get_sessionmaker()() as session:
+        session.add(
+            TripMember(
+                trip_id=uuid.UUID(trip_id), user_sub=MEMBER.sub, role=TripRole.MEMBER
+            )
+        )
+        await session.commit()
+    own = await http.post(
+        f"{base}/profiles",
+        json={"display_name": "Gość", "age": 30, "user_sub": MEMBER.sub},
+    )
+    assert own.status_code == 201, own.text
+    authorize(app, MEMBER)
+    seen = (await http.get(f"{plans}/latest")).json()
+    assert seen["fairness"]["per_person"] == host_view["fairness"]["per_person"]
+    assert {e["profile_id"] for e in seen["explain"]} <= {own.json()["id"]}
+    # Any member may ask for a plan; the new profile is new input, hence a new version.
+    asked = await http.post(plans)
+    assert asked.status_code == 201, asked.text
+    assert {e["profile_id"] for e in asked.json()["explain"]} <= {own.json()["id"]}
+    again = await http.post(plans)
+    assert again.status_code == 200
+
+    # Without the WRITE permission POST is 403, reading still works.
+    authorize(app, MEMBER, (Grant(Feature.PLANNING_PLANS, Access.READ),))
+    assert (await http.post(plans)).status_code == 403
+    assert (await http.get(f"{plans}/latest")).status_code == 200
+    authorize(app, HOST)
+
+
+async def _solo_trip(http: httpx.AsyncClient) -> None:
+    scenario = reference()
+    created = await http.post(
+        "/api/v1/trips",
+        json=scenario.trip.model_dump(mode="json", exclude_none=True),
+    )
+    base = f"/api/v1/trips/{created.json()['id']}"
+    try:
+        solo = await http.post(f"{base}/plans")
+        assert solo.status_code == 201, solo.text
+        body = solo.json()
+        assert body["fairness"]["group_size"] == 1
+        assert body["fairness"]["jain"] == pytest.approx(1)
+        assert body["fairness"]["per_person"][0]["r"] == pytest.approx(1)
+        assert body["telemetry"]["solo_runs"] == 0
+    finally:
+        await http.delete(base)
+
+
+async def _plans_of(trip_id: str) -> int:
+    async with get_sessionmaker()() as session:
+        rows = await session.execute(
+            select(func.count())
+            .select_from(PlanVersion)
+            .where(PlanVersion.trip_id == uuid.UUID(trip_id))
+        )
+        return rows.scalar_one()
+
+
+async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals, too-many-statements] - one story
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as http:
         scenario = reference()
@@ -176,11 +253,31 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals] - on
                 i["place_id"] for d in after.json()["days"] for i in d["items"]
             ]
 
-            # The alpha slider is part of the input.
+            # Taking the veto back reverts the input to an OLDER state: that is a
+            # new version (not the old one), and "latest" is the plan of the input.
+            veto_id = veto.json()["id"]
+            assert (await http.delete(f"{base}/vetoes/{veto_id}")).status_code == 204
+            reverted = await http.post(plans)
+            assert reverted.status_code == 201
+            assert reverted.json()["version"] == 3
+            assert reverted.json()["input_hash"] == body["input_hash"]
+            assert reverted.json()["plan_hash"] == body["plan_hash"]
+            assert (await http.get(f"{plans}/latest")).json() == reverted.json()
+
+            # The alpha slider is part of the input; omitted means the trip's own.
             other = await http.post(plans, json={"alpha": 2})
             assert other.status_code == 201
             assert other.json()["params"]["alpha"] == 2
-            assert other.json()["version"] == 3
+            assert other.json()["version"] == 4
+
+            # The preset is recorded (it has no effect on the weights yet).
+            preset = await http.post(plans, json={"weight_preset": "equal"})
+            assert preset.status_code == 201
+            assert preset.json()["params"]["weight_preset"] == "equal"
+            assert preset.json()["params"]["alpha"] == pytest.approx(1.0)
+            assert preset.json()["version"] == 5
+
+            await _privacy_and_permissions(app, http, base, trip.json()["id"], ids)
 
             # Racing requests for an input nobody stored yet never give a 500.
             racing = await asyncio.gather(
@@ -189,9 +286,14 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals] - on
             assert {r.status_code for r in racing} <= {200, 201}
             assert sum(r.status_code == 201 for r in racing) == 1
             assert len({r.json()["id"] for r in racing}) == 1
-            assert (await http.get(f"{plans}/latest")).json()["version"] == 4
+            assert (await http.get(f"{plans}/latest")).json()["version"] == 7
+            trip_id = trip.json()["id"]
+            assert await _plans_of(trip_id) == 7
+            await _solo_trip(http)
         finally:
             await http.delete(base)
+        # The versions go with the trip (ON DELETE CASCADE).
+        assert await _plans_of(trip.json()["id"]) == 0
 
 
 def test_plan_versions_end_to_end() -> None:
