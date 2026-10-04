@@ -106,6 +106,7 @@ class ConflictCode(StrEnum):
     VETO_BLOCKS_PLACE = "veto_blocks_place"
     BUDGET_LIMIT = "budget_limit"
     FLOOR_UNREACHABLE = "floor_unreachable"
+    UNKNOWN_PRICE = "unknown_price"
     OTHER = "other"
 
 
@@ -370,16 +371,20 @@ class PlanBudget(BaseModel):
 class PlanTelemetry(BaseModel):
     """How the plan was computed."""
 
-    solver: str = Field(description="Solver name; 'stub' while the response is fixed.")
+    solver: str = Field(description="Solver name and version.")
     steps: int = Field(ge=0)
     solo_runs: int = Field(ge=0)
     elapsed_ms: int = Field(ge=0)
 
 
 class PlanRead(BaseModel):
-    """A plan with the fairness measure, ledger, verdicts and budget.
+    """A stored plan version with the fairness measure, ledger and budget.
 
-    STUB: until backend#50 the content is a fixed sample; the shape is final.
+    The content is a copy made when the plan was computed. ``verdicts`` stay
+    null until backend#51 fills them; ``lodging`` is null until a lodging base
+    can be chosen (backend#70), and then the lodging domain of every person is
+    "not applicable". ``budget.needs_approval`` is set by backend#53; places
+    without a price are reported as ``unknown_price`` conflicts.
     """
 
     id: UUID

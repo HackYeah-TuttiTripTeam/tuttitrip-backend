@@ -1,87 +1,151 @@
-"""Plan endpoints (nested under a trip). STUB: fixed response until #50."""
+"""Plan endpoints (nested under a trip)."""
 
-from fastapi import APIRouter, status
+from uuid import UUID
 
+from fastapi import APIRouter, HTTPException, Response, status
+
+from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
 from tuttitrip.planning.plans.schemas import PlanCreate, PlanRead
 from tuttitrip.planning.plans.services import plan_service
+from tuttitrip.planning.plans.services.plan_service import (
+    PlanInputError,
+    PlanNotFoundError,
+)
+from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
-from tuttitrip.trips.api import TripMember
+from tuttitrip.trips.api import TripCoHost, TripMember
 
 router = APIRouter(prefix="/trips/{trip_id}/plans", tags=["planning"])
 
-STUB = {"x-stub": True}
-STUB_NOTE = (
-    "STUB: until backend#50 the content is a fixed sample (section 7 of "
-    "`docs/algorytm.md`); the shape is final. The variant is chosen from the "
-    "trip: `sha256(str(trip_id).encode())[0] % 3` (first byte of the digest) "
-    "gives `group`, `solo` or `approval` "
-    "(`needs_approval` with `kappa`), so one trip always returns the same "
-    "plan and `plan_hash`. `group` and `approval` include an unverified "
-    "price and a free stop; `solo` (two days) has neither; all variants have a "
-    "stop without an hours source and transfers with and without a cost."
-)
+EXAMPLE_TRIP_ID = UUID("00000000-0000-4000-8000-000000000042")
 NOT_FOUND = {404: {"description": "Trip not found, or the caller is not on it."}}
+
+
+def plan_examples() -> dict[str, dict[str, object]]:
+    """Named examples of the response shape: a group, one person, an approval.
+
+    Returns:
+        OpenAPI ``examples`` entries built from the fixed sample plans.
+    """
+    return {
+        name: {
+            "summary": summary,
+            "value": sample_plan(EXAMPLE_TRIP_ID, scenario=scenario).model_dump(
+                mode="json"
+            ),
+        }
+        for name, summary, scenario in (
+            ("group", "Group of four (section 7)", Scenario.GROUP),
+            ("solo", "One person (n = 1): show domains, not Jain", Scenario.SOLO),
+            ("needs_approval", "Over B_do: 1198, +98, kappa 18.7", Scenario.APPROVAL),
+        )
+    }
 
 
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
-    summary="Generate a plan with the fairness measure (STUB)",
+    summary="Generate a plan with the fairness measure",
     description=(
-        f"{STUB_NOTE}\n\nGenerates a plan with the fairness measure, ledger, "
-        "verdicts and budget. Repeating the call with the same `input_hash` "
-        "returns 200 with the existing version instead of 201 (the stub "
-        "always returns 201)."
+        "Runs the algorithm of `docs/algorytm.md` (one solo run per person, then "
+        "the group plan) and stores a new version. The same input (trip, people, "
+        "preferences, ratings, vetoes, catalog, `alpha`, preset) returns the "
+        "existing version with 200 and the same `plan_hash`. Needs the co-host "
+        "role: the plan reads everybody's health data, so the result must not "
+        "depend on who asks. The examples show the response shape."
     ),
     responses={
         **NOT_FOUND,
         200: {"model": PlanRead, "description": "Existing version for the same input."},
-        201: {
-            "content": {
-                "application/json": {"examples": plan_service.openapi_examples()}
-            }
-        },
+        201: {"content": {"application/json": {"examples": plan_examples()}}},
+        422: {"description": "The trip lacks dates, a city or people."},
     },
-    openapi_extra=STUB,
     dependencies=[requires(Feature.PLANNING_PLANS, Access.WRITE)],
 )
 async def create_plan(
-    membership: TripMember, data: PlanCreate | None = None
+    session: SessionDep,
+    membership: TripCoHost,
+    response: Response,
+    data: PlanCreate | None = None,
 ) -> PlanRead:
-    """Generate a plan (stub).
+    """Generate a plan.
 
     Args:
-        membership: The caller's membership of ``{trip_id}``.
+        session: Database session.
+        membership: The caller's co-host membership of ``{trip_id}``.
+        response: Used to answer 200 for an existing version.
         data: Optional alpha and weight preset.
 
     Returns:
-        The plan.
+        The stored version.
+
+    Raises:
+        HTTPException: 422 when the trip cannot be planned yet.
     """
-    return plan_service.generate_plan(membership, data)
+    try:
+        plan, created = await plan_service.generate_plan(session, membership, data)
+    except PlanInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    if not created:
+        response.status_code = status.HTTP_200_OK
+    return plan
 
 
 @router.get(
     "/latest",
-    summary="Latest plan of the trip (STUB)",
+    summary="Latest plan of the trip",
     description=(
-        f"{STUB_NOTE}\n\nReturns 404 `No plan yet` when the trip has no plan "
-        "(the empty state of the plan view); the stub always has one and never "
-        "returns it."
+        "Returns 404 `No plan yet` when the trip has no plan (the empty state of "
+        "the plan view)."
     ),
     responses={
         404: {"description": "No plan yet, trip not found or caller not on it."}
     },
-    openapi_extra=STUB,
     dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
 )
-async def get_latest_plan(membership: TripMember) -> PlanRead:
-    """Latest plan (stub).
+async def get_latest_plan(session: SessionDep, membership: TripMember) -> PlanRead:
+    """Latest plan.
 
     Args:
+        session: Database session.
         membership: The caller's membership of ``{trip_id}``.
 
     Returns:
-        The plan.
+        The newest version.
+
+    Raises:
+        HTTPException: 404 when there is no plan.
     """
-    return plan_service.latest_plan(membership)
+    try:
+        return await plan_service.latest_plan(session, membership)
+    except PlanNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No plan yet") from exc
+
+
+@router.get(
+    "/{plan_id}",
+    summary="One stored plan version",
+    responses={404: {"description": "Plan, trip not found or caller not on it."}},
+    dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
+)
+async def get_plan(
+    session: SessionDep, membership: TripMember, plan_id: UUID
+) -> PlanRead:
+    """One stored version.
+
+    Args:
+        session: Database session.
+        membership: The caller's membership of ``{trip_id}``.
+        plan_id: Version id.
+
+    Returns:
+        The version.
+
+    Raises:
+        HTTPException: 404 when the trip has no such version.
+    """
+    try:
+        return await plan_service.get_plan(session, membership, plan_id)
+    except PlanNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
