@@ -190,7 +190,7 @@ Backend wystawia serwer MCP (Streamable HTTP, tryb bezstanowy, odpowiedzi JSON)
 pod `/api/v1/mcp`, żeby użytkownik mógł podłączyć swoje dane do Claude,
 ChatGPT albo innego klienta MCP. Kod jest w domenie `src/tuttitrip/mcp/`
 (FastMCP, `fastmcp-slim[server]`), montaż w `create_app()` tylko przy
-`TUTTITRIP_MCP__ENABLED=true` (deploy włącza go w każdym środowisku).
+`TUTTITRIP_MCP__ENABLED=true` (deploy włącza go w main i develop, na gałęziach podglądu wyłącza).
 
 - Token to token dostępowy Auth0 z audience równym adresowi serwera
   (`TUTTITRIP_MCP__RESOURCE_URL`, np. `https://tuttitrip-api.gburek.app/api/v1/mcp`),
@@ -202,6 +202,96 @@ ChatGPT albo innego klienta MCP. Kod jest w domenie `src/tuttitrip/mcp/`
   który wymaga `mcp:READ` i `X:Y`. Narzędzie bez zgody znika z `tools/list`.
   Dostęp do konkretnego wyjazdu dalej zależy od roli na nim.
 - Narzędzia: `whoami`, `list_trips` (stronicowane), `get_trip`.
+
+### Podłączenie w Claude, ChatGPT i Claude Code
+
+Adres serwera zależy od środowiska. Używaj dokładnie tych adresów (bez ukośnika
+na końcu); serwer jest tylko na hoście API, więc `tuttitrip.gburek.app/api/v1/mcp`
+nie zadziała.
+
+| Środowisko | Adres MCP |
+| --- | --- |
+| produkcja (`main`) | `https://tuttitrip-api.gburek.app/api/v1/mcp` |
+| develop (do prób) | `https://tuttitrip-api-develop.gburek.app/api/v1/mcp` |
+| gałęzie podglądu | brak: `/api/v1/mcp` odpowiada 404 (`TUTTITRIP_MCP__ENABLED=false`) |
+
+Potrzebujesz konta TuttiTrip (Google, Discord albo e-mail i hasło) i planu
+klienta, który pozwala na własny serwer MCP:
+
+| Klient | Plan |
+| --- | --- |
+| Claude (claude.ai, aplikacja desktopowa) | Free (jeden własny konektor), Pro, Max, Team i Enterprise (na Team i Enterprise konektor dodaje właściciel organizacji, a członkowie łączą się własnym kontem) |
+| ChatGPT | Developer mode na Pro, Plus, Business, Enterprise i Education, tylko w przeglądarce |
+| Claude Code | każdy, wystarczy zalogowany `claude` |
+
+**Claude** ([dokumentacja](https://claude.com/docs/connectors/custom/remote-mcp)):
+
+1. **Customize > Connectors > Add custom connector**.
+2. W polu adresu serwera wpisz adres z tabeli. Uwierzytelnianie: „Sign in now”.
+3. „OAuth client”: „Use Claude's published identity” (CIMD, zalecane), a jeśli
+   tenant go jeszcze nie obsługuje, „Register automatically” (DCR). Własnego
+   klienta OAuth nie wpisujesz.
+4. **Add**, potem **Connect**: zalogujesz się w Auth0 (Google, Discord albo
+   hasłem) i zaakceptujesz dostęp.
+5. W rozmowie włącz konektor przyciskiem **+ > Connectors**. Poproś: „Kim jestem
+   w TuttiTrip?”, powinien zadziałać `whoami`.
+
+Ustawień uwierzytelniania nie da się zmienić po dodaniu konektora; po błędzie
+albo po zmianie adresu usuń konektor i dodaj go od nowa.
+
+**ChatGPT** ([dokumentacja](https://developers.openai.com/api/docs/guides/developer-mode)):
+
+1. **Settings > Security and login**: włącz „Developer mode”.
+2. W ChatGPT otwórz **Plugins**, plus i utwórz aplikację developer mode z adresem
+   MCP. Transport: streaming HTTP. Uwierzytelnianie: OAuth (CIMD albo DCR).
+3. Aplikacja trafia do „Drafts”; zaloguj się w Auth0 przy pierwszym użyciu.
+   Narzędzia TuttiTrip są tylko do odczytu, więc ChatGPT nie pyta o potwierdzenie
+   zapisu.
+
+**Claude Code** ([dokumentacja](https://code.claude.com/docs/en/mcp)):
+
+```bash
+claude mcp add --transport http tuttitrip https://tuttitrip-api.gburek.app/api/v1/mcp
+# lub do prób: https://tuttitrip-api-develop.gburek.app/api/v1/mcp
+claude            # w sesji: /mcp, wybierz „tuttitrip” i zaloguj się w przeglądarce
+claude mcp list   # status serwera; usunięcie: claude mcp remove tuttitrip
+```
+
+Domyślny zakres to `local` (tylko bieżący projekt); `--scope user` udostępnia
+serwer we wszystkich projektach. Po zmianie adresu usuń serwer i dodaj go ponownie.
+
+**Co widać po zalogowaniu.** Narzędzia tylko do odczytu, zawsze w granicach
+twojego konta: `whoami` (twój identyfikator `sub`, role, czy jesteś adminem i mapa uprawnień), `list_trips`
+(twoje wyjazdy z rolą na każdym) i `get_trip` (jeden wyjazd, którego jesteś
+uczestnikiem; cudzy daje „Trip not found”). Narzędzie znika z listy, gdy twoje
+konto nie ma uprawnienia `mcp` albo `trips`.
+
+**Gdy coś nie działa:**
+
+- 401 bez logowania jest normalny: odpowiedź niesie `WWW-Authenticate` z adresem
+  metadanych, od których klient zaczyna. Sprawdzisz to bez klienta:
+  `deploy/smoke-mcp.sh https://tuttitrip-api-develop.gburek.app` (401, metadane
+  zasobu, serwer autoryzacji).
+- 401 po zalogowaniu: token ma zły `aud`. Musi być równy adresowi MCP środowiska,
+  a nie `https://tuttitrip-api.gburek.app` (audience API aplikacji).
+- „Client ... is not authorized to access resource server”: klient nie jest
+  dopuszczony do API MCP w Auth0 (krok 1 poniżej).
+- Logowanie kończy się błędem po wyborze Google lub Discord: połączenia nie są
+  na poziomie domeny (krok 4 poniżej).
+- Błąd rejestracji klienta: DCR albo CIMD nie są włączone w tenancie (kroki 2 i 3).
+- Autoryzacja w kliencie nie przechodzi przez gałąź podglądu: tam MCP jest wyłączone
+  celowo, bo Auth0 ma API tylko dla main i develop.
+
+**Stan tenantu Auth0 (odczyt 2026-10-04, nic nie zmieniano).** Publiczne
+`/.well-known/openid-configuration` ma `registration_endpoint` (DCR) i
+`authorization_response_iss_parameter_supported: true`, ale nie ma jeszcze
+znacznika obsługi CIMD, więc w Claude wybierz „Register automatically”. API
+dla adresu MCP develop istnieje (Auth0 odmawia aplikacji frontendu dostępu do niego,
+czyli zasób jest zarejestrowany). Co jeszcze musi zrobić właściciel tenantu, a
+blokuje pełne przejście Claude i ChatGPT: włączyć CIMD (krok 2 poniżej), upewnić
+się, że DCR jest włączony (krok 3) i przenieść połączenia na poziom domeny (krok 4).
+Dopóki tego nie ma, serwer działa, ale zalogowanie w kliencie MCP może się nie udać;
+kryteria akceptacji #104 (Claude, ChatGPT, Claude Code) potwierdza się dopiero po tym.
 
 ### Konfiguracja Auth0 pod MCP (chore #102)
 
@@ -251,8 +341,10 @@ Stan na dziś (odczyt publicznego `/.well-known/openid-configuration`): jest ju�
 `registration_endpoint` (`/oidc/register`) i `authorization_response_iss_parameter_supported: true`,
 nie ma jeszcze znacznika CIMD.
 
-Gałęzie podglądu mają serwer MCP (odpowiada 401 i wystawia metadane), ale nie
-mają API w Auth0, więc nikt nie zdobędzie dla nich tokenu.
+Gałęzie podglądu nie mają serwera MCP: deploy zapisuje im
+`TUTTITRIP_MCP__ENABLED=false` (`tt_mcp_env` w `deploy/lib.sh`), więc `/api/v1/mcp`
+i metadane zasobu odpowiadają 404. Auth0 ma API tylko dla main i develop, bo
+identyfikator API jest adresem serwera.
 
 ## Architektura
 

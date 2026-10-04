@@ -57,7 +57,7 @@ src/tuttitrip/
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
   voting/              vote links for people without an account, host's vote summary
-  interview/           AI interview agent (AG-UI endpoint goes here)
+  interview/           AI interview: AG-UI endpoint, tools, question order, voice
   planning/            planner agent; subdomains fairness/ and linter/
                        algorithm spec (canonical for planning/**/logic): docs/algorytm.md
   accommodation/       requirements contract (met/unmet/unconfirmed)
@@ -456,6 +456,39 @@ stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
   czyli tabela członkostwa albo `owner_sub`, serwis z `get_membership`
   i zależność w `api.py`. Bez ogólnych ACL per obiekt.
 
+## Interview (`interview/`)
+
+- The agent runs on Qwen (`tuttitrip:agent`, then OpenRouter) in this backend,
+  not as a worker job, because the host waits for it (decision D2). It only
+  drafts: tools write through `trips` and `profiles` services with the
+  membership from `deps` (`InterviewDeps`), never from tool arguments, and call
+  `mark_assistant_values` after every write so "who set this" stays right.
+- `POST /trips/{trip_id}/interview/agui` speaks AG-UI 1.0 through
+  `AGUIAdapter`, subclassed in `services/agui_service.py`. The **only** client
+  input used is the text of the last user message (the `user_prompt` of the run);
+  the stored session history is the `message_history`, `result.new_messages()` is
+  appended on completion, and the client's `messages`, `state`, `tools` and
+  `resume` are ignored. One run per session, text or voice (`run_guard`: one
+  atomic `UPDATE` of `interview_sessions.running_until`, 409; acquired before the
+  history is read, released in a `finally` around the stream and by the response's
+  background task, expiring a margin after the run's time limit), at most
+  `interview.run_timeout_seconds` long. A failed turn keeps what it did
+  (`history_repair.settle`). Voice time per trip is limited
+  (`interview.voice_trip_seconds`, booked in `voice_seconds`, 429). Run errors are a Polish `RUN_ERROR`
+  with a `code` (`spend_limit`, `timeout`, `unavailable`, `error`).
+- The adapter subclass lives in `services`, so `api.py` imports no `pydantic_ai`
+  and the architecture rules need no exception.
+- The next question is `interview/logic/next_question.py` (pure, explicit
+  table in `constants.py`); the model only words it and shows it with the
+  `show_card` tool. The host's answer to a card is the text of their next message.
+- `SpendLimits` keeps its counters in this process (`InMemorySpendStore`): a deploy
+  resets the per-trip text budget. A shared store would need Redis; accepted for now.
+  `overwrite_host_values` is honoured only after a NOT SAVED result of that tool for
+  the same values followed by a later user message.
+- Tests: `FunctionModel` through `tests/shared/interview_world.py` (real
+  services over an in-memory trip). Voice: `services/voice_service.py`, tested
+  with the realtime session replaced; the real session is checked on a deployment.
+
 ## Wejście jury jednym linkiem (domena `demo`)
 
 Jury wchodzi na wspólne, zwykłe konto demo (rola `user`, nigdy superadmin) linkiem
@@ -826,6 +859,9 @@ the unfinished checks of the same branch, never a deployment.
 Slug: lowercase, every run of non-alphanumerics becomes `-`, trimmed, label
 capped at 63 chars (`feature/cos tam` -> `tuttitrip-api-feature-cos-tam`).
 Naming lives in `deploy/lib.sh` and is tested in `tests/test_deploy_naming.py`.
+The MCP server is on only in `main` and `develop` (`tt_mcp_env`, tested in
+`tests/test_deploy_mcp.py`); previews answer 404 on `/api/v1/mcp`. How to connect
+clients and what the Auth0 tenant must enable: README, "Serwer MCP".
 
 On the host, everything is namespaced: Docker network `tuttitrip`, containers
 `tuttitrip-postgres` (pgvector image, volume `tuttitrip-postgres-data`), `tuttitrip-gateway` (nginx on `172.17.0.1:18080`, routes

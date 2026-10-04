@@ -106,6 +106,7 @@ class ConflictCode(StrEnum):
     VETO_BLOCKS_PLACE = "veto_blocks_place"
     BUDGET_LIMIT = "budget_limit"
     FLOOR_UNREACHABLE = "floor_unreachable"
+    UNKNOWN_PRICE = "unknown_price"
     OTHER = "other"
 
 
@@ -122,13 +123,23 @@ class VerdictKind(StrEnum):
 class PlanCreate(BaseModel):
     """Optional knobs for generating a plan."""
 
-    alpha: float = Field(
-        default=1.0,
+    alpha: float | None = Field(
+        default=None,
         ge=0,
         le=3,
-        description="Fairness slider: 0 utility, 1 Nash, 3 near-egalitarian.",
+        description=(
+            "Fairness slider: 0 utility, 1 Nash, 3 near-egalitarian. Omitted: the "
+            "trip's own `fairness_alpha`."
+        ),
     )
-    weight_preset: WeightPreset = WeightPreset.DEFAULT
+    weight_preset: WeightPreset = Field(
+        default=WeightPreset.DEFAULT,
+        description=(
+            "Recorded with the plan and part of its input hash, but it has no effect "
+            "on the computation yet: the weights come from the profiles "
+            "(`PUT /trips/{id}/profiles/weights`)."
+        ),
+    )
 
 
 class PlanParams(BaseModel):
@@ -254,7 +265,9 @@ class PersonFairness(BaseModel):
     own_place_days: int = Field(
         ge=0, description="Days with a place of their own (m >= 0.6)."
     )
-    weakest_domain: PlanDomainCode
+    weakest_domain: PlanDomainCode | None = Field(
+        description="The applicable domain with the lowest q; null if none applies."
+    )
 
 
 class PlanFairness(BaseModel):
@@ -334,8 +347,14 @@ class PlanBudget(BaseModel):
     currency: Currency
     cost: Money = Field(description="c(P).")
     b_from: Money = Field(description="B_od.")
-    b_to: Money = Field(description="B_do.")
-    b_max: Money = Field(description="B_max (hard).")
+    b_to: Money | None = Field(description="B_do; null for a trip without a budget.")
+    b_max: Money | None = Field(
+        description="B_max (hard); null for a trip without a budget."
+    )
+    unlimited: bool = Field(
+        default=False,
+        description="The trip has no budget: nothing limits the cost, q_cost is n/a.",
+    )
     zone: BudgetZone
     over_budget: Money = Field(description="Amount above B_do (0 when within).")
     needs_approval: bool = Field(
@@ -370,16 +389,20 @@ class PlanBudget(BaseModel):
 class PlanTelemetry(BaseModel):
     """How the plan was computed."""
 
-    solver: str = Field(description="Solver name; 'stub' while the response is fixed.")
+    solver: str = Field(description="Solver name and version.")
     steps: int = Field(ge=0)
     solo_runs: int = Field(ge=0)
     elapsed_ms: int = Field(ge=0)
 
 
 class PlanRead(BaseModel):
-    """A plan with the fairness measure, ledger, verdicts and budget.
+    """A stored plan version with the fairness measure, ledger and budget.
 
-    STUB: until backend#50 the content is a fixed sample; the shape is final.
+    The content is a copy made when the plan was computed. ``verdicts`` stay
+    null until backend#51 fills them; ``lodging`` is null until a lodging base
+    can be chosen (backend#70), and then the lodging domain of every person is
+    "not applicable". ``budget.needs_approval`` is set by backend#53; places
+    without a price are reported as ``unknown_price`` conflicts.
     """
 
     id: UUID

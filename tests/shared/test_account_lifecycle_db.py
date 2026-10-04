@@ -95,7 +95,8 @@ def test_deleting_a_host_hands_the_trip_to_the_first_co_host() -> None:
                     select(Trip.owner_sub).where(Trip.id == trip.id)
                 )
                 assert owner == co_host
-                roles = await trips_db.select_member_roles(session, trip.id)
+                members = await trips_db.select_members(session, trip.id)
+                roles = {sub: role for sub, (role, _) in members.items()}
                 assert roles == {co_host: TripRole.HOST}
                 assert await session.get(Trip, kept.id) is None  # no co-host: removed
                 linked = await session.scalar(
@@ -127,7 +128,8 @@ def test_deleting_a_host_without_co_host_hands_the_trip_to_the_first_member() ->
                     select(Trip.owner_sub).where(Trip.id == trip.id)
                 )
                 assert owner == early
-                roles = await trips_db.select_member_roles(session, trip.id)
+                members = await trips_db.select_members(session, trip.id)
+                roles = {sub: role for sub, (role, _) in members.items()}
                 assert roles == {early: TripRole.HOST, late: TripRole.MEMBER}
             finally:
                 await _cleanup(session, [host, early, late])

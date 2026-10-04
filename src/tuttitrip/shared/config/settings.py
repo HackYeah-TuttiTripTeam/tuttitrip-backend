@@ -6,6 +6,7 @@ Nested models use ``__`` as the delimiter, e.g. ``TUTTITRIP_DATABASE__HOST``.
 """
 
 import re
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Self
@@ -105,6 +106,59 @@ class LlmSettings(BaseModel):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_model: str = "google/gemini-3.8-flash"
     jev_model: str = "typesafe/jev-1.13"
+
+
+class InterviewSettings(BaseModel):
+    """Limits of the interview assistant (text over AG-UI, voice over WebRTC)."""
+
+    run_timeout_seconds: float = Field(
+        default=120.0,
+        gt=0,
+        description="One text turn is cut off after this long (gateway: 300 s).",
+    )
+    trip_budget_usd: Decimal = Field(
+        default=Decimal(2),
+        gt=0,
+        description="Spend ceiling of the text interview per trip (SpendLimits).",
+    )
+    qwen_usd_per_million_input_tokens: Decimal = Field(
+        default=Decimal("0.30"),
+        ge=0,
+        description="Estimated price of Qwen on the GB10, absent from genai-prices.",
+    )
+    qwen_usd_per_million_output_tokens: Decimal = Field(
+        default=Decimal("0.90"),
+        ge=0,
+        description="Estimated price of Qwen output tokens on the GB10.",
+    )
+    classify_min_confidence: float = Field(
+        default=0.7,
+        ge=0,
+        le=1,
+        description="Below this confidence a decision model's pick is only asked back.",
+    )
+    voice_model: str = Field(
+        default="openai:gpt-realtime-2.1-mini",
+        description="Pydantic AI realtime model of the voice interview.",
+    )
+    voice_max_seconds: float = Field(
+        default=300.0, gt=0, description="A voice conversation is closed after this."
+    )
+    voice_attach_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="How long the offer waits for the server sideband to attach.",
+    )
+    voice_trip_seconds: int = Field(
+        default=1800,
+        ge=1,
+        description="Voice time one trip's interview may use in all (all calls).",
+    )
+    voice_budget_usd: Decimal = Field(
+        default=Decimal(1),
+        gt=0,
+        description="Cost limit of one voice conversation (UsageLimits).",
+    )
 
 
 class DbosSettings(BaseModel):
@@ -220,6 +274,7 @@ class Settings(BaseSettings):
     auth0: Auth0Settings = Field(default_factory=Auth0Settings)
     admin: AdminSettings = Field(default_factory=AdminSettings)
     llm: LlmSettings = Field(default_factory=LlmSettings)
+    interview: InterviewSettings = Field(default_factory=InterviewSettings)
     dbos: DbosSettings = Field(default_factory=DbosSettings)
     jobs: JobsSettings = Field(default_factory=JobsSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
