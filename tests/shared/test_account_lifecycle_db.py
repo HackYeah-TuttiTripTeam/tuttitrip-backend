@@ -109,6 +109,32 @@ def test_deleting_a_host_hands_the_trip_to_the_first_co_host() -> None:
     asyncio.run(run())
 
 
+def test_deleting_a_host_without_co_host_hands_the_trip_to_the_first_member() -> None:
+    async def run() -> None:
+        host, early, late = _sub("host"), _sub("early"), _sub("late")
+        async with _session() as session:
+            try:
+                trip = await trip_service.create_trip(
+                    session, host, TripCreate(name="T")
+                )
+                await trips_db.insert_member(session, trip.id, early, TripRole.MEMBER)
+                await trips_db.insert_member(session, trip.id, late, TripRole.MEMBER)
+                await session.commit()
+
+                await trip_service.erase_account(session, host)
+
+                owner = await session.scalar(
+                    select(Trip.owner_sub).where(Trip.id == trip.id)
+                )
+                assert owner == early
+                roles = await trips_db.select_member_roles(session, trip.id)
+                assert roles == {early: TripRole.HOST, late: TripRole.MEMBER}
+            finally:
+                await _cleanup(session, [host, early, late])
+
+    asyncio.run(run())
+
+
 def test_registered_trip_eraser_is_the_one_in_main() -> None:
 
     assert trip_service.erase_account in erasure._ERASERS  # ruff: ignore[private-member-access]

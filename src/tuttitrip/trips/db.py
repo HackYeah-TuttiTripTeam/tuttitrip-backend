@@ -268,20 +268,27 @@ async def select_hosted_trip_ids(session: AsyncSession, sub: str) -> list[UUID]:
     return list(result.all())
 
 
-async def select_first_co_host(session: AsyncSession, trip_id: UUID) -> str | None:
-    """The co-host who joined the trip first.
+async def select_successor(
+    session: AsyncSession, trip_id: UUID, leaving: str
+) -> str | None:
+    """Who takes over a trip: the longest-standing co-host, else member.
 
     Args:
         session: Open session.
         trip_id: Trip id.
+        leaving: Auth0 subject of the host who leaves (never chosen).
 
     Returns:
-        Auth0 subject, or None when the trip has no co-host.
+        Auth0 subject, or None when the host is alone on the trip.
     """
     return await session.scalar(
         select(TripMember.user_sub)
-        .where(TripMember.trip_id == trip_id, TripMember.role == TripRole.CO_HOST)
-        .order_by(TripMember.added_at, TripMember.user_sub)
+        .where(TripMember.trip_id == trip_id, TripMember.user_sub != leaving)
+        .order_by(
+            (TripMember.role == TripRole.CO_HOST).desc(),
+            TripMember.added_at,
+            TripMember.user_sub,
+        )
         .limit(1)
     )
 
