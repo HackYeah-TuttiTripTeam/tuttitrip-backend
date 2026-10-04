@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tuttitrip.interview.schemas import InterviewState
+from tuttitrip.interview.schemas import InterviewState, NextQuestion
 from tuttitrip.trips.schemas import TripMembership
 
 
@@ -24,3 +24,12 @@ class InterviewDeps:
     sessions: async_sessionmaker[AsyncSession]
     state: InterviewState = field(default_factory=InterviewState)
     voice: bool = False
+    own_profile_id: UUID | None = None
+    """Set for a member's interview: the one profile its tools may write."""
+    chosen: dict[str, NextQuestion | None] = field(default_factory=dict)
+    """The next question for each state of the panel, so the solver measures once."""
+
+    @property
+    def is_member(self) -> bool:
+        """Whether this is a member's own interview (own data only)."""
+        return self.own_profile_id is not None

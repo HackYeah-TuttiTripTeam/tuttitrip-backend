@@ -38,6 +38,11 @@ def test_valid_token_yields_user(verifier: TokenVerifier) -> None:
     assert user.permissions == ["read:trips"]
 
 
+def test_user_carries_the_token_expiry(verifier: TokenVerifier) -> None:
+    exp = int(time.time()) + 123
+    assert verifier.verify(make_token(exp=exp)).exp == exp
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

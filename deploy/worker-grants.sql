@@ -34,6 +34,12 @@ GRANT SELECT, INSERT, UPDATE
     ON public.city_fetches, public.city_fetch_attempts
     TO tuttitrip_worker;
 
+-- Notifications: the worker creates them (workflow results) and the retention
+-- job deletes old ones. It never updates them (reading is the user's business).
+GRANT SELECT, INSERT, DELETE
+    ON public.notifications
+    TO tuttitrip_worker;
+
 -- Read-write: tables designated for worker output.
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON public.worker_heartbeats, public.job_results, public.embeddings

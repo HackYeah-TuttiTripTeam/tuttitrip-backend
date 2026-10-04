@@ -16,13 +16,20 @@ class InterviewSession(Base):
     """One interview of a trip; its id is the AG-UI ``threadId``."""
 
     __tablename__ = "interview_sessions"
-    # One open session per trip: creating it twice returns the same one.
+    # One open session per trip for the host side and one per profile for a member:
+    # creating it twice returns the same one.
     __table_args__ = (
         Index(
             "uq_interview_sessions_open_trip",
             "trip_id",
             unique=True,
-            postgresql_where=text("status = 'open'"),
+            postgresql_where=text("status = 'open' AND profile_id IS NULL"),
+        ),
+        Index(
+            "uq_interview_sessions_open_profile",
+            "profile_id",
+            unique=True,
+            postgresql_where=text("status = 'open' AND profile_id IS NOT NULL"),
         ),
     )
 
@@ -30,6 +37,11 @@ class InterviewSession(Base):
     # No plain index: the partial unique index above serves every lookup.
     trip_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("trips.id", ondelete="CASCADE")
+    )
+    # Empty: the trip's interview (host, co-hosts). Set: the member's own interview
+    # about their interests, readable only by them.
+    profile_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE")
     )
     status: Mapped[SessionStatus] = mapped_column(
         Enum(

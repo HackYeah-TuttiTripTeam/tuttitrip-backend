@@ -12,21 +12,29 @@ from tuttitrip.interview.schemas import FieldRef, SessionStatus
 
 
 async def select_open_session(
-    session: AsyncSession, trip_id: UUID, *, lock: bool = False
+    session: AsyncSession,
+    trip_id: UUID,
+    *,
+    profile_id: UUID | None = None,
+    lock: bool = False,
 ) -> InterviewSession | None:
-    """The open interview of a trip.
+    """The open interview of a trip, or of one member of it.
 
     Args:
         session: Open session.
         trip_id: Trip id.
+        profile_id: The member's profile; None for the trip's own interview.
         lock: Lock the row until the transaction ends (for appends).
 
     Returns:
-        The session, or None when the trip has none open.
+        The session, or None when there is none open.
     """
     stmt = select(InterviewSession).where(
         InterviewSession.trip_id == trip_id,
         InterviewSession.status == SessionStatus.OPEN,
+        InterviewSession.profile_id.is_(None)
+        if profile_id is None
+        else InterviewSession.profile_id == profile_id,
     )
     return await session.scalar(stmt.with_for_update() if lock else stmt)
 
@@ -52,25 +60,38 @@ async def select_session(
 
 
 async def insert_open_session(
-    session: AsyncSession, trip_id: UUID, created_by: str
+    session: AsyncSession,
+    trip_id: UUID,
+    created_by: str,
+    profile_id: UUID | None = None,
 ) -> InterviewSession | None:
-    """Open a session unless the trip already has one (race-safe).
+    """Open a session unless there is already one (race-safe).
 
     Args:
         session: Open session.
         trip_id: Trip id.
         created_by: Auth0 subject of the caller.
+        profile_id: The member's profile; None for the trip's own interview.
 
     Returns:
         The new session, or None when an open one already exists.
     """
+    is_open = InterviewSession.status == SessionStatus.OPEN
+    if profile_id is None:
+        target = [InterviewSession.trip_id]
+        where = is_open & InterviewSession.profile_id.is_(None)
+    else:
+        target = [InterviewSession.profile_id]
+        where = is_open & InterviewSession.profile_id.is_not(None)
     stmt = (
         insert(InterviewSession)
-        .values(trip_id=trip_id, created_by=created_by, history=[])
-        .on_conflict_do_nothing(
-            index_elements=[InterviewSession.trip_id],
-            index_where=InterviewSession.status == SessionStatus.OPEN,
+        .values(
+            trip_id=trip_id,
+            created_by=created_by,
+            profile_id=profile_id,
+            history=[],
         )
+        .on_conflict_do_nothing(index_elements=target, index_where=where)
         .returning(InterviewSession)
     )
     return await session.scalar(stmt, execution_options={"populate_existing": True})

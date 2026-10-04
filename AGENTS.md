@@ -64,6 +64,7 @@ src/tuttitrip/
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
   mcp/                 MCP server at /api/v1/mcp (FastMCP); tools call other domains' services
+  notifications/       inbox table (outbox); producers call notifications.services
   places/              city and place catalog; prices and hours carry source + verified mark
 contracts/             jobs.schema.json: rendered job contract (compared with the worker)
 migrations/            Alembic (async); versions/ holds revisions
@@ -480,6 +481,26 @@ stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
 - The next question is `interview/logic/next_question.py` (pure, explicit
   table in `constants.py`); the model only words it and shows it with the
   `show_card` tool. The host's answer to a card is the text of their next message.
+- Which question comes first is measured, not tabled (`question_service`): the
+  solver (`planning/logic/what_if.py`, outside the event loop, work limit in
+  evaluated plans so it is deterministic) is re-run for two or three plausible
+  answers of each missing field, and the field that changes the plan most wins
+  (`logic/informativeness.py`, ties by field name). Past
+  `interview.impact_budget_seconds`, or without a city, the fixed table decides.
+  The card of a question is the fixed map in `constants.CARD_OF_FIELD`.
+- A preliminary plan needs only the city (`POST .../interview/draft-plan` and the
+  `build_plan_now` tool call the same `draft_plan_service`; one per turn).
+  `logic/plan_defaults.py` lists the assumptions (one day, two adults, no budget
+  limit, default preferences); they are applied in memory by `plan_service`
+  (`PlanAssumptions`, never stored on the trip), and the version is marked
+  `params.draft`.
+- The same agent and endpoints serve a trip member, chosen by the role (not by
+  anything in the conversation): a member gets their own session
+  (`interview_sessions.profile_id`, unreadable to others), a panel with only
+  themselves and no budget, and only the `*_my_*` tools of `member_tools.py`,
+  which take no person (`deps.own_profile_id`). Their values are left unmarked on
+  purpose, so they read as a person's and the host's assistant asks before
+  changing them. Voice and the draft plan stay with co-hosts.
 - `SpendLimits` keeps its counters in this process (`InMemorySpendStore`): a deploy
   resets the per-trip text budget. A shared store would need Redis; accepted for now.
   `overwrite_host_values` is honoured only after a NOT SAVED result of that tool for
@@ -760,6 +781,60 @@ Wydania:
   `feedback_service.list_for_trip()`, which returns active vetoes.
 - Own profile (`profiles.user_sub` equals the caller) or co-host and above;
   the services take a `TripMembership` as the author, not `CurrentUser`.
+
+## Notifications
+
+One table, `notifications`, feeds the list, the unread counter and the live
+stream. Other domains create notifications with
+`notifications.services.notification_service.notify(session, recipients=...,
+type=..., trip_id=..., params=..., actions=..., dedupe_key=..., actor=...)`
+inside their own transaction; it never commits, so a rollback takes the
+notification back. `resolve(session, dedupe_key)` marks all with that key as
+read (an approved request disappears from the basket).
+
+- The database keeps `type` (open text, no CHECK) and small `params` (strings
+  only: names, ids, amounts; never tokens or private data, they reach the
+  browser). Title and text are composed by the frontend in the user's language.
+- `actions` are codes from `NotificationActionCode`; the backend never stores
+  URLs or API paths.
+- `dedupe_key` makes a repeated event a no-op per recipient
+  (`UNIQUE (user_sub, dedupe_key)`); `actor` never gets their own. A key must carry
+  the id of the thing and, when the event can legitimately happen again, a version or
+  period (`proposal:<id>:v2`, `daily:<trip>:2026-10-05`), or the second one is silently
+  dropped forever.
+- The producer decides the recipients; the service does not check membership.
+- An `AFTER INSERT` trigger sends `pg_notify('notifications', {id, user_sub})`
+  (ids only: the payload is capped at 8000 bytes). The worker may `SELECT`,
+  `INSERT` and `DELETE` on the table (`deploy/worker-grants.sql`).
+- `GET /notifications` (`Page[NotificationRead]`: `page`, `size`, `sort` = `created_at`|`type`,
+  `dir` default `desc`, filters `read`, repeatable `type`, `trip_id`, `created_from` inclusive,
+  `created_to` exclusive, UTC) and `GET /notifications/unread-count` (`{"count": n}`) need
+  `notifications:READ`. Every query is `WHERE user_sub = <caller>`; another user's rows simply
+  do not exist for you (no 403). `NotificationFilter` is the one filter model for the list and
+  for bulk marking.
+- `POST /notifications/mark` (`notifications:WRITE`): body `{"read": bool, "ids": [uuid] | null,
+  "filters": NotificationFilter | null}`, exactly one of `ids` (1 to 100, else 422) and `filters`
+  (`{}` = all); answers `{"updated": n}`, counting only rows that changed state. One `UPDATE`
+  scoped to the caller (foreign ids are skipped silently).
+- `GET /notifications/{id}` (`notifications:READ`): one notification of the caller, read as tolerantly
+  as the list; 404 for an unknown id and for someone else's (not told apart). For `?open=<id>` links.
+- `GET /notifications/stream` (SSE, `notifications:READ`, `Authorization: Bearer`, so read it with
+  `fetch`). Events: `ready` (`{"unread": n}`), `notification` (SSE `id` = notification id, data =
+  `NotificationRead`), `resync` (`{"reason"}`: reload list and counter). FastAPI sends a `ping`
+  comment every 15 s. `NotificationHub` (`notifications/services/hub.py`) keeps one direct
+  asyncpg `LISTEN notifications` connection per process (not from the pool, no PgBouncer in
+  transaction mode), starts on the first stream and is stopped by the lifespan; per-user bounded
+  queues turn an overflow or a reconnect into one `resync`. A stream holds no DB session (the
+  request one is closed at once) and ends at the token's `exp` (`AuthenticatedUser.exp`) or after
+  30 minutes. Reconnect with `Last-Event-ID` (id of the last notification) or `since`: the stream
+  first sends what was missed (up to 50, else `resync`). The reads of rows happen only for users
+  with an open stream.
+- First producers: joining a trip by invitation creates `member_joined` (`open_people`, key
+  `member_joined:<trip>:<sub>`) and a new veto creates `veto_added` (`open_plan`, key
+  `veto:<veto id>`) for the host and co-hosts (`member_service.organizer_subs`), never for the
+  author, in the same transaction as the change.
+- Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
+  is marked `integration`.
 
 ## Git flow
 

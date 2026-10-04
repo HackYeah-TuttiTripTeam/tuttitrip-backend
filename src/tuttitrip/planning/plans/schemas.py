@@ -21,6 +21,8 @@ from tuttitrip.profiles.feedback.schemas import ReasonCode
 
 Money = Annotated[Decimal, Field(ge=0, decimal_places=2, max_digits=12)]
 Hash12 = Annotated[str, Field(min_length=12, max_length=12)]
+MAX_ASSUMED_PEOPLE = 10
+"""Most people a draft plan may assume."""
 
 
 @unique
@@ -142,11 +144,48 @@ class PlanCreate(BaseModel):
     )
 
 
+class PlanAssumptions(BaseModel):
+    """What a draft plan fills in where the trip has no data yet.
+
+    Used while the interview is still going: dates the trip lacks and people it
+    lacks are assumed in memory (nothing is stored on the trip), and the version
+    is marked ``draft``. A date or a person the trip has is never replaced.
+    """
+
+    start_date: dt.date | None = Field(
+        default=None, description="Assumed first day, used only if the trip has none."
+    )
+    end_date: dt.date | None = Field(
+        default=None, description="Assumed last day, used only if the trip has none."
+    )
+    min_people: int = Field(
+        default=0,
+        ge=0,
+        le=MAX_ASSUMED_PEOPLE,
+        description="The group is filled up to this size with assumed adults.",
+    )
+
+    @model_validator(mode="after")
+    def _dates_in_order(self) -> Self:
+        if (
+            self.start_date is not None
+            and self.end_date is not None
+            and self.end_date < self.start_date
+        ):
+            msg = "end_date must not be before start_date"
+            raise ValueError(msg)
+        return self
+
+
 class PlanParams(BaseModel):
     """Parameters the plan was computed with."""
 
     alpha: float = Field(description="Fairness slider (alpha of phi_alpha, E5).")
     weight_preset: WeightPreset
+    draft: bool = Field(
+        default=False,
+        description="A preliminary plan made with assumptions during the interview.",
+    )
 
 
 class StopTransfer(BaseModel):

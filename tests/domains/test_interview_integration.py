@@ -183,7 +183,9 @@ def test_knowledge_reads_the_domains_and_tells_host_from_assistant(
     assert after == {"destination": "host", "budget": "assistant"}
 
 
-def test_outsider_gets_404_and_member_403(client: TestClient) -> None:
+def test_outsider_gets_404_and_a_member_without_a_profile_too(
+    client: TestClient,
+) -> None:
     trip = _trip(client)
 
     async def add_member() -> None:
@@ -203,8 +205,10 @@ def test_outsider_gets_404_and_member_403(client: TestClient) -> None:
     ]
     _as(client, OUTSIDER)
     assert [getattr(client, m)(u).status_code for m, u in routes] == [404] * 3
+    # A member has their own interview, but only through their profile: none here.
     _as(client, MEMBER)
-    assert [getattr(client, m)(u).status_code for m, u in routes] == [403] * 3
+    assert [getattr(client, m)(u).status_code for m, u in routes] == [404] * 3
+    assert client.post(path("build_draft_plan", trip_id=trip)).status_code == 403
 
 
 def test_sessions_disappear_with_the_trip(client: TestClient) -> None:

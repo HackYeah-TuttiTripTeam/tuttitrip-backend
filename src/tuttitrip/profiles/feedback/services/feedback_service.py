@@ -10,6 +10,13 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.notifications.schemas import (
+    NotificationAction,
+    NotificationActionCode,
+    NotificationType,
+)
+from tuttitrip.notifications.services import notification_service
+from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.places.services import place_service
 from tuttitrip.places.services.place_service import PlaceNotFoundError
 from tuttitrip.profiles import db as profiles_db
@@ -24,6 +31,7 @@ from tuttitrip.profiles.feedback.schemas import (
 )
 from tuttitrip.profiles.models import Profile
 from tuttitrip.trips.schemas import TripMembership, TripRole
+from tuttitrip.trips.services import member_service
 
 ACTIVE_VETO_INDEX = "uq_place_vetoes_active"
 
@@ -70,9 +78,9 @@ async def _profile_for_author(
     return profile
 
 
-async def _require_place(session: AsyncSession, place_id: UUID) -> None:
+async def _require_place(session: AsyncSession, place_id: UUID) -> PlaceRead:
     try:
-        await place_service.get_place(session, place_id)
+        return await place_service.get_place(session, place_id)
     except PlaceNotFoundError as exc:
         raise FeedbackPlaceNotFoundError(str(place_id)) from exc
 
@@ -172,7 +180,7 @@ async def create_veto(
         VetoExistsError: The person already has an active veto on the place.
     """
     profile = await _profile_for_author(session, membership, data.profile_id)
-    await _require_place(session, data.place_id)
+    place = await _require_place(session, data.place_id)
     try:
         veto = await db.insert_veto(
             session,
@@ -192,6 +200,17 @@ async def create_veto(
         raise VetoExistsError(msg) from exc
     await session.refresh(veto)
     read = VetoRead.model_validate(veto)
+    await notification_service.notify(
+        session,
+        recipients=await member_service.organizer_subs(session, membership.trip_id),
+        type=NotificationType.VETO_ADDED,
+        trip_id=membership.trip_id,
+        params={"place_name": place.name, "member_name": profile.display_name},
+        actions=[NotificationAction(code=NotificationActionCode.OPEN_PLAN)],
+        # The veto id: a veto revoked and filed again is a new event.
+        dedupe_key=f"veto:{veto.id}",
+        actor=membership.sub,
+    )
     await session.commit()
     return read
 

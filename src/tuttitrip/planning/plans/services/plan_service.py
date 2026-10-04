@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.places.services import place_service
+from tuttitrip.planning.logic import what_if
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 from tuttitrip.planning.logic.plan_group import plan_group
 from tuttitrip.planning.plans import db
@@ -26,12 +27,19 @@ from tuttitrip.planning.plans.logic.input_builder import (
 )
 from tuttitrip.planning.plans.logic.read_model import build_content
 from tuttitrip.planning.plans.models import PlanVersion
-from tuttitrip.planning.plans.schemas import PlanCreate, PlanParams, PlanRead
-from tuttitrip.planning.schemas import PlanningInput
+from tuttitrip.planning.plans.schemas import (
+    PlanAssumptions,
+    PlanCreate,
+    PlanParams,
+    PlanRead,
+)
+from tuttitrip.planning.schemas import PlanningInput, WhatIfTarget
 from tuttitrip.profiles.feedback.services import feedback_service
+from tuttitrip.profiles.preferences.schemas import PreferencesRead
 from tuttitrip.profiles.preferences.services import preference_service
+from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
-from tuttitrip.trips.schemas import TripMembership, TripRole
+from tuttitrip.trips.schemas import TripMembership, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
 
 PAGE = 200
@@ -106,8 +114,31 @@ async def _city_places(session: AsyncSession, slug: str) -> list[PlaceRead]:
     return found
 
 
+def _assume(
+    trip: TripRead,
+    profiles: list[ProfileRead],
+    preferences: list[PreferencesRead],
+    assumptions: PlanAssumptions,
+) -> tuple[TripRead, list[ProfileRead], list[PreferencesRead]]:
+    # Fills only gaps: a date or a person the trip has is never replaced.
+    trip = trip.model_copy(
+        update={
+            "start_date": trip.start_date or assumptions.start_date,
+            "end_date": trip.end_date or assumptions.end_date,
+        }
+    )
+    missing = assumptions.min_people - len(profiles)
+    if missing > 0:
+        extra = profile_service.assumed_adults(trip.id, len(profiles) + 1, missing)
+        profiles = [*profiles, *extra]
+        preferences = [*preferences, *preference_service.assumed_preferences(extra)]
+    return trip, profiles, preferences
+
+
 async def _gather(
-    session: AsyncSession, caller: TripMembership
+    session: AsyncSession,
+    caller: TripMembership,
+    assumptions: PlanAssumptions | None = None,
 ) -> tuple[PlanningInput, dict[UUID, str], float]:
     # The trip, its people, their feedback and the catalog as algorithm input. The
     # data is read with a host-level view of the trip (not scoped to the caller):
@@ -115,20 +146,23 @@ async def _gather(
     # asks. What the caller may see is decided when the response is built.
     membership = caller.model_copy(update={"role": TripRole.HOST})
     trip = await trip_service.get_trip(session, membership)
-    if trip.city_slug is None:
+    slug = trip.city_slug
+    if slug is None:
         msg = "The trip needs a city to plan"
         raise PlanInputError(msg)
     cities = {c.slug: c for c in await place_service.list_cities(session)}
-    if trip.city_slug not in cities:
-        msg = f"Unknown city '{trip.city_slug}'"
+    if slug not in cities:
+        msg = f"Unknown city '{slug}'"
         raise PlanInputError(msg)
     profiles = await profile_service.list_profiles(session, membership)
     preferences = await preference_service.list_preferences(session, membership)
+    if assumptions is not None:
+        trip, profiles, preferences = _assume(trip, profiles, preferences, assumptions)
     feedback = await feedback_service.list_for_trip(session, membership.trip_id)
-    places = await _city_places(session, trip.city_slug)
+    places = await _city_places(session, slug)
     planning = build_input(
         trip,
-        city=cities[trip.city_slug],
+        city=cities[slug],
         profiles=profiles,
         preferences=preferences,
         feedback=feedback,
@@ -138,8 +172,19 @@ async def _gather(
     return planning, names, trip.fairness_alpha
 
 
+def _is_current(latest: PlanVersion, digest: str, *, draft: bool) -> bool:
+    # The same input is reused only as the same kind of plan: a draft that the
+    # complete data later reproduces becomes a regular version of its own.
+    return (
+        latest.input_hash == digest and bool(latest.params.get("draft", False)) is draft
+    )
+
+
 async def generate_plan(
-    session: AsyncSession, membership: TripMembership, data: PlanCreate | None
+    session: AsyncSession,
+    membership: TripMembership,
+    data: PlanCreate | None,
+    assumptions: PlanAssumptions | None = None,
 ) -> tuple[PlanRead, bool]:
     """Compute a plan for the trip, or return the latest version of the same input.
 
@@ -155,6 +200,8 @@ async def generate_plan(
         session: Open session.
         membership: The caller's membership (any role).
         data: Knobs of the request, or None for the trip's own ``alpha``.
+        assumptions: Gaps to fill in memory for a preliminary (draft) plan, or
+            None for a plan of the trip as it is. The version is marked ``draft``.
 
     Returns:
         The plan and whether a new version was stored.
@@ -162,13 +209,14 @@ async def generate_plan(
     Raises:
         PlanInputError: When the trip lacks dates, a city or people.
     """
-    planning, names, trip_alpha = await _gather(session, membership)
+    draft = assumptions is not None
+    planning, names, trip_alpha = await _gather(session, membership, assumptions)
     alpha = trip_alpha if data is None or data.alpha is None else data.alpha
     preset = (data or PlanCreate()).weight_preset
     digest = input_hash(planning, alpha, preset.value, DEFAULT_PARAMS)
 
     latest = await db.select_latest(session, membership.trip_id)
-    if latest is not None and latest.input_hash == digest:
+    if latest is not None and _is_current(latest, digest, draft=draft):
         return await _read(session, membership, latest), False
     await session.rollback()  # do not hold a transaction while computing
 
@@ -179,7 +227,7 @@ async def generate_plan(
 
     await db.lock_trip_plans(session, membership.trip_id)
     latest = await db.select_latest(session, membership.trip_id)
-    if latest is not None and latest.input_hash == digest:
+    if latest is not None and _is_current(latest, digest, draft=draft):
         return await _read(session, membership, latest), False  # a parallel request
     row = PlanVersion(
         trip_id=membership.trip_id,
@@ -189,6 +237,7 @@ async def generate_plan(
         params={
             "alpha": alpha,
             "weight_preset": preset.value,
+            "draft": draft,
             "algorithm_version": ALGORITHM_VERSION,
             "algorithm": asdict(DEFAULT_PARAMS),
         },
@@ -240,3 +289,58 @@ async def get_plan(
     if row is None:
         raise PlanNotFoundError(str(plan_id))
     return await _read(session, membership, row)
+
+
+IMPACT_CACHE_SIZE = 32
+"""Measurements kept in this process (the same trip data asks again within a turn)."""
+
+impact_cache: dict[tuple[str, tuple[WhatIfTarget, ...]], dict[WhatIfTarget, float]] = {}
+
+
+async def measure_impacts(
+    session: AsyncSession,
+    membership: TripMembership,
+    assumptions: PlanAssumptions | None,
+    targets: tuple[WhatIfTarget, ...],
+    budget_seconds: float,
+) -> dict[WhatIfTarget, float] | None:
+    """How much would each answer change the plan for what is known now?
+
+    Solves the trip's plan (with the assumptions of a draft, if given) and once
+    more for each plausible answer of each question, outside the event loop.
+    Nothing is stored. The same data and questions give the same scores, and a
+    repeat within the process is served from a small cache.
+
+    Args:
+        session: Open session.
+        membership: The caller's membership (any role; the data is read host-level).
+        assumptions: Gaps to fill in memory, as for a draft plan.
+        targets: The questions to measure.
+        budget_seconds: Give up after this long.
+
+    Returns:
+        The score of each question, or None when the time ran out.
+
+    Raises:
+        PlanInputError: The trip cannot be planned (no city, unknown city).
+    """
+    planning, _names, alpha = await _gather(session, membership, assumptions)
+    await session.rollback()  # do not hold a transaction while computing
+    key = (input_hash(planning, alpha, "impact", DEFAULT_PARAMS), targets)
+    if (cached := impact_cache.get(key)) is not None:
+        return cached
+    scores = await anyio.to_thread.run_sync(
+        partial(
+            what_if.impacts,
+            planning,
+            targets,
+            DEFAULT_PARAMS,
+            alpha=alpha,
+            budget_seconds=budget_seconds,
+        )
+    )
+    if scores is not None:
+        if len(impact_cache) >= IMPACT_CACHE_SIZE:
+            impact_cache.pop(next(iter(impact_cache)))
+        impact_cache[key] = scores
+    return scores

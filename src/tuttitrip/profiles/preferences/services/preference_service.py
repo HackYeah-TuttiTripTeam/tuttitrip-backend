@@ -158,6 +158,18 @@ async def _read_many(
     ]
 
 
+def assumed_preferences(profiles: list[ProfileRead]) -> list[PreferencesRead]:
+    """Age-default preferences for people that exist only in a draft plan.
+
+    Args:
+        profiles: The assumed people (see ``profile_service.assumed_adults``).
+
+    Returns:
+        One entry per person, ``filled`` false, nothing stored.
+    """
+    return [_read(profile, None, [], sees_health=True) for profile in profiles]
+
+
 async def get_preferences(
     session: AsyncSession, membership: TripMembership, profile_id: UUID
 ) -> PreferencesRead:
