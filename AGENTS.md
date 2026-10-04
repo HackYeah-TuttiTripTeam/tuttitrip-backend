@@ -131,12 +131,11 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   there; CORS still matters for direct cross-origin use. It allows no
   credentials (the API takes bearer tokens, never cookies).
 - The one exception is the MCP server (`mcp/api.py`, `Settings.mcp.enabled`):
-  one `Mount("/api/v1", ...)` after the routers that serves only `/api/v1/mcp`,
-  plus the resource metadata `/.well-known/oauth-protected-resource/api/v1/mcp`
-  at the root (RFC 9728). `test_routes.py` allows exactly that (one mount that
-  wraps the FastMCP app with those two routes) and `test_permissions.py` lists
-  them in `MCP_ROUTES`; any other route outside the prefix or a second mount
-  fails.
+  two exact routes added after the routers, `/api/v1/mcp` and the resource
+  metadata `/.well-known/oauth-protected-resource/api/v1/mcp` at the root
+  (RFC 9728). Never mount an app under `/api/v1`: a mount swallows REST 405s and
+  redirects. `test_routes.py` allows only the metadata path and no mounts at
+  all, `test_permissions.py` lists both in `MCP_ROUTES`.
 - Old unversioned paths (`/health`, `/openapi.json`, `/docs`, `/trips`...) answer 404.
 
 ## Lists

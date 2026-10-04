@@ -179,7 +179,7 @@ ChatGPT albo innego klienta MCP. Kod jest w domenie `src/tuttitrip/mcp/`
   (`TUTTITRIP_MCP__RESOURCE_URL`, np. `https://tuttitrip-api.gburek.app/api/v1/mcp`),
   czyli innym niż audience API aplikacji. Token z audience API aplikacji daje 401.
   Podpis, wystawca i ważność sprawdza ten sam `TokenVerifier` co w REST.
-- Metadane zasobu (RFC 9728) są pod `/.well-known/oauth-protected-resource/api/v1/mcp`
+- Endpoint to jedna dokładna trasa `/api/v1/mcp` (bez montowania, więc REST zachowuje 405 i przekierowania). Metadane zasobu (RFC 9728) są pod `/.well-known/oauth-protected-resource/api/v1/mcp`
   na poziomie głównym domeny; 401 niesie `WWW-Authenticate` z `resource_metadata`.
 - Uprawnienia: każde narzędzie ma dokładnie jeden `mcp_requires(Feature.X, Access.Y)`,
   który wymaga `mcp:READ` i `X:Y`. Narzędzie bez zgody znika z `tools/list`.
@@ -188,7 +188,7 @@ ChatGPT albo innego klienta MCP. Kod jest w domenie `src/tuttitrip/mcp/`
 
 ### Konfiguracja Auth0 pod MCP (chore #102)
 
-Tenant `dev-yahwm2zlut2gqdry.us.auth0.com` konfiguruje właściciel tenantu w
+Issue #102 zostaje otwarte, dopóki właściciel nie zweryfikuje tenantu według kryteriów akceptacji. Tenant `dev-yahwm2zlut2gqdry.us.auth0.com` konfiguruje właściciel tenantu w
 panelu (agent i kod tego nie zmieniają). Bez tego Claude i ChatGPT zatrzymają
 się na logowaniu. Kroki, kolejno:
 

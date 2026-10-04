@@ -47,10 +47,10 @@ TOKEN_ENDPOINTS = {"read_vote_access"}
 
 
 # The only non-API routes that carry their own guard instead of a marker: the
-# MCP resource metadata (public by design, RFC 9728) and the mount of the MCP
-# server, whose tools each declare one `mcp_requires` (checked below).
+# MCP resource metadata (public by design, RFC 9728) and the MCP endpoint,
+# whose tools each declare one `mcp_requires` (checked below).
 MCP_ROUTES = frozenset(
-    {f"/.well-known/oauth-protected-resource{API_PREFIX}/mcp", API_PREFIX}
+    {f"/.well-known/oauth-protected-resource{API_PREFIX}/mcp", f"{API_PREFIX}/mcp"}
 )
 MCP_SETTINGS = Settings(mcp=McpSettings(enabled=True))
 
@@ -73,7 +73,9 @@ def uncovered_routes(app: FastAPI) -> list[str]:
             if len(markers) != 1:
                 methods = ",".join(sorted(route.methods or ()))
                 problems.append(f"{methods} {route.path}: {len(markers)} markers")
-        elif route.path not in docs_paths(app) | MCP_ROUTES:
+        elif route.path in MCP_ROUTES and type(route.original_route) is Route:
+            continue
+        elif route.path not in docs_paths(app):
             problems.append(f"{route.path}: not an API route and not docs")
     return problems
 
@@ -339,7 +341,9 @@ def test_the_mcp_app_is_not_a_free_pass_for_other_mounts() -> None:
     assert uncovered_routes(app) == []
     app.get("/api/v1/mcp-extra")(lambda: None)
     app.router.routes.append(Route("/.well-known/other", lambda _r: None))
+    app.mount(f"{API_PREFIX}/mcp-sub", FastAPI())
     assert uncovered_routes(app) == [
         "GET /api/v1/mcp-extra: 0 markers",
         "/.well-known/other: not an API route and not docs",
+        "/api/v1/mcp-sub: not an API route and not docs",
     ]

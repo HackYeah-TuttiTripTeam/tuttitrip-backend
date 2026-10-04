@@ -14,7 +14,7 @@ FastMCP skips ``auth`` checks there.
 
 import asyncio
 from dataclasses import dataclass
-from typing import Annotated, Any, override
+from typing import Annotated, override
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -27,8 +27,10 @@ from fastmcp.server.auth import (
     TokenVerifier,
 )
 from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.http import StarletteWithLifespan
 from pydantic import AnyHttpUrl, Field
 from starlette.routing import Route
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from tuttitrip.mcp.schemas import WhoAmI
 from tuttitrip.mcp.services import tool_service
@@ -252,19 +254,35 @@ def create_mcp(
     return server
 
 
+class _McpEndpoint:
+    """ASGI endpoint that hands requests for ``resource_url`` to the FastMCP app.
+
+    The app serves ``MCP_PATH``; this adapter rewrites the path, so the public
+    path is one exact route (no mount, no redirect, no catch-all under ``/api/v1``).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self._app(
+            {**scope, "path": MCP_PATH, "raw_path": MCP_PATH.encode()}, receive, send
+        )
+
+
 def create_mcp_app(
     settings: Settings, server: FastMCP | None = None
-) -> tuple[Any, list[Route]]:
-    """The ASGI app to mount at ``API_PREFIX`` and the root-level discovery routes.
+) -> tuple[StarletteWithLifespan, list[Route]]:
+    """The FastMCP app (for its lifespan) and the routes to add at the app root.
 
     Args:
-        settings: Settings (``mcp.resource_url``, ``mcp.allowed_hosts``).
+        settings: Settings (``mcp.resource_url``, ``mcp.allowed_hosts``, CORS origins).
         server: The server to wrap; defaults to ``create_mcp(settings)``.
 
     Returns:
-        ``(app, well_known_routes)``. The routes serve
-        ``/.well-known/oauth-protected-resource/<path of resource_url>`` and must
-        sit at the application root (RFC 9728).
+        ``(app, routes)``: ``routes`` are the exact endpoint path of
+        ``resource_url`` and the RFC 9728 metadata at
+        ``/.well-known/oauth-protected-resource/<that path>``.
     """
     server = server or create_mcp(settings)
     app = server.http_app(
@@ -272,12 +290,18 @@ def create_mcp_app(
         stateless_http=True,
         json_response=True,
         # Explicit host list = Host (and Origin) validation against DNS rebinding.
+        # Browser clients are limited to the configured CORS origins; MCP
+        # clients such as Claude and ChatGPT call from their servers.
         host_origin_protection="auto",
         allowed_hosts=[
             urlsplit(settings.mcp.resource_url).hostname or "",
             *settings.mcp.allowed_hosts,
         ],
+        allowed_origins=settings.cors_origins,
     )
     auth = server.auth
-    routes = auth.get_well_known_routes(mcp_path=MCP_PATH) if auth else []
+    routes = [
+        Route(urlsplit(settings.mcp.resource_url).path, _McpEndpoint(app)),
+        *(auth.get_well_known_routes(mcp_path=MCP_PATH) if auth else []),
+    ]
     return app, routes

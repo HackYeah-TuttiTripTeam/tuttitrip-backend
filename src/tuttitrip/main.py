@@ -113,8 +113,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
-        # MCP clients read the session id and the OAuth challenge.
-        expose_headers=["Mcp-Session-Id", "WWW-Authenticate"],
+        # MCP clients read the OAuth challenge.
+        expose_headers=["WWW-Authenticate"],
     )
     api = APIRouter(prefix=API_PREFIX)
     register_error_handlers(app)
@@ -122,10 +122,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         api.include_router(router)
     app.include_router(api)
     if mcp_app is not None:
-        # The MCP app is the only mount besides the routers (a test checks it). It
-        # sits after them, so it gets only /api/v1/mcp; discovery stays at the root.
+        # Two exact routes after the routers (no mount, so REST keeps its 405s and
+        # redirects): the MCP endpoint and its RFC 9728 metadata at the root.
         app.router.routes.extend(mcp_routes)
-        app.mount(API_PREFIX, mcp_app)
     document_permissions(app)
     return app
 

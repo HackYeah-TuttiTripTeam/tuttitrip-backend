@@ -76,6 +76,8 @@ async def list_trips(
     Returns:
         The page with the total.
     """
+    # ponytail: paged in memory, trip_service.list_trips is unpaged;
+    # page it in SQL when trips grow.
     trips = await trip_service.list_trips(session, user.sub)
     start = params.offset
     return Page[TripRead].of(trips[start : start + params.size], len(trips), params)
