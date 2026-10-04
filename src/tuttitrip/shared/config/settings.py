@@ -152,6 +152,19 @@ class InterviewSettings(BaseModel):
     voice_max_seconds: float = Field(
         default=300.0, gt=0, description="A voice conversation is closed after this."
     )
+    voice_claim_ttl_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        description=(
+            "A live call holds its session this long without a heartbeat; a dead "
+            "call frees the session after it."
+        ),
+    )
+    voice_heartbeat_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="How often a live call extends its hold on the session.",
+    )
     voice_attach_timeout_seconds: float = Field(
         default=10.0,
         gt=0,
@@ -318,6 +331,25 @@ class CitiesSettings(BaseModel):
     data_dir: Path = Path("/data/cities")
 
 
+class GeocoderSettings(BaseModel):
+    """The geocoder behind the city suggestions (Photon, OpenStreetMap data).
+
+    Photon is used because Nominatim's usage policy forbids search-as-you-type.
+    The public instance is a fair-use service: identify the app, cache answers
+    and keep the request rate low, or run your own Photon and set ``base_url``.
+    """
+
+    base_url: str = "https://photon.komoot.io/api/"
+    # Required by the usage policies: names the app, not an HTTP library.
+    user_agent: str = "TuttiTrip/1.0 (+https://tuttitrip.gburek.app)"
+    timeout_seconds: float = Field(default=3.0, gt=0)
+    max_results: int = Field(default=10, ge=1, le=40)
+    cache_ttl_seconds: int = Field(default=86400, ge=0)
+    cache_max_entries: int = Field(default=1000, ge=1)
+    # Per process. Over it the endpoint answers with catalog cities only.
+    max_requests_per_minute: int = Field(default=60, ge=1)
+
+
 class Settings(BaseSettings):
     """Root settings object for the whole application."""
 
@@ -354,6 +386,7 @@ class Settings(BaseSettings):
     planning: PlanningSettings = Field(default_factory=PlanningSettings)
 
     cities: CitiesSettings = Field(default_factory=CitiesSettings)
+    geocoder: GeocoderSettings = Field(default_factory=GeocoderSettings)
 
     def dbos_system_database_url(self) -> str:
         """DBOS system database URL, defaulting to the app database.

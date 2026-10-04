@@ -267,3 +267,17 @@ async def organizer_subs(session: AsyncSession, trip_id: UUID) -> list[str]:
     return [
         sub for sub, (role, _) in members.items() if role.satisfies(TripRole.CO_HOST)
     ]
+
+
+async def account_roles(session: AsyncSession, trip_id: UUID) -> dict[str, TripRole]:
+    """Everybody with an account on the trip: who must answer a plan proposal.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+
+    Returns:
+        The trip role by Auth0 subject (profiles without an account are not here).
+    """
+    members = await db.select_members(session, trip_id)
+    return {sub: role for sub, (role, _) in members.items()}

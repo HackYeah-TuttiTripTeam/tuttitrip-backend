@@ -37,6 +37,12 @@ PERSON_FIELDS: Final = (
 SLOWEST_ONLY: Final = frozenset({QuestionField.PACE, QuestionField.REQUIREMENTS})
 """Person questions that matter only for the slowest person (the group is as slow)."""
 
+RUN_TEXT: Final = "text"
+"""``running_kind`` of a session held by a text turn."""
+
+RUN_VOICE: Final = "voice"
+"""``running_kind`` of a session held by a voice call."""
+
 SHOW_CARD_TOOL: Final = "show_card"
 """Name of the tool that puts a card on the screen."""
 
@@ -124,12 +130,40 @@ OPENAI_KEY_ENV: Final = "OPENAI_API_KEY"
 HANGUP_TIMEOUT_SECONDS: Final = 5.0
 """How long the best-effort provider hangup may take."""
 
+VOICE_LANGUAGES: Final = {"pl": "Polish", "en": "English"}
+"""Languages of a call by ``locale``; the name goes into the instructions."""
+
 VOICE_INSTRUCTIONS: Final = (
-    "This is a live voice call. Speak in short, natural sentences, ask one "
-    "question at a time and do not read lists aloud. Do not use show_card: "
-    "ask the question out loud instead."
+    "This is a live voice call with the organizer of a group trip. They speak "
+    "{language}: answer only in {language} and take everything you hear as "
+    "{language}. Speak in short, natural sentences, ask one question at a time "
+    "and do not read lists aloud. Do not use show_card: ask the question out "
+    "loud instead.\n"
+    "Tools: everything the organizer says about the trip, people, budget, "
+    "limits, diet or interests is saved with a tool in the same turn. A tool "
+    "can take a few seconds. After you call a tool, say nothing about it until "
+    "its result arrives; then confirm in one short sentence what was saved. "
+    "Never say that the system is processing, that saving is in progress or "
+    "that you are waiting for the system. If you must fill the silence, say "
+    'only a short "One moment" and stop. Never say something is saved or '
+    "built unless a tool result says so.\n"
+    "Money: amounts are in the currency under Currency below. Do not ask "
+    "which currency or whether the amount is per person; take the currency "
+    "and the scope from what the organizer said.\n"
+    "Plan: when the organizer asks to see the plan, or asks what you have, "
+    "call build_plan_now once the city is known, then say its assumptions in "
+    "one sentence. If it says NOT BUILT, say what is missing."
 )
-"""Added to the interview instructions for the voice agent."""
+"""Added to the voice agent's instructions (``language`` is filled in)."""
+
+EXTRACTION_PROMPT: Final = (
+    "The voice call has ended. Using the conversation above, save with the "
+    "tools every fact the organizer gave that is not saved yet (see Trip, "
+    "People and Still missing). Do not ask questions. Do not add a person who "
+    "is already under People. Do not overwrite values the host set themselves. "
+    "Answer with one short sentence."
+)
+"""The last instruction of the run that fills in what a call left unsaved."""
 
 GUARD_MARGIN_SECONDS: Final = 30.0
 """Slack added to a run's time limit before its claim counts as abandoned."""

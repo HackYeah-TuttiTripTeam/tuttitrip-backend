@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -109,6 +109,13 @@ class SessionRead(BaseModel):
     created_by: str = Field(description="Auth0 subject of the host who started it.")
     created_at: datetime
     updated_at: datetime
+    running: Literal["text", "voice"] | None = Field(
+        default=None,
+        description=(
+            "What holds the interview right now: a text turn or a voice call. "
+            "Another turn or call is refused (409) while it does."
+        ),
+    )
     message_count: int = Field(
         ge=0, description="Messages the host can see (their questions and answers)."
     )
@@ -265,6 +272,13 @@ class VoiceOffer(BaseModel):
     """The browser's WebRTC offer."""
 
     sdp: str = Field(min_length=1, max_length=MAX_SDP_CHARS, description="SDP offer.")
+    locale: Literal["pl", "en"] = Field(
+        default="pl",
+        description=(
+            "Language of the call: the assistant speaks it and the speech is "
+            "transcribed in it."
+        ),
+    )
 
 
 class VoiceAnswer(BaseModel):
