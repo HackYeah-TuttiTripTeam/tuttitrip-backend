@@ -1,7 +1,7 @@
 """Interview run guard: what holds the session (text turn or voice call).
 
 Revision ID: e5f1a7c93b28
-Revises: 6c73942873a4
+Revises: 093e32d28baf
 Create Date: 2026-10-04 20:00:00.000000
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e5f1a7c93b28"
-down_revision: str | None = "6c73942873a4"
+down_revision: str | None = "093e32d28baf"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
