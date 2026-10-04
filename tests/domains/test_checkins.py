@@ -367,5 +367,5 @@ def test_a_member_who_left_loses_the_room_number(state: State) -> None:
     state.rows[mine.id] = TripCheckin(
         trip_id=TRIP, profile_id=mine.id, accommodation="Hotel", room="1"
     )
-    asyncio.run(member_service.member_left(AsyncMock(), TRIP, mine.id, "auth0|zosia"))
+    asyncio.run(member_service.member_left(AsyncMock(), TRIP, mine.id))
     assert mine.id not in state.rows
