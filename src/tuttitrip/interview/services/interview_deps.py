@@ -28,6 +28,10 @@ class InterviewDeps:
     """Set for a member's interview: the one profile its tools may write."""
     chosen: dict[str, NextQuestion | None] = field(default_factory=dict)
     """The next question for each state of the panel, so the solver measures once."""
+    next_question: NextQuestion | None = None
+    """The question the model was last told to ask (the card it should show)."""
+    nudges: int = 0
+    """Times the model was sent back this turn to show a card (capped by settings)."""
 
     @property
     def is_member(self) -> bool:

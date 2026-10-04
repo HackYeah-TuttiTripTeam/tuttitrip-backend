@@ -31,7 +31,7 @@ from pydantic_ai.realtime.openai import (
 )
 
 from tuttitrip.interview import constants, db
-from tuttitrip.interview.schemas import VoiceAnswer
+from tuttitrip.interview.schemas import ShownCard, VoiceAnswer
 from tuttitrip.interview.services import history_repair, run_guard, session_service
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.interview.services.interview_deps import InterviewDeps
@@ -394,6 +394,26 @@ async def hang_up(membership: TripMembership, call_id: str) -> None:
     if not owner and not membership.role.satisfies(TripRole.HOST):
         raise CallNotFoundError(call_id)
     await _end(call)
+
+
+def shown_card(membership: TripMembership, call_id: str) -> ShownCard | None:
+    """The card the assistant last put on screen in a live call.
+
+    Args:
+        membership: The caller's checked membership.
+        call_id: The id returned by the offer.
+
+    Returns:
+        The card, or None before the first one.
+
+    Raises:
+        CallNotFoundError: No such live call on this trip (also for another
+            trip's call, so ids do not leak).
+    """
+    call = CALLS.get(call_id)
+    if call is None or call.deps.membership.trip_id != membership.trip_id:
+        raise CallNotFoundError(call_id)
+    return call.deps.state.card
 
 
 async def release(membership: TripMembership) -> None:

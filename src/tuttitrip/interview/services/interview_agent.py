@@ -13,8 +13,14 @@ from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelResponse,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai_harness import InputGuardrail, SpendLimits
 from pydantic_ai_harness.guardrails.detectors import redact_secrets
 from pydantic_ai_harness.repair_tool_arguments import RepairToolArguments
@@ -52,9 +58,11 @@ write that you saved something unless the tool returned a result.
 state below, never names. The organizer is already in the group.
 - Dates: use the calendar below to turn "od soboty" into a date; \
 set_trip_basics takes a start date and a number of days.
-- Ask one question at a time with show_card, using the card kind, field and \
-options of "Next question" below, and write at most one short sentence besides \
-the card. The organizer's answer to a card arrives as their next message.
+- Ask one question at a time with show_card, using the field and person_id of \
+"Next question" below (the server fixes the card and its options), and write at \
+most one short sentence besides the card: never repeat the question in text. \
+The organizer's answer to a card arrives as their next message: save it with \
+the matching tool first, then show the next card.
 - If a tool says NOT SAVED, the organizer set that value themselves: ask them \
 in your reply and stop. Only after they agree in a later message call the tool \
 again with overwrite_host_values=true; never set it in the same turn.
@@ -80,9 +88,11 @@ none of them takes a person.
 - You cannot change the trip's budget, dates, the list of people or anybody \
 else's preferences, and you have no tool for it. If the member asks, say that \
 the organizer does that, and do not pretend to save it.
-- Ask one question at a time with show_card, using the card kind, field and \
-options of "Next question" below, and write at most one short sentence besides \
-the card. The member's answer to a card arrives as their next message.
+- Ask one question at a time with show_card, using the field and person_id of \
+"Next question" below (the server fixes the card and its options), and write at \
+most one short sentence besides the card: never repeat the question in text. \
+The member's answer to a card arrives as their next message: save it with the \
+matching tool first, then show the next card.
 - When there is no next question, say what you know about them and thank them.
 """
 
@@ -186,6 +196,60 @@ def asked_questions(messages: Sequence[ModelMessage]) -> set[QuestionKey]:
     return keys
 
 
+def waiting_for_the_host(messages: Sequence[ModelMessage]) -> bool:
+    """Whether a tool of this turn refused and the host has to decide.
+
+    Args:
+        messages: The history including this run's messages.
+
+    Returns:
+        True when a tool result since the host's last message was a refusal.
+    """
+    for message in reversed(messages):
+        for part in reversed(message.parts):
+            if isinstance(part, UserPromptPart):
+                return False
+            if (
+                isinstance(part, ToolReturnPart)
+                and isinstance(part.content, str)
+                and part.content.startswith(constants.NOT_ASKED_PREFIXES)
+            ):
+                return True
+    return False
+
+
+@interview_agent.output_validator
+async def ask_with_a_card(ctx: Ctx, text: str) -> str:  # ruff: ignore[unused-async] the validator hook is async
+    """Send the model back once when it asks in plain text and shows no card.
+
+    The cards are the interview, but a language model sometimes just types the
+    question. The reminder is given ``card_nudges`` times per turn; after that
+    the answer stands.
+
+    Args:
+        ctx: The run context.
+        text: The assistant's final text.
+
+    Returns:
+        The text, unchanged.
+
+    Raises:
+        ModelRetry: There is a next question, no card was shown and the host
+            is not being asked to confirm something.
+    """
+    deps = ctx.deps
+    question = deps.next_question
+    if (
+        question is None
+        or deps.state.card is not None
+        or deps.nudges >= get_settings().interview.card_nudges
+        or waiting_for_the_host(ctx.messages)
+    ):
+        return text
+    deps.nudges += 1
+    raise ModelRetry(constants.CARD_NUDGE.format(question=question.model_dump_json()))
+
+
 @interview_agent.instructions
 async def current_context(ctx: Ctx) -> str:
     """Tell the model today's calendar, what is known and what to ask next.
@@ -213,6 +277,7 @@ async def current_context(ctx: Ctx) -> str:
                 )
             )
         question = ctx.deps.chosen[key]
+    ctx.deps.next_question = question
     ctx.deps.state.knowledge = known
     facts = (
         constants.MEMBER_TRIP_FACTS
