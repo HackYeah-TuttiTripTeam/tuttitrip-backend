@@ -74,6 +74,32 @@ async def create_trip(
     return _read(trip, TripRole.HOST, MemberStatus.CONFIRMED)
 
 
+async def has_sample(session: AsyncSession, sub: str) -> bool:
+    """Whether the user owns a sample trip.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        True when one exists.
+    """
+    return await db.has_sample(session, sub)
+
+
+async def delete_samples(session: AsyncSession, sub: str) -> int:
+    """Delete the user's sample trips, without committing.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject.
+
+    Returns:
+        How many trips were deleted.
+    """
+    return await db.delete_samples_owned_by(session, sub)
+
+
 async def mark_sample(session: AsyncSession, trip_id: UUID) -> None:
     """Flag the trip as the sample trip, without committing.
 
