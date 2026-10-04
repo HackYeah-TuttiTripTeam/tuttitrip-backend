@@ -6,6 +6,7 @@ not depend on URL prefixes.
 """
 
 import ast
+import asyncio
 import re
 from pathlib import Path
 
@@ -13,9 +14,13 @@ import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
+from fastmcp.tools import Tool
+from starlette.routing import Route
 
 from tests.architecture.layout import PACKAGE_ROOT, all_modules, rel
-from tuttitrip.main import create_app
+from tuttitrip.main import API_PREFIX, create_app
+from tuttitrip.mcp.api import McpRequirement, create_mcp
+from tuttitrip.shared.config.settings import McpSettings, Settings
 from tuttitrip.shared.permissions.api import (
     PermissionRequirement,
     PublicMarker,
@@ -41,6 +46,15 @@ PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status", "demo_login", "rese
 TOKEN_ENDPOINTS = {"read_vote_access"}
 
 
+# The only non-API routes that carry their own guard instead of a marker: the
+# MCP resource metadata (public by design, RFC 9728) and the MCP endpoint,
+# whose tools each declare one `mcp_requires` (checked below).
+MCP_ROUTES = frozenset(
+    {f"/.well-known/oauth-protected-resource{API_PREFIX}/mcp", f"{API_PREFIX}/mcp"}
+)
+MCP_SETTINGS = Settings(mcp=McpSettings(enabled=True))
+
+
 def docs_paths(app: FastAPI) -> set[str | None]:
     return {
         app.openapi_url,
@@ -59,6 +73,8 @@ def uncovered_routes(app: FastAPI) -> list[str]:
             if len(markers) != 1:
                 methods = ",".join(sorted(route.methods or ()))
                 problems.append(f"{methods} {route.path}: {len(markers)} markers")
+        elif route.path in MCP_ROUTES and type(route.original_route) is Route:
+            continue
         elif route.path not in docs_paths(app):
             problems.append(f"{route.path}: not an API route and not docs")
     return problems
@@ -300,3 +316,34 @@ def test_joining_by_invitation_needs_an_account_not_a_token() -> None:
         assert isinstance(marker, PermissionRequirement)
         assert marker.feature is Feature.TRIPS_INVITATIONS
         assert "{trip_id}" not in (route.path or "")
+
+
+# --- MCP tools ---------------------------------------------------------------
+
+
+def mcp_tools() -> list[Tool]:
+    return list(asyncio.run(create_mcp(MCP_SETTINGS).local_provider.list_tools()))
+
+
+def test_the_mcp_server_has_tools_to_check() -> None:
+    assert {tool.name for tool in mcp_tools()} >= {"whoami"}
+
+
+@pytest.mark.parametrize("tool", mcp_tools(), ids=lambda tool: tool.name)
+def test_every_mcp_tool_has_exactly_one_mcp_requires(tool: Tool) -> None:
+    assert isinstance(tool.auth, McpRequirement), f"{tool.name}: auth is {tool.auth!r}"
+    assert tool.auth.feature in set(Feature)
+    assert is_leaf(tool.auth.feature)
+
+
+def test_the_mcp_app_is_not_a_free_pass_for_other_mounts() -> None:
+    app = create_app(MCP_SETTINGS)
+    assert uncovered_routes(app) == []
+    app.get("/api/v1/mcp-extra")(lambda: None)
+    app.router.routes.append(Route("/.well-known/other", lambda _r: None))
+    app.mount(f"{API_PREFIX}/mcp-sub", FastAPI())
+    assert uncovered_routes(app) == [
+        "GET /api/v1/mcp-extra: 0 markers",
+        "/.well-known/other: not an API route and not docs",
+        "/api/v1/mcp-sub: not an API route and not docs",
+    ]

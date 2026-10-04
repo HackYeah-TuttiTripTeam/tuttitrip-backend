@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastmcp.utilities.lifespan import combine_lifespans
 
 from tuttitrip.accommodation.api import router as accommodation_router
 from tuttitrip.demo.api import internal_router as demo_internal_router
@@ -17,6 +18,7 @@ from tuttitrip.demo.api import router as demo_router
 from tuttitrip.expenses.api import router as expenses_router
 from tuttitrip.expenses.settlement.api import router as settlement_router
 from tuttitrip.interview.api import router as interview_router
+from tuttitrip.mcp.api import create_mcp_app
 from tuttitrip.places.api import router as places_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.fairness.api import router as fairness_router
@@ -93,6 +95,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         The configured FastAPI app.
     """
     settings = settings or get_settings()
+    mcp_app, mcp_routes = (
+        create_mcp_app(settings) if settings.mcp.enabled else (None, [])
+    )
     app = FastAPI(
         title="TuttiTrip API",
         version="0.1.0",
@@ -100,7 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         docs_url=f"{API_PREFIX}/docs",
         redoc_url=f"{API_PREFIX}/redoc",
         swagger_ui_oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
-        lifespan=lifespan,
+        lifespan=combine_lifespans(lifespan, mcp_app.lifespan) if mcp_app else lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -110,12 +115,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        # MCP clients read the OAuth challenge.
+        expose_headers=["WWW-Authenticate"],
     )
     api = APIRouter(prefix=API_PREFIX)
     register_error_handlers(app)
     for router in ROUTERS:
         api.include_router(router)
     app.include_router(api)
+    if mcp_app is not None:
+        # Two exact routes after the routers (no mount, so REST keeps its 405s and
+        # redirects): the MCP endpoint and its RFC 9728 metadata at the root.
+        app.router.routes.extend(mcp_routes)
     document_permissions(app)
     return app
 
