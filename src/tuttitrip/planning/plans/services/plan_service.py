@@ -293,7 +293,7 @@ async def gather_input(
         CatalogMissingError: When the city has no places in the catalog.
     """
     membership = caller.model_copy(update={"role": TripRole.HOST})
-    trip = await trip_service.get_trip(session, membership)
+    trip = await trip_service.fill_city_slug(session, membership)
     cities = {c.slug: c for c in await place_service.list_cities(session)}
     profiles = await profile_service.list_profiles(session, membership)
     preferences = await preference_service.list_preferences(session, membership)

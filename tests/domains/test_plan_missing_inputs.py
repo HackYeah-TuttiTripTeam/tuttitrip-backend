@@ -71,7 +71,9 @@ def client(world: World, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
 async def gather(world: World, monkeypatch: pytest.MonkeyPatch, **trip: Any) -> Any:  # ruff: ignore[any-type]
     """``gather_input`` over a trip with the given fields and no people."""
     world.trip = world.trip.model_copy(update=trip)
-    monkeypatch.setattr(trip_service, "get_trip", AsyncMock(return_value=world.trip))
+    monkeypatch.setattr(
+        trip_service, "fill_city_slug", AsyncMock(return_value=world.trip)
+    )
     monkeypatch.setattr(place_service, "list_cities", AsyncMock(return_value=[city()]))
     monkeypatch.setattr(profile_service, "list_profiles", AsyncMock(return_value=[]))
     monkeypatch.setattr(
@@ -181,7 +183,9 @@ def test_a_draft_assumes_dates_and_people_so_only_the_city_can_be_missing(
         min_people=2,
     )
     world.trip = world.trip.model_copy(update={"city_slug": None})
-    monkeypatch.setattr(trip_service, "get_trip", AsyncMock(return_value=world.trip))
+    monkeypatch.setattr(
+        trip_service, "fill_city_slug", AsyncMock(return_value=world.trip)
+    )
     monkeypatch.setattr(place_service, "list_cities", AsyncMock(return_value=[city()]))
     monkeypatch.setattr(profile_service, "list_profiles", AsyncMock(return_value=[]))
     monkeypatch.setattr(
