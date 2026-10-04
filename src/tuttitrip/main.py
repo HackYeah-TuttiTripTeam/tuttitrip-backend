@@ -28,6 +28,7 @@ from tuttitrip.notifications.api import router as notifications_router
 from tuttitrip.notifications.services import notification_service
 from tuttitrip.places.api import router as places_router
 from tuttitrip.planning.api import router as planning_router
+from tuttitrip.planning.budget.api import router as budget_router
 from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.planning.overrides.api import router as overrides_router
@@ -90,6 +91,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     planning_router,
     fairness_router,
     plans_router,
+    budget_router,
     overrides_router,
     linter_router,
     accommodation_router,

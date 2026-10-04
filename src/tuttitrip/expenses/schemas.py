@@ -240,6 +240,14 @@ class ExpenseRead(BaseModel):
     created_at: datetime
 
 
+class ExpenseDayTotal(BaseModel):
+    """What was spent on one day in one category (the budget of a day reads it)."""
+
+    spent_on: date
+    category: ExpenseCategory | None
+    amount: Decimal = Field(ge=0, description="Sum of the expenses, in their currency.")
+
+
 @unique
 class ExpenseSort(StrEnum):
     """Sort keys of the expense list."""

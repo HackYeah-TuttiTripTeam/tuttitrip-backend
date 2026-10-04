@@ -55,6 +55,10 @@ class Trip(Base):
     budget_flex_pct: Mapped[int] = mapped_column(server_default=text("10"))
     # Group goal alpha of E5.
     fairness_alpha: Mapped[float] = mapped_column(Float, server_default=text("1"))
+    # After a day goes over its budget, propose cheaper days (backend#89).
+    propose_cheaper_alternatives: Mapped[bool] = mapped_column(
+        server_default=text("true")
+    )
 
 
 class TripMember(Base):

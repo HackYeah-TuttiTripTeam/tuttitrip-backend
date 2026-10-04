@@ -563,3 +563,18 @@ async def profile_in_use(
         True when the profile is referenced by an expense of this trip.
     """
     return await db.profile_has_expenses(session, membership.trip_id, profile_id)
+
+
+async def day_totals(
+    session: AsyncSession, membership: TripMembership
+) -> list[ExpenseDayTotal]:
+    """What the trip spent per day and category (for the budget of each day).
+
+    Args:
+        session: Open session.
+        membership: Proof that the caller may use the trip.
+
+    Returns:
+        One row per day and category, oldest day first.
+    """
+    return await db.select_day_totals(session, membership.trip_id)
