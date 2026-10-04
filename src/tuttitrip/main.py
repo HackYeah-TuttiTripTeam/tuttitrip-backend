@@ -26,6 +26,7 @@ from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.profiles.feedback.api import router as feedback_router
 from tuttitrip.profiles.preferences.api import router as preferences_router
 from tuttitrip.search.api import router as search_router
+from tuttitrip.shared.admin_users.api import router as admin_users_router
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
 from tuttitrip.shared.errors.api import register_error_handlers
@@ -44,6 +45,7 @@ API_PREFIX = f"/api/{API_VERSION}"
 ROUTERS: tuple[APIRouter, ...] = (
     health_router,
     permissions_router,
+    admin_users_router,
     jobs_router,
     demo_router,
     demo_internal_router,
