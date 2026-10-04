@@ -35,7 +35,7 @@ GRANT SELECT, INSERT, UPDATE
     TO tuttitrip_worker;
 
 -- Notifications: the worker creates them (workflow results) and the retention
--- job deletes old ones; it never edits or reads other users' state.
+-- job deletes old ones. It never updates them (reading is the user's business).
 GRANT SELECT, INSERT, DELETE
     ON public.notifications
     TO tuttitrip_worker;

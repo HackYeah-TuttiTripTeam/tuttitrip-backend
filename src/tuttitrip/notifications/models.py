@@ -29,6 +29,18 @@ class Notification(Base):
             "user_sub",
             postgresql_where=text("read_at IS NULL"),
         ),
+        # `resolve(dedupe_key)` only touches unread rows.
+        Index(
+            "ix_notifications_dedupe_key",
+            "dedupe_key",
+            postgresql_where=text("read_at IS NULL"),
+        ),
+        # The cascade delete of a trip looks its notifications up by trip.
+        Index(
+            "ix_notifications_trip_id",
+            "trip_id",
+            postgresql_where=text("trip_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

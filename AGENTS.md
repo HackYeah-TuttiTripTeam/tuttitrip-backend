@@ -745,7 +745,10 @@ read (an approved request disappears from the basket).
 - `actions` are codes from `NotificationActionCode`; the backend never stores
   URLs or API paths.
 - `dedupe_key` makes a repeated event a no-op per recipient
-  (`UNIQUE (user_sub, dedupe_key)`); `actor` never gets their own.
+  (`UNIQUE (user_sub, dedupe_key)`); `actor` never gets their own. A key must carry
+  the id of the thing and, when the event can legitimately happen again, a version or
+  period (`proposal:<id>:v2`, `daily:<trip>:2026-10-05`), or the second one is silently
+  dropped forever.
 - The producer decides the recipients; the service does not check membership.
 - An `AFTER INSERT` trigger sends `pg_notify('notifications', {id, user_sub})`
   (ids only: the payload is capped at 8000 bytes). The worker may `SELECT`,
