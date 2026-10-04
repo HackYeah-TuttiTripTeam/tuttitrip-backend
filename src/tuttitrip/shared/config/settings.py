@@ -186,6 +186,20 @@ class JobsSettings(BaseModel):
     worker_missing_after_seconds: int = Field(default=600, ge=1)
 
 
+class ExpensesSettings(BaseModel):
+    """Limits of the expenses domain."""
+
+    max_unconfirmed_receipts: int = Field(default=20, ge=1)
+    """Receipt images a trip may hold before they are confirmed or expire."""
+
+
+class NbpSettings(BaseModel):
+    """National Bank of Poland exchange-rate API (average rates, tables A and B)."""
+
+    base_url: str = "https://api.nbp.pl/api"
+    timeout_seconds: float = Field(default=5.0, gt=0)
+
+
 class PhotoSettings(BaseModel):
     """Limits of trip photos, which live in Postgres (``bytea``).
 
@@ -307,6 +321,8 @@ class Settings(BaseSettings):
     interview: InterviewSettings = Field(default_factory=InterviewSettings)
     dbos: DbosSettings = Field(default_factory=DbosSettings)
     jobs: JobsSettings = Field(default_factory=JobsSettings)
+    nbp: NbpSettings = Field(default_factory=NbpSettings)
+    expenses: ExpensesSettings = Field(default_factory=ExpensesSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
     photos: PhotoSettings = Field(default_factory=PhotoSettings)
