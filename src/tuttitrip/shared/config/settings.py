@@ -199,6 +199,11 @@ class PhotoSettings(BaseModel):
     max_thumbnail_bytes: int = Field(default=60_000, ge=1)
     # Photos one trip may hold (database and backup size).
     max_per_trip: int = Field(default=200, ge=1)
+class LocationSettings(BaseModel):
+    """Trip location sharing: how long a shared position stays valid."""
+
+    # A position is not returned (and is deleted) this long after its last update.
+    position_ttl_minutes: int = Field(default=15, ge=1)
 
 
 class DemoSettings(BaseModel):
@@ -303,6 +308,7 @@ class Settings(BaseSettings):
     demo: DemoSettings = Field(default_factory=DemoSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
     photos: PhotoSettings = Field(default_factory=PhotoSettings)
+    locations: LocationSettings = Field(default_factory=LocationSettings)
 
     cities: CitiesSettings = Field(default_factory=CitiesSettings)
 
