@@ -32,6 +32,8 @@ def planning_person(persona: Persona, catalog: dict[str, PlaceRead]) -> Planning
             prefs.constraints, profile.stairs_sensitivity or 0.0
         ),
         queue_patience_min=profile.queue_patience_min or 0,
+        nap_start=profile.nap_start,
+        nap_minutes=profile.nap_minutes or 0,
         floor=profile.floor or 0,
         votes={
             catalog[k].id: _VOTES[r.value]
