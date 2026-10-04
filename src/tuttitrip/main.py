@@ -45,6 +45,7 @@ from tuttitrip.trips.api import router as trips_router
 from tuttitrip.trips.checkins.api import router as checkins_router
 from tuttitrip.trips.invitations.api import router as invitations_router
 from tuttitrip.trips.invitations.services import invitation_service
+from tuttitrip.trips.photos.api import router as photos_router
 from tuttitrip.trips.services import trip_service
 from tuttitrip.voting.api import router as voting_router
 
@@ -67,6 +68,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     invitations_router,
     checkins_router,
     voting_router,
+    photos_router,
     profiles_router,
     feedback_router,
     preferences_router,
