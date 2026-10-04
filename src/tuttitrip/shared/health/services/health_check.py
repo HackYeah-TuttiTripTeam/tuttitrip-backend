@@ -1,5 +1,7 @@
 """Compose the readiness report."""
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.db.session import get_sessionmaker, ping
 from tuttitrip.shared.health.schemas import HealthResponse
@@ -25,11 +27,14 @@ async def check_health() -> HealthResponse:
         ``degraded`` if the database is down or the worker is incompatible.
     """
     database_ok = await ping()
-    worker = (
-        await worker_liveness()
-        if database_ok
-        else WorkerLiveness(status="missing", backend_contract_version=CONTRACT_VERSION)
-    )
+    worker = WorkerLiveness(status="missing", backend_contract_version=CONTRACT_VERSION)
+    if database_ok:
+        try:
+            worker = await worker_liveness()
+        except SQLAlchemyError:
+            # Already logged. An unreadable heartbeat is a database problem,
+            # not proof that the worker is gone.
+            database_ok = False
     healthy = database_ok and worker.compatible is not False
     return HealthResponse(
         status="ok" if healthy else "degraded",

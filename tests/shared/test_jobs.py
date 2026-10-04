@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock
 import pytest
 from dbos import WorkflowStatus
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from tests.shared.fakes import FakeJobQueue, authorize
 from tuttitrip.main import create_app
@@ -195,6 +196,31 @@ def test_liveness_classification(
     )
     liveness = asyncio.run(get_worker_liveness(AsyncMock()))
     assert liveness.status == expected
+
+
+def test_unreadable_heartbeat_is_not_reported_as_missing_worker(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A failing read used to be swallowed and shown as `worker: missing`
+    # although the worker was alive (issue #124).
+    failure = OperationalError("select", {}, Exception("connection reset"))
+    monkeypatch.setattr(
+        worker_liveness.db, "select_latest_heartbeat", AsyncMock(side_effect=failure)
+    )
+    with pytest.raises(OperationalError), caplog.at_level("ERROR"):
+        asyncio.run(get_worker_liveness(AsyncMock()))
+    assert "heartbeat" in caplog.text
+
+
+def test_enqueue_says_heartbeat_unreadable_instead_of_no_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = OperationalError("select", {}, Exception("connection reset"))
+    monkeypatch.setattr(
+        worker_liveness.db, "select_latest_heartbeat", AsyncMock(side_effect=failure)
+    )
+    with pytest.raises(WorkerUnavailableError, match="could not be read"):
+        asyncio.run(worker_liveness.ensure_worker_available(AsyncMock()))
 
 
 def test_incompatible_worker_blocks_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:

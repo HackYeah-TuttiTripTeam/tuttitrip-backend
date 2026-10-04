@@ -1,5 +1,6 @@
 """Is a compatible worker alive in this environment? (heartbeat table)."""
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -9,6 +10,8 @@ from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.jobs import db
 from tuttitrip.shared.jobs.contracts import CONTRACT_VERSION
 from tuttitrip.shared.jobs.schemas import WorkerLiveness
+
+log = logging.getLogger(__name__)
 
 
 class WorkerUnavailableError(Exception):
@@ -23,12 +26,20 @@ async def get_worker_liveness(session: AsyncSession) -> WorkerLiveness:
 
     Returns:
         Liveness plus contract compatibility.
+
+    Raises:
+        SQLAlchemyError: The heartbeat could not be read. It is logged and
+            re-raised, because a read failure says nothing about the worker
+            and must not look like ``missing``.
     """
     settings = get_settings()
     try:
         beat = await db.select_latest_heartbeat(session, settings.environment)
     except SQLAlchemyError:
-        beat = None
+        log.exception(
+            "reading the worker heartbeat failed (env=%s)", settings.environment
+        )
+        raise
     if beat is None:
         return WorkerLiveness(
             status="missing", backend_contract_version=CONTRACT_VERSION
@@ -58,7 +69,11 @@ async def ensure_worker_available(session: AsyncSession) -> None:
     Args:
         session: Open session.
     """
-    liveness = await get_worker_liveness(session)
+    try:
+        liveness = await get_worker_liveness(session)
+    except SQLAlchemyError as error:
+        msg = "The worker heartbeat could not be read; try again later."
+        raise WorkerUnavailableError(msg) from error
     if liveness.status == "missing":
         msg = (
             "No tuttitrip-worker has reported a heartbeat in this environment "

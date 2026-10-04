@@ -210,6 +210,12 @@ domain tables such as `embeddings`. The backend reads those.
   reports `contract_version` and `worker_contract_version`. If the backend
   version is outside `[min_contract_version, contract_version]`, `/api/v1/health`
   answers 503 `degraded`.
+- A heartbeat that cannot be read (database error) is logged and answered as
+  503 `degraded` / `database: unavailable`, never as `worker: missing`. The
+  worker beats once right after launch, and `deploy.sh` logs a WARNING and a
+  GitHub `::warning::` annotation (it does not fail the deploy, the worker ships
+  from its own repo) when `/health` does not show `worker: ok` within about two
+  minutes of the ping.
 - Enqueue endpoints answer 503 with a readable message while the worker is
   `missing` or incompatible.
 

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError
 
 from tuttitrip.main import create_app
 from tuttitrip.shared.health.services import health_check
@@ -65,6 +66,17 @@ def test_health_degraded_when_worker_contract_is_incompatible(
     response = client.get("/api/v1/health")
     assert response.status_code == 503
     assert response.json()["worker_contract_version"] == CONTRACT_VERSION + 2
+
+
+def test_health_degraded_when_heartbeat_cannot_be_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(health_check, "ping", AsyncMock(return_value=True))
+    failure = OperationalError("select", {}, Exception("connection reset"))
+    monkeypatch.setattr(health_check, "worker_liveness", AsyncMock(side_effect=failure))
+    response = client.get("/api/v1/health")
+    assert response.status_code == 503
+    assert response.json()["database"] == "unavailable"
 
 
 def test_live_does_not_need_the_database(client: TestClient) -> None:
