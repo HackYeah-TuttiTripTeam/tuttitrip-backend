@@ -61,7 +61,7 @@ from tuttitrip.shared.jobs.services.job_queue import JobQueueUnavailableError
 from tuttitrip.shared.jobs.services.worker_liveness import WorkerUnavailableError
 from tuttitrip.shared.permissions.logic.resolution import Grant
 from tuttitrip.shared.permissions.registry import Access, Feature
-from tuttitrip.trips.schemas import TripMembership, TripRead, TripRole
+from tuttitrip.trips.schemas import MemberStatus, TripMembership, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
@@ -336,6 +336,7 @@ def _trip() -> TripRead:
             "budget_flex_pct": 10,
             "fairness_alpha": 1.0,
             "my_role": TripRole.CO_HOST,
+            "my_status": MemberStatus.CONFIRMED,
         }
     )
 
