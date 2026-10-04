@@ -461,10 +461,9 @@ i w plikach `~/tuttitrip/*.env` na serwerze, nigdy w repozytorium.
   tylko przez PR z zielonymi jobami `lint`, `tests` i `contracts-check`, bez
   force-pusha i bez usuwania gałęzi. Nie wymagamy zatwierdzeń (0 approvals),
   bo w 5 osób na 24 godziny bramką jest CI.
-- GitHub nie pozwala wymusić tych reguł w prywatnym repozytorium organizacji
-  na darmowym planie (ochrona gałęzi i rulesety zwracają 403), więc na razie
-  pilnujemy ich sami. Po przejściu na płatny plan można je włączyć jednym
-  wywołaniem:
+- Ochrona gałęzi nie jest jeszcze włączona (gdy repozytorium było prywatne,
+  darmowy plan zwracał 403), więc na razie pilnujemy tych reguł sami.
+  Repozytorium jest już publiczne, więc można je włączyć jednym wywołaniem:
 
   ```bash
   for b in main develop; do
