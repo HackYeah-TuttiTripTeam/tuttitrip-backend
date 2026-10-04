@@ -266,6 +266,10 @@ class _WorkerError(Exception):
     [
         ("not_implemented", "Jeszcze niedostępne"),
         ("invalid_payload", "invalid ParsePastedPlanInput"),
+        ("document_not_found", "Nie znaleziono wklejonej oferty"),
+        ("city_not_found", "Nie znaleziono takiego miasta"),
+        ("rate_limited", "Dzienny limit zapytań został wyczerpany, spróbuj jutro"),
+        ("model_output_invalid", "invalid ParsePastedPlanInput"),
     ],
 )
 def test_worker_error_codes_reach_the_job_state(code: str, message: str) -> None:

@@ -41,6 +41,14 @@ TIMEOUT_SECONDS: dict[Workflow, float] = {
 
 NOT_IMPLEMENTED_MESSAGE = "Jeszcze niedostępne"
 
+# Worker codes that get a client-readable message instead of the raw text.
+ERROR_MESSAGES: dict[str, str] = {
+    ErrorCode.NOT_IMPLEMENTED: NOT_IMPLEMENTED_MESSAGE,
+    ErrorCode.DOCUMENT_NOT_FOUND: "Nie znaleziono wklejonej oferty",
+    ErrorCode.CITY_NOT_FOUND: "Nie znaleziono takiego miasta",
+    ErrorCode.RATE_LIMITED: "Dzienny limit zapytań został wyczerpany, spróbuj jutro",
+}
+
 _UNAVAILABLE = (SQLAlchemyError, dbos_error.DBOSException, OSError)
 
 
@@ -48,7 +56,9 @@ def job_state(status: WorkflowStatus, progress: object) -> JobState:
     """Translate a DBOS status into the API's ``JobState``.
 
     The worker's ``ContractError`` code (``PortableWorkflowError.code``) goes to
-    ``error_code``; ``not_implemented`` is reported as "not available yet".
+    ``error_code``; codes listed in ``ERROR_MESSAGES`` (``not_implemented``,
+    ``document_not_found``, ``city_not_found``, ``rate_limited``) get a
+    readable message.
 
     Args:
         status: DBOS workflow status.
@@ -61,10 +71,8 @@ def job_state(status: WorkflowStatus, progress: object) -> JobState:
     code = getattr(error, "code", None)
     if error is None:
         text = None
-    elif code == ErrorCode.NOT_IMPLEMENTED:
-        text = NOT_IMPLEMENTED_MESSAGE
     else:
-        text = str(error)
+        text = ERROR_MESSAGES.get(str(code), str(error))
     return JobState(
         workflow_id=status.workflow_id,
         workflow_name=status.name,
