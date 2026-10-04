@@ -476,6 +476,14 @@ stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
   (`history_repair.settle`). Voice time per trip is limited
   (`interview.voice_trip_seconds`, booked in `voice_seconds`, 429). Run errors are a Polish `RUN_ERROR`
   with a `code` (`spend_limit`, `timeout`, `unavailable`, `error`).
+  A voice call holds the session on a short claim (`interview.voice_claim_ttl_seconds`) that the
+  call's heartbeat (`voice_heartbeat_seconds`) keeps alive, so a dead call frees the interview by
+  itself; `running_kind` (`text` or `voice`) is `SessionRead.running` and picks the 409 text;
+  `POST .../voice/release` ends a call that runs elsewhere (transcript stored, claim cleared) and
+  leaves a text turn alone; a call whose claim is gone ends itself. When a call ends its
+  transcript is stored and one run of the interview agent over it saves what is still missing
+  (`voice_service._extract`, not stored in the history, idempotent). The transcription language is
+  pinned to the offer's `locale` (`LocalizedRealtimeModel`).
 - The adapter subclass lives in `services`, so `api.py` imports no `pydantic_ai`
   and the architecture rules need no exception.
 - The next question is `interview/logic/next_question.py` (pure, explicit
@@ -835,6 +843,35 @@ read (an approved request disappears from the basket).
   author, in the same transaction as the change.
 - Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
   is marked `integration`.
+
+## Plan proposals, budget consent and calendar export (planning)
+
+- Proposal (`planning/proposals`, `plan_proposals`, `proposal_responses`): the host
+  (`TripHost`) sends the latest stored plan version; every member with an account
+  (`trip_members`, host included) approves, rejects or comments (`PUT .../response`, one
+  answer per member, a comment needs a remark). The host's sending counts as their approval.
+  `status`: `outdated` (the plan changed after sending), else `approved` (all approved), else
+  `rejected` (somebody rejects), else `pending`. People without an account are listed apart.
+  A new plan version makes the open proposal `superseded` (`on_plan_changed`, same transaction as
+  the version); answering it is a 409 with `detail.code = proposal.outdated`.
+- Budget consent (`planning/budget_approvals`, `budget_approvals`): a plan version with
+  `needs_approval` opens one `pending` question in the transaction that stores it (amount over
+  `B_do`, `kappa`, who gains most; copies). `approve` keeps `P_flex`; `reject` stores `P_strict` as
+  the newest version (same input hash). Both write a `budget_approval` entry to `plan_decisions`
+  (`effects.budget` holds the facts, the numbers are `P_flex` minus `P_strict`). A decided row is
+  frozen by a trigger. Any new version supersedes a pending question. 409
+  `budget_approval.not_pending` otherwise.
+- Notifications (in the same transaction, never committing): `proposal_waiting` for members except
+  the host (key `proposal:<id>`), `budget_approval_waiting` for the host only (key `budget:<id>`).
+  A member's answer resolves only their own (`resolve(..., user_sub=...)`), a new version or a
+  decision resolves all.
+- Calendar: `GET /trips/{trip_id}/plans/{plan_id}/calendar.ics` only for a version that every
+  member with an account approved (409 `plan.not_approved`). `plans/logic/ics.py` uses
+  `icalendar`; `UID` is a UUIDv5 of version and stop, `DTSTAMP` the time the version was stored,
+  `SEQUENCE` its number, times in the city zone with a `VTIMEZONE`: the same bytes every time.
+- Upgrades (`planning/logic/upgrades.py`): for a plan below `B_od`, adds and dearer same-category
+  replacements that fit under `B_od` and raise `J`; stored in the plan as `upgrades` (empty when
+  none). They use the solver's own evaluator, so vetoes, blocks and limits hold.
 
 ## Git flow
 

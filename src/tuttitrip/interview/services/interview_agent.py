@@ -230,8 +230,11 @@ async def current_context(ctx: Ctx) -> str:
     )
     next_text = question.model_dump_json() if question else nothing
     calendar_text = "; ".join(calendar.upcoming_days(date.today()))  # ruff: ignore[call-date-today] the server's own calendar day
+    currency = known.trip.currency or constants.DEFAULT_CURRENCY
     return (
         f"Calendar: {calendar_text}.\n"
+        f"Currency: {currency} (amounts the host gives are in it unless they "
+        "name another currency; do not ask).\n"
         f"Trip: {trip}\nPeople: {people}\nStill missing: {missing}\n"
         f"Next question: {next_text}"
     )

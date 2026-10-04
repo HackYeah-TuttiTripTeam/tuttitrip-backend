@@ -21,7 +21,7 @@ Contract for the AG-UI endpoint (#56). The history is stored as JSONB through
 """
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -143,6 +143,21 @@ def _history(row: InterviewSession) -> list[ModelMessage]:
         raise HistoryIncompatibleError(msg) from exc
 
 
+def busy_kind(row: InterviewSession) -> str | None:
+    """What holds the session now, or None when it is free (or the claim expired).
+
+    Args:
+        row: The session row.
+
+    Returns:
+        ``text``, ``voice`` or None.
+    """
+    until = row.running_until
+    if until is None or until <= datetime.now(UTC):
+        return None
+    return row.running_kind
+
+
 def _read(row: InterviewSession, shown: int) -> SessionRead:
     return SessionRead(
         id=row.id,
@@ -151,6 +166,7 @@ def _read(row: InterviewSession, shown: int) -> SessionRead:
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        running=busy_kind(row),  # ty: ignore[invalid-argument-type] a column holds only text or voice
         message_count=shown,
     )
 

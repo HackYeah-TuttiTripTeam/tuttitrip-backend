@@ -11,7 +11,7 @@ so they never collide with other domains in the OpenAPI schema.
 import datetime as dt
 from decimal import Decimal
 from enum import StrEnum, unique
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
@@ -89,6 +89,7 @@ class ApprovalStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     REJECTED = "rejected"
+    SUPERSEDED = "superseded"
 
 
 @unique
@@ -120,6 +121,26 @@ class VerdictKind(StrEnum):
     FITS = "fits"
     ICONIC_NOT_YOURS = "iconic_not_yours"
     SKIP = "skip"
+
+
+@unique
+class PlanErrorCode(StrEnum):
+    """Stable code of a plan error, sent as ``detail.code``."""
+
+    NOT_APPROVED = "plan.not_approved"
+
+
+class NotApprovedDetail(BaseModel):
+    """Why the plan cannot be exported; clients map by ``code``."""
+
+    code: Literal[PlanErrorCode.NOT_APPROVED] = PlanErrorCode.NOT_APPROVED
+    message: str = Field(description="For developers; clients map by code.")
+
+
+class NotApprovedError(BaseModel):
+    """409 body: no approved proposal for this plan version."""
+
+    detail: NotApprovedDetail
 
 
 class PlanCreate(BaseModel):
@@ -436,6 +457,31 @@ class PlanBudget(BaseModel):
         return self
 
 
+@unique
+class UpgradeKind(StrEnum):
+    """What an upgrade does to the plan."""
+
+    ADD = "add"
+    REPLACE = "replace"
+
+
+class PlanUpgrade(BaseModel):
+    """A way to use the room below ``B_od`` (backend#101): the price and the gain."""
+
+    kind: UpgradeKind
+    place_id: UUID = Field(description="The place the plan gets.")
+    name: str
+    replaces_place_id: UUID | None = Field(
+        default=None, description="The place it takes out; null for an addition."
+    )
+    replaces_name: str | None = None
+    day: int = Field(ge=1, description="1-based day of the change.")
+    cost: Money = Field(description="c(P) of the upgraded plan, at most B_od.")
+    extra_cost: Money = Field(description="Added to c(P).")
+    d_j: float = Field(gt=0, description="Rise of J.")
+    d_min_r: float = Field(description="Change of min r.")
+
+
 class PlanTelemetry(BaseModel):
     """How the plan was computed."""
 
@@ -479,4 +525,11 @@ class PlanRead(BaseModel):
         default=None, description="Null until backend#51; then one per candidate."
     )
     budget: PlanBudget
+    upgrades: list[PlanUpgrade] = Field(
+        default_factory=list,
+        description=(
+            "Upgrades for a plan that costs less than B_od, best first; empty "
+            "when there is no real one."
+        ),
+    )
     telemetry: PlanTelemetry

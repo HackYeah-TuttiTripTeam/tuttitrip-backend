@@ -28,12 +28,15 @@ from tuttitrip.mcp.api import create_mcp_app
 from tuttitrip.notifications.api import router as notifications_router
 from tuttitrip.notifications.services import notification_service
 from tuttitrip.places.api import router as places_router
+from tuttitrip.places.cities.api import router as city_search_router
 from tuttitrip.planning.api import router as planning_router
+from tuttitrip.planning.budget_approvals.api import router as budget_approvals_router
 from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.planning.overrides.api import router as overrides_router
 from tuttitrip.planning.parameters.api import router as parameters_router
 from tuttitrip.planning.plans.api import router as plans_router
+from tuttitrip.planning.proposals.api import router as proposals_router
 from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.profiles.feedback.api import router as feedback_router
 from tuttitrip.profiles.preferences.api import router as preferences_router
@@ -60,6 +63,7 @@ from tuttitrip.trips.photos.api import router as photos_router
 from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.services import trip_service
 from tuttitrip.voting.api import router as voting_router
+from tuttitrip.voting.link.api import router as vote_link_router
 
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
@@ -86,6 +90,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     locations_router,
     voting_router,
     photos_router,
+    vote_link_router,
     profiles_router,
     feedback_router,
     preferences_router,
@@ -95,11 +100,14 @@ ROUTERS: tuple[APIRouter, ...] = (
     plans_router,
     overrides_router,
     parameters_router,
+    budget_approvals_router,
+    proposals_router,
     linter_router,
     accommodation_router,
     expenses_router,
     settlement_router,
     search_router,
+    city_search_router,
     places_router,
     notifications_router,
 )
