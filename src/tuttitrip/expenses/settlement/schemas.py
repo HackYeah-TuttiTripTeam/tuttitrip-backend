@@ -1,25 +1,32 @@
 """Settlement DTOs."""
 
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
 
-class Payment(BaseModel):
-    """Who paid how much, and who shares the cost (split equally)."""
+class BalanceRead(BaseModel):
+    """Net balance of one person: positive means they are owed money."""
 
-    payer: str = Field(min_length=1)
-    amount: Decimal = Field(ge=0)
-    participants: list[str] = Field(min_length=1)
-
-
-class BalancesRequest(BaseModel):
-    """Payments to settle."""
-
-    payments: list[Payment]
+    profile_id: UUID
+    amount: Decimal = Field(description="In the trip's currency, to the cent.")
 
 
-class BalancesResponse(BaseModel):
-    """Net balance per person: positive means they are owed money."""
+class TransferRead(BaseModel):
+    """One payment that settles part of the trip."""
 
-    balances: dict[str, Decimal]
+    from_profile_id: UUID
+    to_profile_id: UUID
+    amount: Decimal = Field(description="In the trip's currency, to the cent.")
+
+
+class SettlementRead(BaseModel):
+    """Balances and the smallest list of transfers of a trip."""
+
+    currency: str | None
+    total_spent: Decimal = Field(description="Sum of all expenses.")
+    balances: list[BalanceRead] = Field(
+        description="Every person on the trip, ordered by profile id; sums to 0.00."
+    )
+    transfers: list[TransferRead]

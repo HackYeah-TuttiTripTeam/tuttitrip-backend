@@ -155,3 +155,17 @@ async def profile_has_expenses(
         )
     )
     return bool(found)
+
+
+async def select_all(session: AsyncSession, trip_id: UUID) -> list[Expense]:
+    """All expenses of a trip, for settlement (a computation, not a list).
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+
+    Returns:
+        The expenses with shares, in a stable order.
+    """
+    result = await session.scalars(scoped(trip_id).order_by(Expense.id))
+    return list(result)
