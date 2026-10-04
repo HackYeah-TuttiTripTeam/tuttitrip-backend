@@ -28,6 +28,7 @@ from tuttitrip.profiles.feedback.schemas import (
     TripFeedback,
     VetoCreate,
     VetoRead,
+    VotingActor,
 )
 from tuttitrip.profiles.models import Profile
 from tuttitrip.trips.schemas import TripMembership, TripRole
@@ -163,6 +164,31 @@ async def list_ratings(
     return [RatingRead.model_validate(row) for row in rows]
 
 
+async def _insert_veto(session: AsyncSession, veto: PlaceVeto) -> PlaceVeto:
+    """Insert a veto, translating the unique active-veto index into a domain error.
+
+    Args:
+        session: Open session (caller commits).
+        veto: The new veto.
+
+    Returns:
+        The stored veto.
+
+    Raises:
+        VetoExistsError: The person already has an active veto on the place.
+    """
+    try:
+        stored = await db.insert_veto(session, veto)
+    except IntegrityError as exc:
+        await session.rollback()
+        if ACTIVE_VETO_INDEX not in str(exc.orig):
+            raise
+        msg = "This person already has an active veto on the place"
+        raise VetoExistsError(msg) from exc
+    await session.refresh(stored)
+    return stored
+
+
 async def create_veto(
     session: AsyncSession, membership: TripMembership, data: VetoCreate
 ) -> VetoRead:
@@ -181,24 +207,16 @@ async def create_veto(
     """
     profile = await _profile_for_author(session, membership, data.profile_id)
     place = await _require_place(session, data.place_id)
-    try:
-        veto = await db.insert_veto(
-            session,
-            PlaceVeto(
-                trip_id=membership.trip_id,
-                profile_id=data.profile_id,
-                place_id=data.place_id,
-                created_by_sub=membership.sub,
-                on_behalf=profile.user_sub != membership.sub,
-            ),
-        )
-    except IntegrityError as exc:
-        await session.rollback()
-        if ACTIVE_VETO_INDEX not in str(exc.orig):
-            raise
-        msg = "This person already has an active veto on the place"
-        raise VetoExistsError(msg) from exc
-    await session.refresh(veto)
+    veto = await _insert_veto(
+        session,
+        PlaceVeto(
+            trip_id=membership.trip_id,
+            profile_id=data.profile_id,
+            place_id=data.place_id,
+            created_by_sub=membership.sub,
+            on_behalf=profile.user_sub != membership.sub,
+        ),
+    )
     read = VetoRead.model_validate(veto)
     await notification_service.notify(
         session,
@@ -268,6 +286,128 @@ async def list_for_trip(session: AsyncSession, trip_id: UUID) -> TripFeedback:
     """
     ratings = await db.select_ratings_by_trip(session, trip_id)
     vetoes = await db.select_active_vetoes_by_trip(session, trip_id)
+    return TripFeedback(
+        ratings=[RatingRead.model_validate(r) for r in ratings],
+        vetoes=[VetoRead.model_validate(v) for v in vetoes],
+    )
+
+
+# --- acting for a profile by a given author (voting link, no account) ----------
+# The caller has checked that the author may act for the profile (a voting token
+# bound to it), so these take the author as a plain value, not a membership.
+
+
+async def rate_by_author(
+    session: AsyncSession, actor: VotingActor, place_id: UUID, data: RatingUpdate
+) -> RatingRead:
+    """Set a person's rating on behalf of a checked author and commit.
+
+    Args:
+        session: Open session.
+        actor: Trip, profile and the author marker to store.
+        place_id: Catalog place.
+        data: Value and, for ``dont_want``, the reason.
+
+    Returns:
+        The stored rating.
+    """
+    await _require_place(session, place_id)
+    row = await db.upsert_rating(
+        session,
+        PlaceRating(
+            trip_id=actor.trip_id,
+            profile_id=actor.profile_id,
+            place_id=place_id,
+            value=data.value,
+            reason_code=data.reason_code,
+            updated_by_sub=actor.author,
+        ),
+    )
+    read = RatingRead.model_validate(row)
+    await session.commit()
+    return read
+
+
+async def veto_by_author(
+    session: AsyncSession, actor: VotingActor, place_id: UUID
+) -> VetoRead:
+    """File a person's veto for a checked author; a repeated veto is the same one.
+
+    Args:
+        session: Open session.
+        actor: Trip, profile and the author marker to store.
+        place_id: Catalog place.
+
+    Returns:
+        The veto in force (the existing one when it was already filed).
+    """
+    await _require_place(session, place_id)
+    try:
+        veto = await _insert_veto(
+            session,
+            PlaceVeto(
+                trip_id=actor.trip_id,
+                profile_id=actor.profile_id,
+                place_id=place_id,
+                created_by_sub=actor.author,
+                on_behalf=False,
+            ),
+        )
+    except VetoExistsError:
+        veto = next(
+            v
+            for v in await db.select_active_vetoes_of_profile(
+                session, actor.trip_id, actor.profile_id
+            )
+            if v.place_id == place_id
+        )
+    read = VetoRead.model_validate(veto)
+    await session.commit()
+    return read
+
+
+async def revoke_veto_by_author(
+    session: AsyncSession, actor: VotingActor, veto_id: UUID
+) -> VetoRead:
+    """Revoke a person's own veto for a checked author; repeating it is harmless.
+
+    Args:
+        session: Open session.
+        actor: Trip, profile (whose veto it must be) and the revoker marker.
+        veto_id: Veto to revoke.
+
+    Returns:
+        The veto with ``revoked_at``.
+
+    Raises:
+        VetoNotFoundError: No such veto of this person on the trip.
+    """
+    veto = await db.select_veto(session, actor.trip_id, veto_id)
+    if veto is None or veto.profile_id != actor.profile_id:
+        raise VetoNotFoundError(str(veto_id))
+    if veto.revoked_at is None:
+        veto.revoked_at = datetime.now(UTC)
+        veto.revoked_by_sub = actor.author
+        await session.commit()
+        await session.refresh(veto)
+    return VetoRead.model_validate(veto)
+
+
+async def list_for_profile(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID
+) -> TripFeedback:
+    """One person's ratings and active vetoes (nobody else's).
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        profile_id: Whose answers.
+
+    Returns:
+        The person's ratings and vetoes in force.
+    """
+    ratings = await db.select_ratings_of_profile(session, trip_id, profile_id)
+    vetoes = await db.select_active_vetoes_of_profile(session, trip_id, profile_id)
     return TripFeedback(
         ratings=[RatingRead.model_validate(r) for r in ratings],
         vetoes=[VetoRead.model_validate(v) for v in vetoes],

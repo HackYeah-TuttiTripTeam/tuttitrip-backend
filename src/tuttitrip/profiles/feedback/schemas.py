@@ -21,6 +21,7 @@ __all__ = [
     "TripFeedback",
     "VetoCreate",
     "VetoRead",
+    "VotingActor",
     "link_author",
 ]
 
@@ -127,3 +128,17 @@ class TripFeedback(BaseModel):
 
     ratings: list[RatingRead]
     vetoes: list[VetoRead] = Field(description="Active vetoes only (E0).")
+
+
+class VotingActor(BaseModel):
+    """Whose answers are written and who is recorded as the author.
+
+    Built by a caller that has already checked the author may act for the
+    profile (a voting token bound to it), so services need no ``CurrentUser``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    trip_id: UUID
+    profile_id: UUID
+    author: str = Field(description="`link:<token id>` for a voting link.")
