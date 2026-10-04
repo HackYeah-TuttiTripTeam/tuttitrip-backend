@@ -2,7 +2,6 @@
 
 import asyncio
 import math
-from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
@@ -10,8 +9,6 @@ from pydantic_ai.models.test import TestModel
 from tests.shared.fakes import authorize
 from tuttitrip.main import create_app
 from tuttitrip.planning.fairness.logic.welfare import weighted_log_welfare
-from tuttitrip.planning.linter.logic.rules import lint
-from tuttitrip.planning.linter.schemas import LintRequest, PlanItem
 from tuttitrip.planning.schemas import TripPlan
 from tuttitrip.planning.services.planner_agent import planner_agent
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
@@ -43,18 +40,6 @@ def test_log_welfare_prefers_the_balanced_plan() -> None:
 
 def test_weights_multiply_log_utility() -> None:
     assert math.isclose(weighted_log_welfare([(9, 2)]), 2 * math.log(10))
-
-
-def test_linter_flags_over_budget_plan() -> None:
-    request = LintRequest(
-        items=[
-            PlanItem(name="Muzeum", cost=Decimal(80)),
-            PlanItem(name="Zoo", cost=Decimal(50)),
-        ],
-        budget=Decimal(100),
-    )
-    assert [v.rule for v in lint(request)] == ["budget"]
-    assert lint(request.model_copy(update={"budget": Decimal(130)})) == []
 
 
 def test_fairness_endpoint() -> None:

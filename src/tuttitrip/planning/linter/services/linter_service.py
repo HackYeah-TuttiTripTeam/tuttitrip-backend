@@ -8,9 +8,9 @@ def check_plan(request: LintRequest) -> LintReport:
     """Lint a structured plan.
 
     Args:
-        request: Plan and budget.
+        request: Plan and context.
 
     Returns:
-        The report with all violations.
+        The report with every rule.
     """
-    return LintReport(violations=lint(request))
+    return lint(request.plan, request.context)
