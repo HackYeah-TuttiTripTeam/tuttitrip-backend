@@ -9,6 +9,7 @@ from tuttitrip.planning.linter.schemas import (
     Finding,
     LintContext,
     LintItem,
+    LintPerson,
     LintPlan,
     Severity,
 )
@@ -43,16 +44,23 @@ class Stop:
         """Naive local arrival."""
         return datetime.combine(self.day, self.item.start)
 
-    def finding(self, rule: str, severity: Severity, message: str) -> Finding:
+    def finding(
+        self,
+        rule: str,
+        severity: Severity,
+        message: str,
+        person: LintPerson | None = None,
+    ) -> Finding:
         """Build a finding pointing at this stop.
 
         Args:
             rule: Code of the rule.
             severity: Violation or warning.
             message: Human-readable explanation.
+            person: The person to blame, if one is.
 
         Returns:
-            The finding with day, position and place name.
+            The finding with day, position, place name and person.
         """
         return Finding(
             rule=rule,
@@ -61,6 +69,8 @@ class Stop:
             day=self.day,
             position=self.position,
             place_name=self.item.name,
+            person_id=None if person is None else person.id,
+            person_name=None if person is None else person.name,
         )
 
 

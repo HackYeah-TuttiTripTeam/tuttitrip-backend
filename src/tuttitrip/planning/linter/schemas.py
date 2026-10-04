@@ -59,10 +59,45 @@ class LintPlan(BaseModel):
     days: list[LintDay]
 
 
+class LintPerson(BaseModel):
+    """One participant as the person rules see them (profile plus preferences).
+
+    Everybody takes part in every stop (docs/algorytm.md, section 9).
+    """
+
+    id: UUID
+    name: str = Field(min_length=1)
+    segment_km: float = Field(gt=0, description="s_i: longest walk in one go.")
+    daily_km: float = Field(gt=0, description="D_i: daily walking distance.")
+    nap_start: time | None = Field(default=None, description="Local start of the nap.")
+    nap_minutes: int = Field(default=0, ge=0, le=600)
+    stairs_sensitivity: float = Field(
+        default=0,
+        ge=0,
+        le=1,
+        description="Effective sensitivity: 1 with the stairs or wheelchair limit.",
+    )
+    wheelchair: bool = False
+
+
+class LintLunch(BaseModel):
+    """Lunch the group needs: a free gap that starts in ``[earliest, latest]``."""
+
+    earliest: time
+    latest: time
+    minutes: int = Field(gt=0, le=240)
+
+
 class LintContext(BaseModel):
     """What the rules compare a plan with."""
 
     places: list[PlaceRead] = Field(description="Catalog places the plan may use.")
+    people: list[LintPerson] = Field(
+        default_factory=list, description="Participants; person rules need them."
+    )
+    lunch: LintLunch | None = Field(
+        default=None, description="Lunch window; null disables the lunch check."
+    )
     timezone: str = Field(description="IANA zone of the city; hours are local.")
     budget: Decimal = Field(ge=0, description="B_do.")
     flex_pct: int = Field(default=0, ge=0, le=50, description="Margin of B_max.")
@@ -108,6 +143,10 @@ class Finding(BaseModel):
         default=None, description="Index of the stop in the day as sent."
     )
     place_name: str | None = None
+    person_id: UUID | None = Field(
+        default=None, description="Set when one person is to blame."
+    )
+    person_name: str | None = None
 
 
 class RuleResult(BaseModel):

@@ -13,7 +13,7 @@ results are converted back to local time. The module is deterministic.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
@@ -267,6 +267,18 @@ def _fit(
     return None
 
 
+def daily_distance_km(segments_km: Iterable[float]) -> float:
+    """Daily distance ``L_d = sum d_p``, shared by the schedule and the linter.
+
+    Args:
+        segments_km: ``segment_km`` of every place of the day.
+
+    Returns:
+        The sum, exact to float rounding.
+    """
+    return math.fsum(segments_km)
+
+
 def _too_far(distance_km: float, people: Sequence[Person]) -> list[UUID]:
     return sorted(p.id for p in people if distance_km > DAILY_KM_FACTOR * p.daily_km)
 
@@ -370,7 +382,7 @@ def schedule_day(
 
     if meal is not None and meal.pending:
         _take_lunch(meal, cursor, day_end, blocked)
-    distance = math.fsum(p.segment_km for p in places)
+    distance = daily_distance_km(p.segment_km for p in places)
     over = _too_far(distance, people)
     if over:
         return Infeasible(InfeasibleCode.DISTANCE, person_ids=tuple(over))
