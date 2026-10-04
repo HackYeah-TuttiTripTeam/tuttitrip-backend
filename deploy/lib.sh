@@ -14,6 +14,8 @@ TT_PREFIX="tuttitrip-api"
 TT_DOMAIN="${TT_DOMAIN:-gburek.app}"
 TT_NETWORK="tuttitrip"
 TT_POSTGRES="tuttitrip-postgres"
+# The cities sheet (one for every environment); cleanup.sh never removes it.
+TT_CITIES_VOLUME="tuttitrip-cities-data"
 TT_GATEWAY="tuttitrip-gateway"
 TT_STATE_DIR="${TT_STATE_DIR:-$HOME/tuttitrip}"
 # The gateway listens on the docker0 bridge address only: reachable by the

@@ -7,7 +7,8 @@
 #      TUTTITRIP_CORS_ORIGINS/_ORIGIN_REGEX (optional; app defaults otherwise).
 # Host files (never committed), under $TT_STATE_DIR (~/tuttitrip):
 #      deploy.env  POSTGRES_PASSWORD, WORKER_DB_PASSWORD, DEMO_RESET_SECRET (generated on first run)
-#      app.env     optional extra app env for every branch (e.g. OPENAI_API_KEY)
+#      app.env     optional extra app env for every branch (e.g. OPENAI_API_KEY,
+#                  TUTTITRIP_CITIES__SHEET_ID: the cities sheet, see fetch-cities.sh)
 #      admin.env   admin tools (deploy/admin/setup.sh, run after a main deploy)
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -94,6 +95,16 @@ labels=(--label tuttitrip.managed=true --label tuttitrip.env="$env" --label tutt
 docker build -q -t "$image" "${labels[@]}" "$repo" >/dev/null
 tt_log "built $image"
 
+# Demo cities: download the public Google Sheet into the shared volume (the last
+# good copy stays on any problem; never fails the deploy). The sheet id comes
+# from the runner environment, else from app.env (not a secret).
+sheet_id=${TUTTITRIP_CITIES__SHEET_ID:-}
+if [ -z "$sheet_id" ] && [ -f "$TT_STATE_DIR/app.env" ]; then
+  sheet_id=$(grep -E '^TUTTITRIP_CITIES__SHEET_ID=' "$TT_STATE_DIR/app.env" | tail -n1 | cut -d= -f2- | tr -d '\r" ' || true)
+fi
+TUTTITRIP_CITIES__SHEET_ID=$sheet_id TT_CITIES_IMAGE="$image" TT_CITIES_VOLUME="$TT_CITIES_VOLUME" \
+  "$here/fetch-cities.sh" || tt_log "WARNING: cities sheet download crashed; deploy continues with the last copy"
+
 # Env files shared with the worker repo (deploy/CONVENTIONS.md), mode 600.
 envfile="$TT_STATE_DIR/envs/$env.env"
 workerenv="$TT_STATE_DIR/envs/$env.worker.env"
@@ -140,6 +151,23 @@ docker exec -i "$TT_POSTGRES" psql -q -v ON_ERROR_STOP=1 -v dbname="$database" -
   <"$here/worker-grants.sql" >/dev/null
 tt_log "migrations, DBOS schema and worker grants applied"
 
+# Import the sheet (idempotent upsert, one transaction). A rejected workbook
+# leaves the catalog untouched; it is reported loudly but does not fail the
+# deploy, so a bad edit in the sheet cannot block a release.
+citieslog="$TT_STATE_DIR/cities-import-$env.log"
+set +e
+timeout -k 5 300 docker run --rm --network "$TT_NETWORK" --env-file "$envfile" \
+  -v "$TT_CITIES_VOLUME:/data/cities:ro" "$image" \
+  python -m tuttitrip.places.services.import_command >"$citieslog" 2>&1
+cities_rc=$?
+set -e
+case "$cities_rc" in
+  0) tt_log "cities sheet imported"; grep -E ': [0-9]+ places|inserted' "$citieslog" >&2 || true ;;
+  2) tt_log "WARNING: no cities sheet in volume $TT_CITIES_VOLUME; the catalog keeps its data" ;;
+  *) tt_log "WARNING: cities import FAILED (exit $cities_rc), catalog unchanged; see $citieslog"
+     tail -n 25 "$citieslog" >&2 || true ;;
+esac
+
 docker rm -f "$container" >/dev/null 2>&1 || true
 docker run -d --name "$container" --network "$TT_NETWORK" --restart unless-stopped \
   "${labels[@]}" --label tuttitrip.role=api --env-file "$envfile" "$image" >/dev/null
@@ -151,6 +179,15 @@ for i in $(seq 60); do
   sleep 2
 done
 tt_log "healthy behind the gateway"
+
+# Smoke test of the catalog: the demo city (Warszawa) must have its sheet data.
+demo_places=$(docker exec -i "$TT_POSTGRES" psql -U tuttitrip -d "$database" -tAc \
+  "SELECT count(*) FROM places WHERE city_slug = 'warszawa' AND source = 'sheet'" 2>/dev/null || echo 0)
+if [ "${demo_places:-0}" -gt 0 ]; then
+  tt_log "smoke test: demo city Warszawa has $demo_places sheet places"
+else
+  tt_log "WARNING: smoke test: NO CITY DATA for the demo city (Warszawa); no cities sheet imported yet"
+fi
 
 # --- routing -------------------------------------------------------------------
 cf_ingress_ensure "$host" "http://$TT_GATEWAY_BIND"

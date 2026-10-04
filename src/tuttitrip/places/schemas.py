@@ -93,6 +93,7 @@ class TicketCategory(StrEnum):
     CHILD = "child"
     SENIOR = "senior"
     STUDENT = "student"
+    REDUCED = "reduced"  # general concession, the source does not say for whom
     FAMILY = "family"
 
 
