@@ -83,6 +83,12 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-statements, 
         museum = await _seed_place("Muzeum")
         park = await _seed_place("Park")
         try:
+            # Five working profile tokens (#79) never turn a new link into a 500.
+            for _ in range(5):
+                made = await http.post(
+                    f"{base}/profiles/{grandma}/access-tokens", json={}
+                )
+                assert made.status_code == 201
             first = await http.post(f"{base}/vote-links", json={"profile_id": grandma})
             assert first.status_code == 201
             assert first.headers["cache-control"] == "no-store"
@@ -131,7 +137,7 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-statements, 
             revoked = (
                 await http.get(f"{base}/vote-links", params={"state": "revoked"})
             ).json()
-            assert revoked["total"] == 4
+            assert revoked["total"] == 9
             by_profile = (
                 await http.get(
                     f"{base}/vote-links",
@@ -143,8 +149,8 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-statements, 
                 by_profile["pages"],
                 len(by_profile["items"]),
             ) == (
+                10,
                 5,
-                3,
                 2,
             )
 

@@ -26,6 +26,7 @@ from tuttitrip.profiles.feedback.schemas import (
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
+from tuttitrip.profiles.services.profile_service import ProfileNotFoundError
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.pagination.schemas import Page, PageParams, SortDir
@@ -68,6 +69,16 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     application.dependency_overrides[get_session] = lambda: SESSION
     monkeypatch.setattr(
         profile_service, "list_profiles", AsyncMock(return_value=PROFILES)
+    )
+
+    def get_profile(_s: object, _m: object, profile_id: uuid.UUID) -> ProfileRead:
+        for profile in PROFILES:
+            if profile.id == profile_id:
+                return profile
+        raise ProfileNotFoundError(str(profile_id))
+
+    monkeypatch.setattr(
+        profile_service, "get_profile", AsyncMock(side_effect=get_profile)
     )
     return application
 
@@ -140,6 +151,20 @@ def test_a_co_host_creates_a_link_and_sees_the_token_once(
     revoke.assert_awaited_once()
     assert revoke.await_args is not None
     assert revoke.await_args.args[1:3] == (GRANDMA, TokenScope.VOTE)
+
+
+def test_too_many_working_tokens_is_409_not_500(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _role(monkeypatch, TripRole.CO_HOST)
+    monkeypatch.setattr(permission_db, "revoke_active_tokens", AsyncMock())
+    monkeypatch.setattr(
+        permission_db, "count_active_access_tokens", AsyncMock(return_value=5)
+    )
+    response = client.post(
+        path("create_vote_link", trip_id=TRIP), json={"profile_id": str(GRANDMA)}
+    )
+    assert response.status_code == 409
 
 
 def test_a_plain_member_cannot_create_a_link(
@@ -409,6 +434,18 @@ def test_sources_of_ratings_and_vetoes() -> None:
     assert summary.veto_source(_veto(GRANDMA, PARK, LINK, on_behalf=False)) is (
         VoteSource.LINK
     )
+
+
+def test_the_last_writer_decides_the_source() -> None:
+    people = {GRANDMA: summary.Person("Babcia", None)}
+    link_vote = _rating(GRANDMA, PARK, RatingValue.DONT_WANT, LINK, ReasonCode.OTHER)
+    # The rating row is one per person and place: a host overwriting it replaces
+    # the author, so the summary then reports the host.
+    overwritten = _rating(GRANDMA, PARK, RatingValue.WANT, HOST.sub)
+    before = summary.summarize([link_vote], [], people, {PARK: "Park"})
+    after = summary.summarize([overwritten], [], people, {PARK: "Park"})
+    assert before[0].votes[0].source is VoteSource.LINK
+    assert after[0].votes[0].source is VoteSource.HOST
 
 
 def test_a_place_with_only_a_veto_is_listed() -> None:

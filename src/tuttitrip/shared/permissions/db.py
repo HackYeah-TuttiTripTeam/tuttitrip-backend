@@ -379,13 +379,14 @@ async def update_last_used(
 
 
 async def count_active_access_tokens(
-    session: AsyncSession, profile_id: UUID, now: datetime
+    session: AsyncSession, profile_id: UUID, scope: TokenScope, now: datetime
 ) -> int:
-    """Count a profile's tokens that are neither revoked nor expired.
+    """Count a profile's tokens of one scope that are neither revoked nor expired.
 
     Args:
         session: Open session.
         profile_id: Profile.
+        scope: Token scope (other scopes do not count against the cap).
         now: Current time.
 
     Returns:
@@ -397,6 +398,7 @@ async def count_active_access_tokens(
             .select_from(AccessToken)
             .where(
                 AccessToken.profile_id == profile_id,
+                AccessToken.scope == scope,
                 AccessToken.revoked_at.is_(None),
                 AccessToken.expires_at > now,
             )

@@ -10,9 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
-from tuttitrip.profiles.services.profile_service import ProfileNotFoundError
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.schemas import (
     AccessTokenQuery,
@@ -70,15 +68,6 @@ async def _names(session: AsyncSession, membership: TripMembership) -> dict[UUID
     return {p.id: p.display_name for p in profiles}
 
 
-async def _profile(
-    session: AsyncSession, membership: TripMembership, profile_id: UUID
-) -> ProfileRead:
-    for profile in await profile_service.list_profiles(session, membership):
-        if profile.id == profile_id:
-            return profile
-    raise ProfileNotFoundError(str(profile_id))
-
-
 async def create_link(
     session: AsyncSession, membership: TripMembership, data: VoteLinkCreate
 ) -> VoteLinkCreated:
@@ -95,8 +84,10 @@ async def create_link(
     Raises:
         ProfileNotFoundError: The profile is not on this trip.
         VoteLinkProfileHasAccountError: The profile belongs to an account.
+        TooManyTokensError: The profile still has 5 working tokens of this scope
+            after the old ones were revoked (cannot happen unless that changes).
     """
-    profile = await _profile(session, membership, data.profile_id)
+    profile = await profile_service.get_profile(session, membership, data.profile_id)
     if profile.user_sub is not None:
         raise VoteLinkProfileHasAccountError(str(profile.id))
     created = await token_service.create_token(
@@ -134,12 +125,8 @@ async def list_links(
     )
     names = await _names(session, membership)
     now = datetime.now(UTC)
-    return Page[VoteLinkRead](
-        items=[_link(t, names, now) for t in page.items],
-        total=page.total,
-        page=page.page,
-        size=page.size,
-        pages=page.pages,
+    return Page[VoteLinkRead].of(
+        [_link(t, names, now) for t in page.items], page.total, query
     )
 
 

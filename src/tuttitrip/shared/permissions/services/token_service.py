@@ -82,7 +82,7 @@ async def create_token(session: AsyncSession, new: NewToken) -> AccessTokenCreat
     now = datetime.now(UTC)
     if new.replace_existing:
         await db.revoke_active_tokens(session, new.profile_id, new.scope, now)
-    if await db.count_active_access_tokens(session, new.profile_id, now) >= (
+    if await db.count_active_access_tokens(session, new.profile_id, new.scope, now) >= (
         MAX_ACTIVE_PER_PROFILE
     ):
         raise TooManyTokensError
@@ -222,12 +222,10 @@ async def list_trip_tokens(
     page = await db.select_trip_tokens_page(
         session, trip_id, scope, query, datetime.now(UTC)
     )
-    return Page[AccessTokenRead](
-        items=[AccessTokenRead.model_validate(row) for row in page.items],
-        total=page.total,
-        page=page.page,
-        size=page.size,
-        pages=page.pages,
+    return Page[AccessTokenRead].of(
+        [AccessTokenRead.model_validate(row) for row in page.items],
+        page.total,
+        query,
     )
 
 

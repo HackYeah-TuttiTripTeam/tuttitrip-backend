@@ -22,6 +22,7 @@ from tuttitrip.voting.schemas import (
 )
 
 UNKNOWN_PERSON = "?"
+UNKNOWN_PLACE = "?"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +116,7 @@ def summarize(
     result = [
         PlaceVoteSummary(
             place_id=place_id,
-            place_name=place_names.get(place_id, UNKNOWN_PERSON),
+            place_name=place_names.get(place_id, UNKNOWN_PLACE),
             want=sum(v.value is RatingValue.WANT for v in votes[place_id]),
             dont_want=sum(v.value is RatingValue.DONT_WANT for v in votes[place_id]),
             neutral=sum(v.value is RatingValue.NEUTRAL for v in votes[place_id]),

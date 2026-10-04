@@ -16,6 +16,7 @@ from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.api import no_store, requires
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.shared.permissions.schemas import AccessTokenQuery
+from tuttitrip.shared.permissions.services.token_service import TooManyTokensError
 from tuttitrip.trips.api import TripCoHost
 from tuttitrip.voting.schemas import (
     PlaceVoteSummary,
@@ -38,7 +39,12 @@ router = APIRouter(prefix="/trips/{trip_id}", tags=["voting"])
     status_code=status.HTTP_201_CREATED,
     responses={
         404: {"description": "`profile_id` is not a profile of this trip."},
-        409: {"description": "The person has an account (they log in to vote)."},
+        409: {
+            "description": (
+                "The person has an account (they log in to vote), or has too "
+                "many working tokens."
+            )
+        },
     },
     dependencies=[requires(Feature.TRIPS_VOTE_LINKS, Access.WRITE), no_store()],
 )
@@ -62,6 +68,10 @@ async def create_vote_link(
         return await vote_link_service.create_link(session, membership, data)
     except ProfileNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Profile not found") from exc
+    except TooManyTokensError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Too many working tokens for this person"
+        ) from exc
     except VoteLinkProfileHasAccountError as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "This person has an account and logs in"
