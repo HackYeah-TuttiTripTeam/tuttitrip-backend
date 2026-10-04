@@ -70,6 +70,7 @@ async def member_left(session: AsyncSession, trip_id: UUID, profile_id: UUID) ->
         session: Open session.
         trip_id: The trip.
         profile_id: Profile of the person who left (it stays on the trip).
+        sub: Auth0 subject of the account that left.
     """
     await checkin_service.clear_profile(session, trip_id, profile_id)
 
@@ -151,5 +152,5 @@ async def remove_member(
         raise MemberForbiddenError(msg)
     await db.delete_member(session, membership.trip_id, sub)
     await profile_service.unlink_account(session, membership, profile_id)
-    await member_left(session, membership.trip_id, profile_id)
+    await member_left(session, membership.trip_id, profile_id, sub)
     await session.commit()
