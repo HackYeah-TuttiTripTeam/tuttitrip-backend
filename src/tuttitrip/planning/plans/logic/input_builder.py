@@ -181,6 +181,7 @@ def input_hash(
     weight_preset: str,
     params: AlgorithmParams,
     solver: str | None = None,
+    *,
     parameters_version: int = 0,
 ) -> str:
     """SHA-256 of everything that decides the plan.
