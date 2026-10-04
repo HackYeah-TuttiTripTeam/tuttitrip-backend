@@ -22,8 +22,9 @@ class JobState(BaseModel):
     by the worker show up as ERROR with the worker's message in ``error``.
     ``error_code`` is the worker's machine code (``invalid_payload``,
     ``unsupported_contract_version``, ``not_implemented``, ``document_not_found``,
-    ``model_output_invalid``, ``city_not_found`` or ``rate_limited``); such a job
-    is not retried by the backend and ``error`` carries a readable message.
+    ``model_output_invalid``, ``city_not_found``, ``rate_limited`` or
+    ``slug_conflict``); such a job is not retried by the backend and ``error``
+    carries a readable message.
     """
 
     workflow_id: str
@@ -32,12 +33,17 @@ class JobState(BaseModel):
     owner: str | None = None
     output: dict[str, Any] | None = None
     error: str | None = None
+    error_en: str | None = Field(
+        default=None,
+        description="English text of `error` for codes the API knows; else null.",
+    )
     error_code: str | None = Field(
         default=None,
         description=(
             "Machine code of a worker error: `unsupported_contract_version`, "
             "`invalid_payload`, `not_implemented`, `document_not_found`, "
-            "`model_output_invalid`, `city_not_found` or `rate_limited`. "
+            "`model_output_invalid`, `city_not_found`, `rate_limited` or "
+            "`slug_conflict`. "
             "Clients branch on this, never on the text of `error`."
         ),
     )

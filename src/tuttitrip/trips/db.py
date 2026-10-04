@@ -198,7 +198,7 @@ async def select_member_roles(
             TripMember.trip_id == trip_id
         )
     )
-    return dict(result.tuples().all())
+    return {row.user_sub: row.role for row in result.all()}
 
 
 async def delete_member(session: AsyncSession, trip_id: UUID, sub: str) -> None:
@@ -246,5 +246,73 @@ async def delete_trips_owned_by(session: AsyncSession, owner_sub: str) -> int:
     """
     result = await session.execute(
         delete(Trip).where(Trip.owner_sub == owner_sub).returning(Trip.id)
+    )
+    return len(result.all())
+
+
+async def select_hosted_trip_ids(session: AsyncSession, sub: str) -> list[UUID]:
+    """Trips the user hosts.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        Trip ids.
+    """
+    result = await session.scalars(
+        select(TripMember.trip_id).where(
+            TripMember.user_sub == sub, TripMember.role == TripRole.HOST
+        )
+    )
+    return list(result.all())
+
+
+async def select_first_co_host(session: AsyncSession, trip_id: UUID) -> str | None:
+    """The co-host who joined the trip first.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+
+    Returns:
+        Auth0 subject, or None when the trip has no co-host.
+    """
+    return await session.scalar(
+        select(TripMember.user_sub)
+        .where(TripMember.trip_id == trip_id, TripMember.role == TripRole.CO_HOST)
+        .order_by(TripMember.added_at, TripMember.user_sub)
+        .limit(1)
+    )
+
+
+async def hand_over_trip(session: AsyncSession, trip_id: UUID, new_host: str) -> None:
+    """Make an existing member the host and owner (caller commits).
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        new_host: Auth0 subject of the member.
+    """
+    await session.execute(
+        update(Trip).where(Trip.id == trip_id).values(owner_sub=new_host)
+    )
+    await update_member_role(session, trip_id, new_host, TripRole.HOST)
+
+
+async def delete_memberships(session: AsyncSession, sub: str) -> int:
+    """Remove the user from every trip (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        How many memberships were removed.
+    """
+    result = await session.execute(
+        delete(TripMember)
+        .where(TripMember.user_sub == sub)
+        .returning(TripMember.user_sub)
     )
     return len(result.all())

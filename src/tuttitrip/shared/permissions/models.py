@@ -135,3 +135,19 @@ class AccessToken(Base):
     created_by: Mapped[str] = mapped_column(String(SUB_LENGTH))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     last_used_at: Mapped[datetime | None]
+
+
+class AccountBlock(Base):
+    """An account the API refuses (blocked, or deleted in Auth0).
+
+    Auth0 access tokens stay valid until they expire, so every authenticated
+    request checks this table (in the grants query). A deleted account keeps
+    its row for the same reason. The worker role has no grants here.
+    """
+
+    __tablename__ = "account_blocks"
+
+    user_sub: Mapped[str] = mapped_column(String(SUB_LENGTH), primary_key=True)
+    deleted: Mapped[bool] = mapped_column(default=False, server_default=false())
+    blocked_by: Mapped[str] = mapped_column(String(SUB_LENGTH))
+    blocked_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -62,6 +62,8 @@ from tuttitrip.shared.permissions.services.permission_service import (
 
 router = APIRouter()
 
+ACCOUNT_BLOCKED = "Konto zablokowane"
+
 OPENAPI_PERMISSION_KEY = "x-required-permission"
 OPENAPI_PUBLIC_KEY = "x-public"
 OPENAPI_TOKEN_KEY = "x-token-access"  # ruff: ignore[hardcoded-password-string] a header name, not a secret
@@ -72,7 +74,7 @@ ACCESS_TOKEN_HEADER = "X-Access-Token"  # ruff: ignore[hardcoded-password-string
 
 
 async def get_user_grants(user: CurrentUser, session: SessionDep) -> list[Grant]:
-    """Load the caller's grants (one query; skipped for superadmins).
+    """Load the caller's grants and refuse a blocked account (one query).
 
     Args:
         user: The authenticated caller.
@@ -80,10 +82,19 @@ async def get_user_grants(user: CurrentUser, session: SessionDep) -> list[Grant]
 
     Returns:
         Grants from the caller's roles, the default role and direct grants.
+
+    Raises:
+        HTTPException: 403 when the account is blocked or deleted.
     """
     if user.is_admin:
-        return []  # the claim alone grants everything
-    return await permission_service.load_grants(session, user.sub)
+        # The claim alone grants everything, but a blocked account is refused too.
+        grants: list[Grant] = []
+        blocked = await permission_service.is_blocked(session, user.sub)
+    else:
+        grants, blocked = await permission_service.load_access(session, user.sub)
+    if blocked:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, ACCOUNT_BLOCKED)
+    return grants
 
 
 def get_effective_permissions(

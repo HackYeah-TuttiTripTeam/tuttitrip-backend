@@ -65,8 +65,8 @@ def trip_read() -> TripRead:
 @pytest.fixture
 def grants(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """The caller's stored grants; also counts how often they are loaded."""
-    load = AsyncMock(return_value=USER_GRANTS)
-    monkeypatch.setattr(permission_service, "load_grants", load)
+    load = AsyncMock(return_value=(USER_GRANTS, False))
+    monkeypatch.setattr(permission_service, "load_access", load)
 
     @asynccontextmanager
     async def no_session() -> AsyncGenerator[None]:
@@ -182,19 +182,24 @@ def test_a_user_sees_the_tools(client: TestClient) -> None:
 def test_without_mcp_read_the_tool_list_is_empty(
     client: TestClient, grants: AsyncMock
 ) -> None:
-    grants.return_value = [Grant("trips", Access.WRITE)]
+    grants.return_value = ([Grant("trips", Access.WRITE)], False)
     assert tool_names(client) == []
 
 
 def test_without_trips_the_trip_tools_are_hidden(
     client: TestClient, grants: AsyncMock
 ) -> None:
-    grants.return_value = [Grant("mcp", Access.READ)]
+    grants.return_value = ([Grant("mcp", Access.READ)], False)
     assert tool_names(client) == ["whoami"]
 
 
+def test_a_blocked_account_sees_no_tools(client: TestClient, grants: AsyncMock) -> None:
+    grants.return_value = (USER_GRANTS, True)
+    assert tool_names(client) == []
+
+
 def test_a_hidden_tool_cannot_be_called(client: TestClient, grants: AsyncMock) -> None:
-    grants.return_value = [Grant("trips", Access.WRITE)]
+    grants.return_value = ([Grant("trips", Access.WRITE)], False)
     response = rpc(client, "tools/call", {"name": "whoami", "arguments": {}})
     body = response.json()
     assert "error" in body or body["result"]["isError"]

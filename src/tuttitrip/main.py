@@ -5,6 +5,7 @@ Every endpoint, including the OpenAPI document and the docs, is served under
 Run with ``uvicorn tuttitrip.main:app``.
 """
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -30,6 +31,7 @@ from tuttitrip.profiles.feedback.api import router as feedback_router
 from tuttitrip.profiles.preferences.api import router as preferences_router
 from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.admin_users.api import router as admin_users_router
+from tuttitrip.shared.admin_users.services import erasure
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
 from tuttitrip.shared.errors.api import register_error_handlers
@@ -40,11 +42,15 @@ from tuttitrip.shared.permissions.api import router as permissions_router
 from tuttitrip.trips.api import router as trips_router
 from tuttitrip.trips.checkins.api import router as checkins_router
 from tuttitrip.trips.invitations.api import router as invitations_router
+from tuttitrip.trips.invitations.services import invitation_service
+from tuttitrip.trips.services import trip_service
 from tuttitrip.voting.api import router as voting_router
 
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
+
+log = logging.getLogger(__name__)
 
 # Every `api.py` router must be listed here (a test checks it).
 ROUTERS: tuple[APIRouter, ...] = (
@@ -74,6 +80,10 @@ ROUTERS: tuple[APIRouter, ...] = (
     places_router,
 )
 
+# Domain data cleared when an administrator deletes an account.
+erasure.register(trip_service.erase_account)
+erasure.register(invitation_service.erase_account)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
@@ -85,6 +95,11 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     Yields:
         Control while the app is running.
     """
+    if not get_settings().admin.protected_discord_ids:
+        log.warning(
+            "TUTTITRIP_ADMIN__PROTECTED_DISCORD_IDS is empty: superadmin "
+            "accounts are not protected from being blocked or deleted"
+        )
     try:
         yield
     finally:

@@ -135,3 +135,15 @@ async def link_account(
         .returning(Profile.id)
     )
     return result.scalar_one_or_none() is not None
+
+
+async def detach_account_everywhere(session: AsyncSession, sub: str) -> None:
+    """Clear the account link of all the user's profiles (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+    """
+    await session.execute(
+        update(Profile).where(Profile.user_sub == sub).values(user_sub=None)
+    )

@@ -12,6 +12,7 @@ Rules enforced here (the HTTP layer only checks ``admin.permissions``):
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from itertools import groupby, starmap
 from typing import Any
 
@@ -109,6 +110,23 @@ def _audit(
     )
 
 
+async def load_access(session: AsyncSession, sub: str) -> tuple[list[Grant], bool]:
+    """Every grant that applies to a user, and whether the account is blocked.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        The grants (codes not in the registry are kept; resolution skips them)
+        and the blocked flag.
+    """
+    rows, blocked = await db.select_effective_grants(
+        session, sub, default_role=DEFAULT_ROLE, claim_only_role=SUPERADMIN_ROLE
+    )
+    return list(starmap(Grant, rows)), blocked
+
+
 async def load_grants(session: AsyncSession, sub: str) -> list[Grant]:
     """Every grant that applies to a user (roles, default role, direct).
 
@@ -117,12 +135,88 @@ async def load_grants(session: AsyncSession, sub: str) -> list[Grant]:
         sub: Auth0 subject.
 
     Returns:
-        The grants (codes not in the registry are kept; resolution skips them).
+        The grants, whether or not the account is blocked.
     """
-    rows = await db.select_effective_grants(
-        session, sub, default_role=DEFAULT_ROLE, claim_only_role=SUPERADMIN_ROLE
+    return (await load_access(session, sub))[0]
+
+
+async def block_account(
+    session: AsyncSession,
+    actor_sub: str,
+    sub: str,
+    *,
+    deleted: bool = False,
+    change: dict[str, int] | None = None,
+) -> None:
+    """Refuse the account in the API from now on, audit it and commit.
+
+    A deleted account also loses its roles and direct grants.
+
+    Args:
+        session: Open session.
+        actor_sub: Auth0 subject of the admin.
+        sub: Auth0 subject of the account.
+        deleted: Whether the account was deleted in Auth0.
+        change: Counts of what a deletion cleaned up, for the audit entry.
+    """
+    await db.upsert_account_block(session, sub, deleted=deleted, blocked_by=actor_sub)
+    if deleted:
+        await db.delete_user_access(session, sub)
+    db.add_audit(
+        session,
+        PermissionAudit(
+            actor_sub=actor_sub,
+            action="user.delete" if deleted else "user.block",
+            change=change or {},
+            target_sub=sub,
+        ),
     )
-    return list(starmap(Grant, rows))
+    await session.commit()
+
+
+async def revoke_issued_tokens(session: AsyncSession, sub: str) -> dict[str, int]:
+    """Revoke the profile access tokens the account issued (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject of the issuer.
+
+    Returns:
+        ``access_tokens_revoked``.
+    """
+    revoked = await db.revoke_tokens_created_by(session, sub, datetime.now(UTC))
+    return {"access_tokens_revoked": revoked}
+
+
+async def is_blocked(session: AsyncSession, sub: str) -> bool:
+    """Tell whether the account is blocked or deleted.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        True when a block row exists.
+    """
+    return await db.select_account_block(session, sub) is not None
+
+
+async def unblock_account(session: AsyncSession, actor_sub: str, sub: str) -> None:
+    """Lift the block, audit it and commit.
+
+    Args:
+        session: Open session.
+        actor_sub: Auth0 subject of the admin.
+        sub: Auth0 subject of the account.
+    """
+    await db.delete_account_block(session, sub)
+    db.add_audit(
+        session,
+        PermissionAudit(
+            actor_sub=actor_sub, action="user.unblock", change={}, target_sub=sub
+        ),
+    )
+    await session.commit()
 
 
 def feature_tree(node: Feature = Feature.ROOT) -> FeatureNode:

@@ -526,3 +526,15 @@ async def set_weights(
         profiles[pid].weight = weight
     await session.commit()
     return [_read(p) for p in profiles.values()]
+
+
+async def detach_account(session: AsyncSession, sub: str) -> None:
+    """Detach a deleted account from all its profiles; the people stay.
+
+    Flushes only, the caller commits.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject of the deleted account.
+    """
+    await db.detach_account_everywhere(session, sub)

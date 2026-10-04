@@ -4,6 +4,9 @@ Credentials come from settings only and are never logged. The token is kept in
 process memory until shortly before it expires. Auth0 sits behind Cloudflare,
 which blocks the default Python user agent, hence the explicit ``User-Agent``.
 User search (``GET /api/v2/users``) reaches only the first 1000 matches.
+
+M2M scopes used: ``read:users`` (list, read), ``update:users`` (block, unblock,
+rename), ``delete:users`` (delete).
 """
 
 import asyncio
@@ -27,6 +30,7 @@ USER_AGENT = "TuttiTripBackend/1.0 (+https://tuttitrip.gburek.app)"
 TIMEOUT_SECONDS = 10.0
 SEARCH_WINDOW = 1000
 TOKEN_MARGIN_SECONDS = 60
+NOT_FOUND_REASON = "status_404"
 _LUCENE_SPECIAL = re.compile(r'([+\-&|!(){}\[\]^"~*?:\\/])')
 
 
@@ -47,6 +51,16 @@ class _Reason(StrEnum):
     TIMEOUT = "timeout"
     NETWORK = "network"
     BAD_BODY = "bad_body"
+
+
+def _user_path(sub: str) -> str:
+    return f"users/{quote(sub, safe='')}"
+
+
+def _check_status(code: int) -> None:
+    if code not in {httpx.codes.OK, httpx.codes.NO_CONTENT}:
+        reason = f"status_{code}"
+        raise ManagementError(reason)
 
 
 def build_client() -> httpx.AsyncClient:
@@ -162,22 +176,40 @@ class ManagementClient:
         json: dict[str, Any] | None = None,
         params: dict[str, str | int] | None = None,
         token: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> Any:  # ruff: ignore[any-type]  # a decoded JSON document
+
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         try:
             response = await self._http.request(
                 method, url, json=json, params=params, headers=headers
             )
-            if response.status_code != httpx.codes.OK:
-                reason = f"status_{response.status_code}"
-                raise ManagementError(reason)
-            body = response.json()
+            _check_status(response.status_code)
+            body = (
+                {}
+                if response.status_code == httpx.codes.NO_CONTENT
+                else response.json()
+            )
         except httpx.TimeoutException:
             raise ManagementError(_Reason.TIMEOUT) from None
         except httpx.HTTPError:
             raise ManagementError(_Reason.NETWORK) from None
         except ValueError:
             raise ManagementError(_Reason.BAD_BODY) from None
+        return body
+
+    async def _object(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        body = await self._send(
+            method,
+            f"https://{self._auth0.domain}/api/v2/{path}",
+            json=json,
+            token=await self._access_token(),
+        )
         if not isinstance(body, dict):
             raise ManagementError(_Reason.BAD_BODY)
         return cast("dict[str, Any]", body)
@@ -243,3 +275,26 @@ class ManagementClient:
             json=changes,
             token=token,
         )
+
+    async def set_blocked(self, sub: str, *, blocked: bool) -> None:
+        """Block or unblock an account (scope ``update:users``).
+
+        Args:
+            sub: Auth0 user id.
+            blocked: The new state.
+
+        Raises:
+            ManagementError: Auth0 refused or failed.
+        """
+        await self._object("PATCH", _user_path(sub), json={"blocked": blocked})
+
+    async def delete_user(self, sub: str) -> None:
+        """Delete an account (scope ``delete:users``).
+
+        Args:
+            sub: Auth0 user id.
+
+        Raises:
+            ManagementError: Auth0 refused or failed (404 means already gone).
+        """
+        await self._object("DELETE", _user_path(sub))
