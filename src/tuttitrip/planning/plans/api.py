@@ -1,26 +1,34 @@
 """Plan endpoints (nested under a trip)."""
 
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 
+from tuttitrip.places.candidates.services import candidate_service
+from tuttitrip.planning.anyway.services import anyway_service
 from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
 from tuttitrip.planning.plans.schemas import (
     NotApprovedDetail,
     NotApprovedError,
+    PlanCatalogMissing,
     PlanCreate,
+    PlanProgressRead,
     PlanRead,
     ReplanRead,
     ReplanRequest,
 )
 from tuttitrip.planning.plans.services import plan_service, replan_service
 from tuttitrip.planning.plans.services.plan_service import (
+    CatalogMissingError,
     PlanInputError,
     PlanNotApprovedError,
     PlanNotFoundError,
 )
 from tuttitrip.shared.db.api import SessionDep
+from tuttitrip.shared.jobs.api import JobQueueDep
+from tuttitrip.shared.jobs.contracts import Locale
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.api import TripMember
@@ -29,6 +37,9 @@ router = APIRouter(prefix="/trips/{trip_id}/plans", tags=["planning"])
 
 EXAMPLE_TRIP_ID = UUID("00000000-0000-4000-8000-000000000042")
 NOT_FOUND = {404: {"description": "Trip not found, or the caller is not on it."}}
+LocaleQuery = Annotated[
+    Locale, Query(description="Language of the verdict justifications.")
+]
 
 
 def plan_examples() -> dict[str, dict[str, object]]:
@@ -66,6 +77,9 @@ def plan_examples() -> dict[str, dict[str, object]]:
         "result does not depend on who asks. `explain` is limited to the caller's "
         "own cards below the co-host role, because the effort of a person depends "
         "on their health limits; the ledger (`u`, `r`, domains) is visible to all. "
+        "A new version asks the worker for the justifications of the verdicts; "
+        "they carry a template until the model text is ready. A city without "
+        "places answers 409 `catalog_missing` with the job that fetches candidates. "
         "The examples show the response shape."
     ),
     responses={
@@ -73,12 +87,18 @@ def plan_examples() -> dict[str, dict[str, object]]:
         200: {"model": PlanRead, "description": "Existing version for the same input."},
         201: {"content": {"application/json": {"examples": plan_examples()}}},
         403: {"description": "Missing the `planning.plans:WRITE` permission."},
+        409: {
+            "model": PlanCatalogMissing,
+            "description": "The trip's city has no places (`detail.code` is "
+            "`catalog_missing`, `detail.job_id` the candidate fetch).",
+        },
         422: {"description": "The trip lacks dates, a city or people."},
     },
     dependencies=[requires(Feature.PLANNING_PLANS, Access.WRITE)],
 )
 async def create_plan(
     session: SessionDep,
+    queue: JobQueueDep,
     membership: TripMember,
     response: Response,
     data: PlanCreate | None = None,
@@ -87,23 +107,70 @@ async def create_plan(
 
     Args:
         session: Database session.
+        queue: Job queue (justifications, candidate fetch).
         membership: The caller's membership of ``{trip_id}``.
         response: Used to answer 200 for an existing version.
-        data: Optional alpha and weight preset.
+        data: Optional alpha, weight preset and locale.
 
     Returns:
         The stored version.
 
     Raises:
-        HTTPException: 422 when the trip cannot be planned yet.
+        HTTPException: 422 when the trip cannot be planned yet, 409 when the
+            city has no places.
     """
     try:
-        plan, created = await plan_service.generate_plan(session, membership, data)
+        plan, created = await plan_service.generate_plan(
+            session, membership, data, queue=queue
+        )
+    except CatalogMissingError as exc:
+        job_id = await candidate_service.job_for_missing_catalog(
+            session, queue, membership.sub, exc.city_slug
+        )
+        detail = PlanCatalogMissing(
+            message=f"No places in the catalog of '{exc.city_slug}' yet",
+            city_slug=exc.city_slug,
+            job_id=job_id,
+        )
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail.model_dump(mode="json")
+        ) from exc
     except PlanInputError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if not created:
         response.status_code = status.HTTP_200_OK
+    else:
+        await anyway_service.request_justifications(
+            session, queue, plan.id, plan.anyway, owner=membership.sub
+        )
     return plan
+
+
+@router.get(
+    "/progress",
+    summary="Stage of the plan computation that is running",
+    description=(
+        "Poll while `POST .../plans` is in flight (about every 500 ms). Returns "
+        "the stage (`catalogue`, `reference`, `search`, `floors`, `budget`, "
+        "`verdicts`; `item` of `items` inside a stage that has units) or `null` "
+        "when no plan is being computed for the trip. Any member may read it. "
+        "Only the stage is exposed, never data, and it does not affect the plan "
+        "or its `plan_hash`. A plan answered from an existing version has no "
+        "stages, so the answer is `null`."
+    ),
+    responses={**NOT_FOUND},
+    dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
+)
+async def get_plan_progress(membership: TripMember) -> PlanProgressRead | None:
+    """Stage of the running computation.
+
+    Args:
+        membership: The caller's membership of ``{trip_id}``.
+
+    Returns:
+        The stage, or None when nothing is being computed.
+    """
+    return plan_service.computation_progress(membership.trip_id)
 
 
 @router.get(
@@ -118,12 +185,19 @@ async def create_plan(
     },
     dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
 )
-async def get_latest_plan(session: SessionDep, membership: TripMember) -> PlanRead:
+async def get_latest_plan(
+    session: SessionDep,
+    queue: JobQueueDep,
+    membership: TripMember,
+    locale: LocaleQuery = "pl",
+) -> PlanRead:
     """Latest plan.
 
     Args:
         session: Database session.
+        queue: Job queue (justifications).
         membership: The caller's membership of ``{trip_id}``.
+        locale: Language of the justifications.
 
     Returns:
         The newest version.
@@ -132,7 +206,7 @@ async def get_latest_plan(session: SessionDep, membership: TripMember) -> PlanRe
         HTTPException: 404 when there is no plan.
     """
     try:
-        return await plan_service.latest_plan(session, membership)
+        return await plan_service.latest_plan(session, membership, locale, queue=queue)
     except PlanNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No plan yet") from exc
 
@@ -144,14 +218,20 @@ async def get_latest_plan(session: SessionDep, membership: TripMember) -> PlanRe
     dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
 )
 async def get_plan(
-    session: SessionDep, membership: TripMember, plan_id: UUID
+    session: SessionDep,
+    queue: JobQueueDep,
+    membership: TripMember,
+    plan_id: UUID,
+    locale: LocaleQuery = "pl",
 ) -> PlanRead:
     """One stored version.
 
     Args:
         session: Database session.
+        queue: Job queue (justifications).
         membership: The caller's membership of ``{trip_id}``.
         plan_id: Version id.
+        locale: Language of the justifications.
 
     Returns:
         The version.
@@ -160,7 +240,9 @@ async def get_plan(
         HTTPException: 404 when the trip has no such version.
     """
     try:
-        return await plan_service.get_plan(session, membership, plan_id)
+        return await plan_service.get_plan(
+            session, membership, plan_id, locale, queue=queue
+        )
     except PlanNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
 

@@ -76,6 +76,19 @@ class Candidates:
         return tuple(r for r in self.rejections if r.place_id == place_id)
 
 
+def _stairs_rejected(
+    place: PlaceRead, person: PlanningPerson, params: AlgorithmParams
+) -> bool:
+    # Unknown stairs are never "no stairs": someone who cannot take any stairs
+    # needs the place verified step-free (wheelchair = yes) to keep it.
+    if place.stairs is None:
+        return (
+            person.stairs_sensitivity >= params.stairs_limit - _EPS
+            and place.wheelchair is not True
+        )
+    return place.stairs * person.stairs_sensitivity >= params.stairs_limit - _EPS
+
+
 def _person_rejections(
     person: PlanningPerson, place: PlaceRead, params: AlgorithmParams
 ) -> list[Rejection]:
@@ -86,7 +99,7 @@ def _person_rejections(
     # (s_i), that one is the whole day's distance (D_i).
     if place.segment_km > params.segment_factor * person.segment_km + _EPS:
         found.append(Rejection(place.id, RejectionCode.SEGMENT, person.id))
-    if place.stairs * person.stairs_sensitivity >= params.stairs_limit - _EPS:
+    if _stairs_rejected(place, person, params):
         found.append(Rejection(place.id, RejectionCode.STAIRS, person.id))
     return found
 

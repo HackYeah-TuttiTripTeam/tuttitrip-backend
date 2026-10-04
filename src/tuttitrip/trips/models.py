@@ -59,6 +59,8 @@ class Trip(Base):
     propose_cheaper_alternatives: Mapped[bool] = mapped_column(
         server_default=text("true")
     )
+    # The copy of the sample trip every new account gets (name "Przykład: ...").
+    is_sample: Mapped[bool] = mapped_column(server_default=text("false"))
 
 
 class TripMember(Base):

@@ -323,12 +323,23 @@ class PlaceRead(BaseModel):
     segment_km: float = Field(description="Walking segment at the place (d_p), km.")
     transfer_min: int = Field(description="Fixed transfer time (transfer_p), min.")
     queue_min: int = Field(description="Typical queue, min.")
-    stairs: float = Field(ge=0, le=1, description="Stairs burden, 0 to 1.")
+    stairs: float | None = Field(
+        ge=0,
+        le=1,
+        description="Stairs burden, 0 to 1. Null when unknown (not the same as 0).",
+    )
     wheelchair: bool | None
     indoor: bool | None = Field(
         description="Null when unknown (not the same as outdoors)."
     )
     iconic: bool
+    unique_experience: bool = Field(
+        default=False,
+        description=(
+            "A one-off experience of the place (not a landmark); like `iconic`, it "
+            'makes the place a candidate for the daily "anyway" suggestion.'
+        ),
+    )
     cuisine: Cuisine | None
     diet_tags: list[DietTag]
     amenities: list[Amenity] = Field(description="Lodging amenities.")
