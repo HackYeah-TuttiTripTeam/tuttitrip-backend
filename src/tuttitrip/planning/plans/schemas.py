@@ -17,6 +17,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from tuttitrip.accommodation.schemas import RequirementStatus
+from tuttitrip.planning.logic.progress import PlanStep
 from tuttitrip.profiles.feedback.schemas import ReasonCode
 
 Money = Annotated[Decimal, Field(ge=0, decimal_places=2, max_digits=12)]
@@ -235,6 +236,24 @@ class PlanCreate(BaseModel):
             "on the computation yet: the weights come from the profiles "
             "(`PUT /trips/{id}/profiles/weights`)."
         ),
+    )
+
+
+class PlanProgressRead(BaseModel):
+    """Where the computation of the trip's plan is."""
+
+    step: PlanStep = Field(description="Stage of docs/algorytm.md being computed.")
+    position: int = Field(
+        ge=1, description="1-based place of `step` among the stages, in order."
+    )
+    total: int = Field(ge=1, description="Number of stages (some may be skipped).")
+    item: int | None = Field(
+        default=None,
+        ge=1,
+        description="1-based unit of work in the stage (e.g. person 2 of 4).",
+    )
+    items: int | None = Field(
+        default=None, ge=1, description="Units in the stage; set with `item`."
     )
 
 

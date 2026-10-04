@@ -25,10 +25,18 @@ from tuttitrip.planning.fairness.logic.welfare import welfare
 from tuttitrip.planning.logic.domains import RequirementOutcome
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.plan_group import GroupPlan, plan_group
+from tuttitrip.planning.logic.progress import (
+    PlanProgress,
+    PlanStep,
+    ProgressSink,
+    ignore_progress,
+)
 from tuttitrip.planning.logic.solver import Solver, solve
 from tuttitrip.planning.schemas import LodgingStay, PlanningInput, PlanningPerson
 from tuttitrip.profiles.preferences.schemas import POOL_TOTAL
 
+CONSENT_PLANS = 2
+"""Plans computed for the consent question after the first one: strict and cheaper."""
 _CENT = Decimal("0.01")
 _EPS = 1e-9  # thresholds are exact in the spec; floats are not
 
@@ -159,6 +167,7 @@ def plan_with_consent(  # ruff: ignore[too-many-arguments] the whole input of E6
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
     max_evaluations: int | None = None,
     solver: Solver = solve,
+    progress: ProgressSink = ignore_progress,
 ) -> BudgetDecision:
     """Compute the group plan and decide whether it needs the host's consent.
 
@@ -170,13 +179,18 @@ def plan_with_consent(  # ruff: ignore[too-many-arguments] the whole input of E6
         lodging_outcomes: The trip's lodging requirements checked against it.
         max_evaluations: Work limit of every run.
         solver: The solver of every run (default: the local search).
+        progress: Told which stage is running; it never changes the result. The
+            solo runs, the search and the floors are reported for the first plan
+            only; the two plans of the consent question are the ``budget`` stage.
 
     Returns:
         The decision; with a cost within ``B_do`` there is one run and no consent.
     """
 
     def run(
-        cost_cap: Decimal | None = None, u_star: Mapping[UUID, float] | None = None
+        cost_cap: Decimal | None = None,
+        u_star: Mapping[UUID, float] | None = None,
+        sink: ProgressSink = ignore_progress,
     ) -> GroupPlan:
         return plan_group(
             data,
@@ -188,10 +202,12 @@ def plan_with_consent(  # ruff: ignore[too-many-arguments] the whole input of E6
             cost_cap=cost_cap,
             u_star=u_star,
             solver=solver,
+            progress=sink,
         )
 
-    flex = run()
+    flex = run(sink=progress)
     budget_to = data.trip.budget_to
+    progress(PlanProgress(PlanStep.BUDGET))
     if flex.plan.cost.total <= budget_to:
         return BudgetDecision(
             chosen=flex,
@@ -204,7 +220,9 @@ def plan_with_consent(  # ruff: ignore[too-many-arguments] the whole input of E6
             runs=1,
         )
     reference = {r.person_id: r.u_star for r in flex.people}
+    progress(PlanProgress(PlanStep.BUDGET, 1, CONSENT_PLANS))
     strict = run(budget_to, reference)
+    progress(PlanProgress(PlanStep.BUDGET, 2, CONSENT_PLANS))
     margin = Decimal(str(params.cheaper_margin)) * budget_to
     cheaper = run(flex.plan.cost.total - margin, reference)
     return decide(data, flex, strict, cheaper, alpha=alpha, params=params)

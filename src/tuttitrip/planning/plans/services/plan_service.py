@@ -24,6 +24,12 @@ from tuttitrip.planning.budget_approvals.services import approval_service
 from tuttitrip.planning.logic import what_if
 from tuttitrip.planning.logic.budget_consent import plan_with_consent
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
+from tuttitrip.planning.logic.progress import (
+    PLAN_STEPS,
+    PlanProgress,
+    PlanStep,
+    ProgressSink,
+)
 from tuttitrip.planning.logic.upgrades import find_upgrades
 from tuttitrip.planning.overrides import db as overrides_db
 from tuttitrip.planning.plans import db
@@ -43,8 +49,10 @@ from tuttitrip.planning.plans.schemas import (
     ApprovalStatus,
     PlanAssumptions,
     PlanCreate,
+    PlanProgressRead,
     PlanRead,
 )
+from tuttitrip.planning.plans.services import plan_progress
 from tuttitrip.planning.proposals.services import proposal_service
 from tuttitrip.planning.schemas import PlanningInput, WhatIfTarget
 from tuttitrip.planning.services.solver_service import configured_solver
@@ -221,19 +229,26 @@ class _Computed(_Stored):
     alternative: _Stored | None
 
 
-def _compute(
+def _compute(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] one computation's input
     planning: PlanningInput,
     params: AlgorithmParams,
     alpha: float,
     names: Mapping[UUID, str],
     alternative_id: UUID,
+    progress: ProgressSink,
 ) -> _Computed:
     # Runs in a worker thread: N solo runs, the group plan and, when the plan goes
     # over B_do, P_strict and the cheaper alternative (E6).
     started = time.perf_counter()
+    progress(PlanProgress(PlanStep.CATALOGUE))
     decision = plan_with_consent(
-        planning, params, alpha=alpha, solver=configured_solver().solver
+        planning,
+        params,
+        alpha=alpha,
+        solver=configured_solver().solver,
+        progress=progress,
     )
+    progress(PlanProgress(PlanStep.VERDICTS))
     chosen = decision.chosen
     verdicts = build_verdicts(planning, chosen.plan.place_ids)
     upgrades = find_upgrades(planning, chosen, params, alpha=alpha)
@@ -315,9 +330,10 @@ async def generate_plan(
     await session.rollback()  # do not hold a transaction while computing
 
     alternative_id = uuid.uuid4()
-    computed = await anyio.to_thread.run_sync(
-        partial(_compute, planning, params, alpha, names, alternative_id)
-    )
+    with plan_progress.track(membership.trip_id) as progress:
+        computed = await anyio.to_thread.run_sync(
+            partial(_compute, planning, params, alpha, names, alternative_id, progress)
+        )
 
     await db.lock_trip_plans(session, membership.trip_id)
     latest = await db.select_latest(session, membership.trip_id)
@@ -361,6 +377,27 @@ async def generate_plan(
     await session.commit()
     await session.refresh(row)
     return await _read(session, membership, row), True
+
+
+def computation_progress(trip_id: UUID) -> PlanProgressRead | None:
+    """The stage of the trip's plan computation that is running now.
+
+    Args:
+        trip_id: Trip id (the caller's membership is already checked).
+
+    Returns:
+        The stage, or None when no plan is being computed for the trip.
+    """
+    event = plan_progress.current(trip_id)
+    if event is None:
+        return None
+    return PlanProgressRead(
+        step=event.step,
+        position=event.position,
+        total=len(PLAN_STEPS),
+        item=event.item,
+        items=event.items,
+    )
 
 
 async def latest_plan(session: AsyncSession, membership: TripMembership) -> PlanRead:
