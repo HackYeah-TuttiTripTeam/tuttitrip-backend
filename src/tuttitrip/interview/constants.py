@@ -5,8 +5,8 @@ from typing import Final
 from tuttitrip.interview.schemas import CardKind, QuestionField
 
 CARD_OF_FIELD: Final[dict[QuestionField, CardKind]] = {
-    QuestionField.DESTINATION: CardKind.CHOICE,
-    QuestionField.DATES: CardKind.CHOICE,
+    QuestionField.DESTINATION: CardKind.CITY,
+    QuestionField.DATES: CardKind.DATE_RANGE,
     QuestionField.PEOPLE: CardKind.FAMILY_BUILDER,
     QuestionField.BUDGET: CardKind.BUDGET_RANGE,
     QuestionField.PACE: CardKind.SLIDER,
@@ -45,6 +45,22 @@ RUN_VOICE: Final = "voice"
 
 SHOW_CARD_TOOL: Final = "show_card"
 """Name of the tool that puts a card on the screen."""
+
+NO_OPTION_CARDS: Final = frozenset({CardKind.CITY, CardKind.DATE_RANGE})
+"""Cards whose answer is typed or picked by the client: they never carry options."""
+
+OPTION_CARDS: Final = frozenset({CardKind.CHOICE, CardKind.CONFIRM})
+"""Cards that are only their options (the model may supply them)."""
+
+NOT_ASKED_PREFIXES: Final = ("NOT SAVED", "NOT BUILT")
+"""Tool results of an assistant that waits for the host to decide."""
+
+CARD_NUDGE: Final = (
+    "You put no card on the screen. Call show_card now for the next question: "
+    "{question}. Word the question in one short sentence of the organizer's "
+    "language and do not repeat your previous text."
+)
+"""The one reminder of a turn whose model asked in plain text (``question`` is JSON)."""
 
 DEFAULT_CURRENCY: Final = "PLN"
 """Currency of a budget the host gives without naming one."""
@@ -137,8 +153,11 @@ VOICE_INSTRUCTIONS: Final = (
     "This is a live voice call with the organizer of a group trip. They speak "
     "{language}: answer only in {language} and take everything you hear as "
     "{language}. Speak in short, natural sentences, ask one question at a time "
-    "and do not read lists aloud. Do not use show_card: ask the question out "
-    "loud instead.\n"
+    "and do not read lists aloud. The organizer also has a screen next to the "
+    "captions: put each question that has a card on it with show_card, using "
+    "the kind, field and person_id of Next question, and also say the "
+    "question in one short sentence. The organizer may tap the card instead of "
+    "answering aloud; the tap arrives as their next message.\n"
     "Tools: everything the organizer says about the trip, people, budget, "
     "limits, diet or interests is saved with a tool in the same turn. A tool "
     "can take a few seconds. After you call a tool, say nothing about it until "

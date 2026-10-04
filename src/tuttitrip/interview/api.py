@@ -19,6 +19,7 @@ from tuttitrip.interview.schemas import (
     MessagesQuery,
     SessionRead,
     VoiceAnswer,
+    VoiceCardRead,
     VoiceOffer,
 )
 from tuttitrip.interview.services import (
@@ -288,6 +289,33 @@ async def voice_hangup(call_id: str, membership: TripCoHost) -> None:
     """
     try:
         await voice_service.hang_up(membership, call_id)
+    except voice_service.CallNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_CALL) from exc
+
+
+@router.get(
+    "/voice/{call_id}/card",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "No such live call on this trip."}
+    },
+    dependencies=[requires(Feature.INTERVIEW, Access.READ)],
+)
+async def voice_card(call_id: str, membership: TripCoHost) -> VoiceCardRead:
+    """The card of a live call, for the client to show next to the captions.
+
+    A voice call has no AG-UI stream, so the client polls this while the call
+    runs (the panel is polled the same way). The kind and options are the ones
+    the server fixed, not the model's.
+
+    Args:
+        call_id: The id from the offer's answer.
+        membership: The caller's membership (co-host or above).
+
+    Returns:
+        The card the assistant last showed, or null.
+    """
+    try:
+        return VoiceCardRead(card=voice_service.shown_card(membership, call_id))
     except voice_service.CallNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_CALL) from exc
 

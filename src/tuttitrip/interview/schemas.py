@@ -27,6 +27,8 @@ class CardKind(StrEnum):
     BUDGET_RANGE = "budget_range"
     CHOICE = "choice"
     CONFIRM = "confirm"
+    CITY = "city"
+    DATE_RANGE = "date_range"
 
 
 class QuestionField(StrEnum):
@@ -277,6 +279,18 @@ class VoiceOffer(BaseModel):
         description=(
             "Language of the call: the assistant speaks it and the speech is "
             "transcribed in it."
+        ),
+    )
+
+
+class VoiceCardRead(BaseModel):
+    """The card of a live call; a call has no stream, so the client polls for it."""
+
+    card: ShownCard | None = Field(
+        default=None,
+        description=(
+            "The card the assistant put on screen last, with the kind and options "
+            "the server fixed; null before the first one."
         ),
     )
 
