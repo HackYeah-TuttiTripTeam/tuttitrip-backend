@@ -320,6 +320,12 @@ class PlaceRead(BaseModel):
         "No row means the price is unknown (unverified)."
     )
     typical_visit_min: int = Field(description="Typical visit length (tau_p), min.")
+    description: str | None = Field(
+        default=None, description="Short text from the worker's web research."
+    )
+    child_friendly: bool | None = Field(
+        default=None, description="Null when unknown; from the web research."
+    )
     segment_km: float = Field(description="Walking segment at the place (d_p), km.")
     transfer_min: int = Field(description="Fixed transfer time (transfer_p), min.")
     queue_min: int = Field(description="Typical queue, min.")
