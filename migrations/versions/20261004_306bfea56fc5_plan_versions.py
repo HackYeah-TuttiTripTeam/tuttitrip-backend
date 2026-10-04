@@ -1,7 +1,7 @@
 """Plan versions.
 
 Revision ID: 306bfea56fc5
-Revises: a80c0de11b01
+Revises: 28a40fb2f40e
 Create Date: 2026-10-04 03:36:24.618025
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "306bfea56fc5"
-down_revision: str | None = "a80c0de11b01"
+down_revision: str | None = "28a40fb2f40e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
