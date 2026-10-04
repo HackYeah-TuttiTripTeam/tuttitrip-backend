@@ -17,6 +17,7 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from tuttitrip.accommodation.schemas import RequirementStatus
+from tuttitrip.planning.logic.progress import PlanStep
 from tuttitrip.profiles.feedback.schemas import ReasonCode
 from tuttitrip.shared.jobs.contracts import Locale
 
@@ -260,6 +261,24 @@ class PlanCreate(BaseModel):
             "Language of the verdict justifications the worker writes for this "
             "version (read them with the same `locale`)."
         ),
+    )
+
+
+class PlanProgressRead(BaseModel):
+    """Where the computation of the trip's plan is."""
+
+    step: PlanStep = Field(description="Stage of docs/algorytm.md being computed.")
+    position: int = Field(
+        ge=1, description="1-based place of `step` among the stages, in order."
+    )
+    total: int = Field(ge=1, description="Number of stages (some may be skipped).")
+    item: int | None = Field(
+        default=None,
+        ge=1,
+        description="1-based unit of work in the stage (e.g. person 2 of 4).",
+    )
+    items: int | None = Field(
+        default=None, ge=1, description="Units in the stage; set with `item`."
     )
 
 
