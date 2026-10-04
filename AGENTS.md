@@ -53,6 +53,7 @@ src/tuttitrip/
     llm/               Pydantic AI model catalog (services/model_catalog.py)
     pagination/        list contract: PageParams, Page[T], BulkSelection (paginate()/selected() are in db/pagination.py)
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
+  accounts/            own Auth0 account: PATCH /api/v1/me/account (name, e-mail+password accounts only)
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
   voting/              vote links for people without an account, host's vote summary

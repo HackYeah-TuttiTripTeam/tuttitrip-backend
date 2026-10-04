@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastmcp.utilities.lifespan import combine_lifespans
 
 from tuttitrip.accommodation.api import router as accommodation_router
+from tuttitrip.accounts.api import router as accounts_router
 from tuttitrip.demo.api import internal_router as demo_internal_router
 from tuttitrip.demo.api import router as demo_router
 from tuttitrip.expenses.api import router as expenses_router
@@ -49,6 +50,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     health_router,
     permissions_router,
     admin_users_router,
+    accounts_router,
     jobs_router,
     demo_router,
     demo_internal_router,
