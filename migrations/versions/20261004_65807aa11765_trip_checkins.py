@@ -1,7 +1,7 @@
 """Trip checkins.
 
 Revision ID: 65807aa11765
-Revises: a7bad57ce3b3
+Revises: b81e5c2a7d14
 Create Date: 2026-10-04 02:23:07.815815
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "65807aa11765"
-down_revision: str | None = "a7bad57ce3b3"
+down_revision: str | None = "b81e5c2a7d14"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
