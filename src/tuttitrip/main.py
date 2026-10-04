@@ -37,6 +37,7 @@ from tuttitrip.shared.jobs.api import router as jobs_router
 from tuttitrip.shared.permissions.api import document_permissions
 from tuttitrip.shared.permissions.api import router as permissions_router
 from tuttitrip.trips.api import router as trips_router
+from tuttitrip.trips.checkins.api import router as checkins_router
 from tuttitrip.trips.invitations.api import router as invitations_router
 from tuttitrip.voting.api import router as voting_router
 
@@ -54,6 +55,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     demo_internal_router,
     trips_router,
     invitations_router,
+    checkins_router,
     voting_router,
     profiles_router,
     feedback_router,
