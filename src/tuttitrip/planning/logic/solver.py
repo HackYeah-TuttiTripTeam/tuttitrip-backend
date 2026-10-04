@@ -41,6 +41,10 @@ from tuttitrip.planning.fairness.logic.objective import (
     group_objective,
     rank_key,
 )
+from tuttitrip.planning.fairness.logic.violations import (
+    TagRequirement,
+    tag_requirements,
+)
 from tuttitrip.planning.fairness.schemas import FairnessReport
 from tuttitrip.planning.logic.cost import PlaceCost, PlanCost, place_cost, plan_cost
 from tuttitrip.planning.logic.domains import RequirementOutcome
@@ -72,6 +76,7 @@ _CENT = Decimal("0.01")
 Assignment = tuple[tuple[UUID, ...], ...]
 """Per day (in date order) the chosen place ids, sorted by id."""
 _Key = tuple[float, Decimal, tuple[str, ...]]
+_DayKey = tuple[int, tuple[UUID, ...]]
 
 
 class SolverConflict(StrEnum):
@@ -186,6 +191,15 @@ class PlanEvaluator:
             sorted(self.filtered.accepted, key=lambda p: str(p.id))
         )
         self.places: dict[UUID, PlaceRead] = {p.id: p for p in self.candidates}
+        self.requirements: dict[UUID, tuple[TagRequirement, ...]] = {
+            person.id: tag_requirements(
+                person,
+                self.candidates,
+                has_lodging=trip.has_lodging,
+                params=params,
+            )
+            for person in self.people
+        }
         self.utilities: dict[UUID, dict[UUID, float]] = {
             person.id: {
                 p.id: utility(person, p, has_lodging=trip.has_lodging, params=params)
@@ -208,9 +222,7 @@ class PlanEvaluator:
         self.schedulers = tuple(
             Person(p.id, p.daily_km, p.nap_start, p.nap_minutes) for p in self.people
         )
-        self._schedule_cache: dict[
-            tuple[int, tuple[UUID, ...]], DaySchedule | None
-        ] = {}
+        self._schedule_cache: dict[_DayKey, DaySchedule | None] = {}
         self._cache: dict[Assignment, Evaluation | None] = {}
         self.evaluations = 0
 
@@ -283,6 +295,8 @@ class PlanEvaluator:
             days=days,
             places=self.places,
             candidates=self.candidates,
+            has_lodging=self.trip.has_lodging,
+            requirements=self.requirements,
             alpha=self.alpha,
             params=self.params,
         )
@@ -421,16 +435,24 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
     ]
     if evaluator.lodging_over_cap:
         conflicts.append((SolverConflict.LODGING_OVER_CAP, None))
+    must = _sorted_ids([m for m in data.must if m in evaluator.places])
+    best, steps, unplaceable = _search(evaluator, must, max_evaluations)
+    conflicts.extend(unplaceable)
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return _result(evaluator, best, conflicts, steps, elapsed_ms)
+
+
+def _search(
+    evaluator: PlanEvaluator, must: Sequence[UUID], max_evaluations: int
+) -> tuple[Evaluation, int, list[tuple[SolverConflict, UUID | None]]]:
+    # Must places first, then adds only, then the whole neighbourhood until stuck.
     empty: Assignment = tuple(() for _ in evaluator.windows)
     start = evaluator.evaluate(empty)
     if start is None:  # pragma: no cover - an empty plan has no hard constraint
         msg = "The empty plan must be feasible"
         raise RuntimeError(msg)
-    must = _sorted_ids([m for m in data.must if m in evaluator.places])
     current, unplaceable = _place_musts(evaluator, start, must)
-    conflicts.extend(unplaceable)
     must_set = frozenset(must)
-
     steps = 0
     phase_adds = True
     while evaluator.evaluations < max_evaluations:
@@ -448,13 +470,7 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
             phase_adds = False
         else:
             break
-    return _result(
-        evaluator,
-        current,
-        conflicts,
-        steps,
-        int((time.perf_counter() - started) * 1000),
-    )
+    return current, steps, unplaceable
 
 
 def _result(
