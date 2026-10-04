@@ -16,6 +16,7 @@ from fastmcp.utilities.lifespan import combine_lifespans
 
 from tuttitrip.accommodation.api import router as accommodation_router
 from tuttitrip.accounts.api import router as accounts_router
+from tuttitrip.demo.api import admin_router as demo_admin_router
 from tuttitrip.demo.api import internal_router as demo_internal_router
 from tuttitrip.demo.api import router as demo_router
 from tuttitrip.expenses.api import router as expenses_router
@@ -31,6 +32,7 @@ from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.planning.overrides.api import router as overrides_router
+from tuttitrip.planning.parameters.api import router as parameters_router
 from tuttitrip.planning.plans.api import router as plans_router
 from tuttitrip.profiles.api import router as profiles_router
 from tuttitrip.profiles.feedback.api import router as feedback_router
@@ -77,6 +79,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     jobs_router,
     demo_router,
     demo_internal_router,
+    demo_admin_router,
     trips_router,
     invitations_router,
     checkins_router,
@@ -91,6 +94,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     fairness_router,
     plans_router,
     overrides_router,
+    parameters_router,
     linter_router,
     accommodation_router,
     expenses_router,

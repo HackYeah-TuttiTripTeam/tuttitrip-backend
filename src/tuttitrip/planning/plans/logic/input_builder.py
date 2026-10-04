@@ -176,7 +176,11 @@ def _canonical(value: object) -> Any:  # ruff: ignore[any-type, too-many-return-
 
 
 def input_hash(
-    data: PlanningInput, alpha: float, weight_preset: str, params: AlgorithmParams
+    data: PlanningInput,
+    alpha: float,
+    weight_preset: str,
+    params: AlgorithmParams,
+    parameters_version: int = 0,
 ) -> str:
     """SHA-256 of everything that decides the plan.
 
@@ -185,6 +189,7 @@ def input_hash(
         alpha: The fairness slider.
         weight_preset: The weight preset recorded with the plan.
         params: The algorithm parameters.
+        parameters_version: Version of the stored parameters (0: built-in).
 
     Returns:
         64 hex characters; equal for equal input, in every process.
@@ -194,6 +199,7 @@ def input_hash(
         "alpha": alpha,
         "weight_preset": weight_preset,
         "params": asdict(params),
+        "parameters_version": parameters_version,
         "input": data.model_dump(mode="python"),
     }
     canonical = json.dumps(_canonical(content), sort_keys=True, separators=(",", ":"))

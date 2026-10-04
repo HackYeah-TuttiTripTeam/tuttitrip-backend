@@ -17,6 +17,7 @@ from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.expenses.services import expense_service
 from tuttitrip.main import create_app
+from tuttitrip.planning.parameters.services import parameters_service
 from tuttitrip.profiles.logic.age_defaults import (
     DEFAULTS,
     age_group_for,
@@ -435,6 +436,9 @@ async def test_create_trip_creates_the_host_profile(
     trip = SimpleNamespace(id=TRIP)
     monkeypatch.setattr(trip_service.db, "insert_trip", AsyncMock(return_value=trip))
     monkeypatch.setattr(trip_service, "_read", lambda *_: "read")
+    monkeypatch.setattr(
+        parameters_service, "default_alpha", AsyncMock(return_value=1.0)
+    )
     host = AsyncMock()
     monkeypatch.setattr(profile_service, "create_host_profile", host)
     await trip_service.create_trip(session, ANA, TripCreate(name="X", destination="Y"))
