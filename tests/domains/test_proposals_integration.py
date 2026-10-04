@@ -243,17 +243,31 @@ async def _proposals_story(  # ruff: ignore[too-many-statements, too-many-locals
     assert await _count(PlanDecision, trip_id) == 0
 
 
+BUDGETS = (("800", "1000"), ("700", "1100"), ("900", "1300"), ("600", "800"))
+
+
+async def _trip_over_budget(http: httpx.AsyncClient) -> tuple[str, dict[str, Any]]:
+    # A budget the family wants to exceed with a good reason (E6); the sweep keeps
+    # the test independent of how the catalog prices lodging and tickets.
+    for low, high in BUDGETS:
+        base = await _new_trip(
+            http, budget_total_min=low, budget_total_max=high, budget_flex_pct=50
+        )
+        plan = (await http.post(f"{base}/plans")).json()
+        if plan["budget"]["needs_approval"]:
+            return base, plan
+        await http.delete(base)
+    pytest.fail("no budget of the sweep produced a consent question")
+
+
 async def _consent_story(  # ruff: ignore[too-many-statements, too-many-locals] one story
     app: FastAPI, http: httpx.AsyncClient
 ) -> None:
-    base = await _new_trip(
-        http, budget_total_min="800", budget_total_max="1000", budget_flex_pct=50
-    )
+    base, flex = await _trip_over_budget(http)
     trip_id = base.rsplit("/", 1)[1]
     plans = f"{base}/plans"
     approvals = f"{base}/budget-approvals"
     try:
-        flex = (await http.post(plans)).json()
         assert flex["budget"]["needs_approval"] is True
         assert flex["budget"]["approval_status"] == "pending"
         page = (await http.get(approvals)).json()
@@ -355,13 +369,10 @@ async def _decided_row_is_final(approval_id: str) -> None:
 async def _reject_and_supersede_story(  # ruff: ignore[too-many-locals] one story
     app: FastAPI, http: httpx.AsyncClient
 ) -> None:
-    base = await _new_trip(
-        http, budget_total_min="800", budget_total_max="1000", budget_flex_pct=50
-    )
+    base, flex = await _trip_over_budget(http)
     plans = f"{base}/plans"
     approvals = f"{base}/budget-approvals"
     try:
-        flex = (await http.post(plans)).json()
         first = (await http.get(approvals)).json()["items"][0]
 
         # A new plan version supersedes the open question and clears its notification.
@@ -407,12 +418,9 @@ async def _reject_and_supersede_story(  # ruff: ignore[too-many-locals] one stor
 
 
 async def _rollback_story(http: httpx.AsyncClient) -> None:
-    base = await _new_trip(
-        http, budget_total_min="800", budget_total_max="1000", budget_flex_pct=50
-    )
+    base, flex = await _trip_over_budget(http)
     trip_id = uuid.UUID(base.rsplit("/", 1)[1])
     try:
-        flex = (await http.post(f"{base}/plans")).json()
         async with get_sessionmaker()() as session:
             latest = await plans_db.select_latest(session, trip_id)
             strict = await plans_db.select_by_id(

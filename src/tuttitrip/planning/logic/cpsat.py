@@ -50,7 +50,7 @@ from tuttitrip.planning.fairness.logic.violations import (
     carries_tag,
     floor_term,
 )
-from tuttitrip.planning.logic.domains import RequirementOutcome, lodging_score
+from tuttitrip.planning.logic.domains import RequirementOutcome
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.schedule import DAILY_KM_FACTOR
 from tuttitrip.planning.logic.solver import (
@@ -254,11 +254,11 @@ class _Build:
 
     def _cost(self) -> None:
         ev = self.ev
-        stay = _cents(ev.stay)
+        stay = _cents(ev.stays[ev.lodging_index])
         self.cost_cents = stay + sum(
             _cents(ev.prices[p.id].total) * self.chosen[p.id] for p in ev.candidates
         )
-        self.model.add(self.cost_cents <= _cents(ev.cap))
+        self.model.add(self.cost_cents <= _cents(ev.caps[ev.lodging_index]))
         trip = ev.trip
         self.q_cost = self.model.new_int_var(0, Q_MAX, "q_cost")
         low, high, top = (
@@ -338,8 +338,8 @@ class _Build:
         if domain is ImportanceDomain.COST:
             return self.q_cost
         if domain is ImportanceDomain.LODGING:
-            outcomes = self.ev.outcomes or []
-            return round(lodging_score(outcomes, self.params) * Q_SCALE)
+            q = self.ev.lodging_q[self.ev.lodging_index] or 0.0
+            return round(q * Q_SCALE)
         if domain is ImportanceDomain.PACE:
             return self._pace(person)
         return self._saturating(person, domain)
@@ -538,28 +538,22 @@ def solve_cpsat(  # ruff: ignore[too-many-arguments] the whole input of the sear
     )
     status = "UNKNOWN"
     chosen: Assignment | None = None
-    if (
-        not evaluator.lodging_over_cap
-    ):  # else nothing to choose: the fallback reports it
-        build = _Build(evaluator, data, alpha)
-        left = limits.max_deterministic_time
-        for _ in range(MAX_CUT_ROUNDS):
-            if left <= MIN_TIME_LEFT:
-                break
-            solver = cp_model.CpSolver()
-            solver.parameters.num_workers = 1
-            solver.parameters.random_seed = limits.random_seed
-            solver.parameters.max_deterministic_time = left
-            outcome = solver.solve(build.model)
-            left -= solver.response_proto.deterministic_time
-            status = str(solver.status_name(outcome))
-            if outcome not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
-                break
-            candidate = build.assignment(solver)
-            if evaluator.evaluate(candidate) is not None:
-                chosen = candidate
-                break
-            build.cut(candidate, evaluator)
+    best = None
+    # One model per lodging plan (the base changes the cost and the lodging
+    # satisfaction, which are constants of a model); the best plan seeds the local
+    # search, which then tries it with every lodging plan. The time is shared.
+    indices = list(range(len(evaluator.lodging_plans) or 1))
+    fitting = [i for i in indices if not evaluator.over_cap[i]]
+    for index in fitting:
+        evaluator.choose_lodging(index)
+        candidate, last = _cpsat_plan(
+            evaluator, data, alpha, limits, limits.max_deterministic_time / len(fitting)
+        )
+        status = last
+        found = None if candidate is None else evaluator.evaluate(candidate)
+        if found is not None and (best is None or found.key < best.key):
+            best, chosen = found, candidate
+    evaluator.choose_lodging(0)
     result = solve(
         data,
         params,
@@ -587,6 +581,37 @@ def solve_cpsat(  # ruff: ignore[too-many-arguments] the whole input of the sear
             exhausted=telemetry.exhausted or status != "OPTIMAL",
         ),
     )
+
+
+def _cpsat_plan(
+    evaluator: PlanEvaluator,
+    data: PlanningInput,
+    alpha: float,
+    limits: CpSatLimits,
+    budget: float,
+) -> tuple[Assignment | None, str]:
+    # CP-SAT for the lodging plan the evaluator has chosen; cuts what the exact
+    # evaluator rejects and tries again, within the deterministic time ``budget``.
+    status = "UNKNOWN"
+    build = _Build(evaluator, data, alpha)
+    left = budget
+    for _ in range(MAX_CUT_ROUNDS):
+        if left <= MIN_TIME_LEFT:
+            break
+        solver = cp_model.CpSolver()
+        solver.parameters.num_workers = 1
+        solver.parameters.random_seed = limits.random_seed
+        solver.parameters.max_deterministic_time = left
+        outcome = solver.solve(build.model)
+        left -= solver.response_proto.deterministic_time
+        status = str(solver.status_name(outcome))
+        if outcome not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+            break
+        candidate = build.assignment(solver)
+        if evaluator.evaluate(candidate) is not None:
+            return candidate, status
+        build.cut(candidate, evaluator)
+    return None, status
 
 
 @dataclass(frozen=True, slots=True)

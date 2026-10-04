@@ -143,22 +143,69 @@ def test_group_row_covers_people_nobody_else_prices() -> None:
     assert result.unknown_price_place_ids == ()
 
 
-def test_family_and_student_rows_are_not_used() -> None:
-    zoo = place(
-        price("30"),
-        price("80", category=TicketCategory.FAMILY),
-        price("5", category=TicketCategory.STUDENT),
-    )
+def test_student_rows_are_not_used() -> None:
+    zoo = place(price("30"), price("5", category=TicketCategory.STUDENT))
     assert cost(zoo, PEOPLE).total == Decimal("120.00")
 
 
-def test_reduced_rows_are_never_applied_so_a_reduced_only_place_is_unknown() -> None:
-    zoo = place(price("30"), price("10", category=TicketCategory.REDUCED))
-    assert cost(zoo, PEOPLE).total == Decimal("120.00")  # all four pay the adult row
-    reduced_only = place(price("10", category=TicketCategory.REDUCED))
-    result = cost(reduced_only, PEOPLE)
-    assert result.total == Decimal("0.00")
-    assert result.unknown_price_place_ids == (reduced_only.id,)
+def test_two_adults_and_two_children_pay_by_category_without_a_family_ticket() -> None:
+    museum = place(price("30"), price("15", category=TicketCategory.CHILD))
+    family = (TY, TY, PEOPLE[1], PEOPLE[2])  # 38, 38, 6, 13
+    assert cost(museum, family).total == Decimal("90.00")  # 30 + 30 + 15 + 15
+
+
+def test_a_cheaper_family_ticket_is_chosen_and_split_equally() -> None:
+    museum = place(
+        price("30"),
+        price("15", category=TicketCategory.CHILD),
+        price("70", category=TicketCategory.FAMILY, unit=PriceUnit.GROUP),
+    )
+    family = (TY, TY, PEOPLE[1], PEOPLE[2])
+    result = cost(museum, family)
+    assert result.total == Decimal("70.00")  # 90 as persons, 70 as a family
+    assert result.total / len(family) == Decimal("17.50")  # per person, equally
+
+
+def test_a_dearer_family_ticket_is_ignored() -> None:
+    museum = place(
+        price("30"),
+        price("15", category=TicketCategory.CHILD),
+        price("95", category=TicketCategory.FAMILY, unit=PriceUnit.GROUP),
+    )
+    assert cost(museum, (TY, TY, PEOPLE[1], PEOPLE[2])).total == Decimal("90.00")
+
+
+def test_a_family_ticket_covers_its_size_and_larger_groups_need_several() -> None:
+    ticket = price("70", category=TicketCategory.FAMILY, unit=PriceUnit.GROUP)
+    museum = place(price("30"), ticket)
+    five = (TY, TY, TY, TY, TY)
+    # 5 people as persons cost 150; two family tickets of 4 cost 140.
+    assert cost(museum, five).total == Decimal("140.00")
+    sized = price("45", category=TicketCategory.FAMILY, unit=PriceUnit.GROUP)
+    sized = sized.model_copy(update={"family_size": 2})
+    assert cost(place(price("30"), sized), five).total == Decimal("135.00")  # 3 x 45
+
+
+def test_an_unverified_family_ticket_is_inflated() -> None:
+    museum = place(
+        price("30"),
+        price(
+            "60", category=TicketCategory.FAMILY, unit=PriceUnit.GROUP, verified=False
+        ),
+    )
+    result = cost(museum, (TY, TY, TY, TY))
+    assert result.total == Decimal("69.00")  # 60 * 1.15 < 120
+    assert result.base == Decimal("60.00")
+
+
+def test_a_family_ticket_prices_people_the_person_rows_miss() -> None:
+    child_only = place(
+        price("10", category=TicketCategory.CHILD),
+        price("80", category=TicketCategory.FAMILY, unit=PriceUnit.GROUP),
+    )
+    result = cost(child_only, PEOPLE)
+    assert result.total == Decimal("80.00")
+    assert result.unknown_price_place_ids == ()
 
 
 def test_a_person_without_an_applicable_row_makes_the_place_unknown() -> None:

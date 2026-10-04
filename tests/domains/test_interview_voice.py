@@ -38,7 +38,12 @@ from tests.shared.fakes import authorize
 from tests.shared.interview_world import World
 from tests.shared.paths import path
 from tuttitrip.interview import constants
-from tuttitrip.interview.schemas import SessionStatus
+from tuttitrip.interview.schemas import (
+    CardKind,
+    QuestionField,
+    SessionStatus,
+    ShownCard,
+)
 from tuttitrip.interview.services import run_guard, session_service, voice_service
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.main import create_app
@@ -550,9 +555,11 @@ def test_the_interview_agent_resolves_its_tools_and_instructions_for_realtime(
 
     asyncio.run(go())
     assert {"set_trip_basics", "add_person", "set_diet"} <= set(model.tools)
-    assert "show_card" not in model.tools  # a call has no screen
+    assert "show_card" in model.tools  # the card appears next to the captions
     assert model.instructions is not None
     assert "voice call" in model.instructions
+    assert "Do not use show_card" not in model.instructions
+    assert "show_card" in model.instructions
 
 
 # --- #214: stale locks, takeover, language, extraction ---------------------
@@ -861,3 +868,47 @@ def test_a_call_without_a_transcript_runs_no_extraction(
     call_id = offer(client, world).json()["call_id"]
     hangup(client, world, call_id)
     voice_service._extract.assert_not_awaited()  # ty: ignore[unresolved-attribute]  # ruff: ignore[private-member-access]
+
+
+# --- backend#220: the card of a live call -----------------------------------
+
+
+def card_of(client: TestClient, world: World, call_id: str) -> Any:  # ruff: ignore[any-type]
+    return client.get(path("voice_card", trip_id=world.trip_id, call_id=call_id))
+
+
+def test_a_live_call_shows_the_card_the_assistant_put_on_screen(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+    assert card_of(client, world, call_id).json() == {"card": None}
+    voice_service.CALLS[call_id].deps.state.card = ShownCard(
+        kind=CardKind.CITY,
+        question="Dokąd jedziecie?",
+        field=QuestionField.DESTINATION,
+    )
+    response = card_of(client, world, call_id)
+    assert response.status_code == 200
+    assert response.json()["card"] == {
+        "kind": "city",
+        "question": "Dokąd jedziecie?",
+        "field": "destination",
+        "person_id": None,
+        "options": [],
+    }
+
+
+def test_the_card_of_an_unknown_call_or_another_trip_is_404(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+    assert card_of(client, world, "call_unknown").status_code == 404
+    other = World()
+    assert (
+        client.get(
+            path("voice_card", trip_id=other.trip_id, call_id=call_id)
+        ).status_code
+        == 404
+    )

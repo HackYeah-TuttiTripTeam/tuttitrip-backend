@@ -13,6 +13,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import func, select
 
+from tests.fixtures.city import place_id
 from tests.fixtures.personas import reference_family
 from tests.fixtures.scenarios import reference
 from tests.shared.db_seed import add_person, seed_city, unseed_city
@@ -93,14 +94,16 @@ async def _solo_trip(http: httpx.AsyncClient) -> None:
         await http.delete(base)
 
 
-async def _plans_of(trip_id: str) -> int:
+async def _plans_of(trip_id: str, *, alternatives: bool = False) -> int:
     async with get_sessionmaker()() as session:
-        rows = await session.execute(
+        stmt = (
             select(func.count())
             .select_from(PlanVersion)
             .where(PlanVersion.trip_id == uuid.UUID(trip_id))
         )
-        return rows.scalar_one()
+        if not alternatives:
+            stmt = stmt.where(PlanVersion.alternative_of.is_(None))
+        return (await session.execute(stmt)).scalar_one()
 
 
 async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals, too-many-statements] - one story
@@ -138,9 +141,47 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals, too-
                 for d in p["domains"]
             )
 
+            # One lodging base for both nights, a search area, and transit tickets
+            # shown for information (never in the cost).
+            lodging = body["lodging"]
+            assert lodging["nights"] == 2
+            assert lodging["place_id"] in {
+                str(place_id(k))
+                for k in ("apartament_basen", "hotel_centrum", "hostel_dworzec")
+            }
+            assert lodging["exceptional"] == []
+            assert lodging["search_area"]["radius_m"] >= 500
+            transit = body["transit"]
+            assert transit["verified"] is True
+            assert float(transit["total"]) > 0
+            assert len(transit["rides_per_day"]) == 3
+            assert float(body["budget"]["cost"]) >= float(lodging["cost_total"])
+
             again = await http.post(plans)
             assert again.status_code == 200
             assert again.json() == body
+
+            # Rain: replan the last day from the morning; nothing is stored.
+            stored = await http.get(f"{plans}/latest")
+            rain = await http.post(
+                f"{plans}/{body['id']}/replan",
+                json={
+                    "context": "rain",
+                    "day": 3,
+                    "as_of": f"{body['days'][2]['date']}T08:00:00+02:00",
+                },
+            )
+            assert rain.status_code == 200, rain.text
+            assert rain.json()["status"] == "active"  # the host replans
+            assert rain.json()["elapsed_ms"] < 2000
+            assert rain.json()["stops"]
+            assert (await http.get(f"{plans}/latest")).json() == stored.json()
+            assert (
+                await http.post(
+                    f"{plans}/{body['id']}/replan",
+                    json={"day": 9, "as_of": "2026-10-11T08:00:00+02:00"},
+                )
+            ).status_code == 422
 
             latest = await http.get(f"{plans}/latest")
             assert latest.json() == body
@@ -202,7 +243,7 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals, too-
         finally:
             await http.delete(base)
         # The versions go with the trip (ON DELETE CASCADE).
-        assert await _plans_of(trip.json()["id"]) == 0
+        assert await _plans_of(trip.json()["id"], alternatives=True) == 0
 
 
 def test_plan_versions_end_to_end() -> None:
