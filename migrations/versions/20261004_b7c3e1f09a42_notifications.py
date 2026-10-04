@@ -67,6 +67,7 @@ def upgrade() -> None:
         ["trip_id"],
         postgresql_where=sa.text("trip_id IS NOT NULL"),
     )
+    op.create_index("ix_notifications_created_at", "notifications", ["created_at"])
     # NOTIFY is delivered after the commit, in commit order, and its payload is
     # capped at 8000 bytes, so only ids travel; the stream reads the row itself.
     op.execute(
@@ -100,6 +101,7 @@ def downgrade() -> None:
     )
     op.execute("DROP TRIGGER notifications_notify ON notifications")
     op.execute("DROP FUNCTION notify_notification()")
+    op.drop_index("ix_notifications_created_at", table_name="notifications")
     op.drop_index("ix_notifications_trip_id", table_name="notifications")
     op.drop_index("ix_notifications_dedupe_key", table_name="notifications")
     op.drop_index("ix_notifications_user_unread", table_name="notifications")

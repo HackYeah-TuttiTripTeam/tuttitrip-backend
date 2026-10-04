@@ -35,6 +35,8 @@ class Notification(Base):
             "dedupe_key",
             postgresql_where=text("read_at IS NULL"),
         ),
+        # The worker's retention purge: `created_at < X` (with or without read_at).
+        Index("ix_notifications_created_at", "created_at"),
         # The cascade delete of a trip looks its notifications up by trip.
         Index(
             "ix_notifications_trip_id",

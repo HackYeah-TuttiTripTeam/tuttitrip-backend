@@ -113,6 +113,7 @@ def test_type_column_has_no_check_so_new_types_need_no_migration() -> None:
         "ix_notifications_user_unread",
         "ix_notifications_dedupe_key",
         "ix_notifications_trip_id",
+        "ix_notifications_created_at",
     }
 
 
