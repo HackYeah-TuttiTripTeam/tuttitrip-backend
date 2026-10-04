@@ -221,6 +221,7 @@ class TripCreate(TripUpdate):
     """
 
     name: str = Field(min_length=1, max_length=200)
+    propose_cheaper_alternatives: bool | None = Field(default=True, description=CHEAPER)
 
     # Overrides the inherited ``_check`` (same name replaces the validator):
     # a create body is a whole trip, so pairs are required (complete=True).
