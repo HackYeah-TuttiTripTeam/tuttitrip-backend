@@ -329,7 +329,7 @@ class _Computed(_Stored):
     alternative: _Stored | None
 
 
-def _compute(  # ruff: ignore[too-many-arguments] the inputs of one computation
+def _compute(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] the inputs of one computation
     planning: PlanningInput,
     params: AlgorithmParams,
     alpha: float,
