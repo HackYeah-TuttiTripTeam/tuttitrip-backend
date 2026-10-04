@@ -390,7 +390,7 @@ src/tuttitrip/
 
 ![Diagram architektury w czterech kolumnach: ludzie, aplikacja, backend oraz worker i modele, połączone kropkowanymi liniami, pod nim lista technologii.](docs/readme/14-stack.webp)
 
-Co liczy czysty kod z `planning/` (plansze na danych przykładowych; ekranu z miarą sprawiedliwości w aplikacji jeszcze nie ma):
+Co liczy czysty kod z `planning/` (plansze na danych przykładowych):
 
 <table>
   <tr>
