@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
+from tuttitrip.expenses.services import expense_service
 from tuttitrip.main import create_app
 from tuttitrip.profiles.logic.age_defaults import (
     DEFAULTS,
@@ -644,6 +645,9 @@ def test_delete_returns_204_404_and_403(
         profile_service.db, "select_profile", AsyncMock(return_value=person)
     )
     monkeypatch.setattr(profile_service.db, "delete_profile", AsyncMock())
+    monkeypatch.setattr(
+        expense_service, "profile_in_use", AsyncMock(return_value=False)
+    )
     url = path("delete_profile", trip_id=TRIP, profile_id=person.id)
     assert client.delete(url).status_code == 204
     monkeypatch.setattr(
