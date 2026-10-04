@@ -175,7 +175,7 @@ def _canonical(value: object) -> Any:  # ruff: ignore[any-type, too-many-return-
     return value
 
 
-def input_hash(
+def input_hash(  # ruff: ignore[too-many-arguments] every input of the plan hash
     data: PlanningInput,
     alpha: float,
     weight_preset: str,
