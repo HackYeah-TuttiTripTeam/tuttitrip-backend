@@ -231,3 +231,25 @@ def test_the_demo_reset_adds_the_sample_trip_to_the_demo_trips() -> None:
         assert total == len(DEMO_TRIPS) + 1
 
     _run(user.sub, scenario=scenario())
+
+
+def test_a_reset_then_the_first_list_leaves_exactly_one_sample() -> None:
+    app, user = create_app(), _user()
+
+    async def scenario() -> None:
+        await demo_service.run_reset(get_engine(), user.sub, TODAY)
+        items = await _list(app, user)
+        assert sum(1 for t in items if t["is_sample"]) == 1
+        assert len(items) == len(DEMO_TRIPS) + 1
+        async with get_sessionmaker()() as session:
+            assert await session.get(SampleTripGrant, user.sub) is not None
+        # A sample without a mark (old data) is found, never doubled.
+        async with get_sessionmaker()() as session:
+            await session.delete(await session.get(SampleTripGrant, user.sub))
+            await session.commit()
+        items = await _list(app, user)
+        assert sum(1 for t in items if t["is_sample"]) == 1
+        async with get_sessionmaker()() as session:
+            assert await session.get(SampleTripGrant, user.sub) is not None
+
+    _run(user.sub, scenario=scenario())

@@ -241,6 +241,29 @@ How:
 - Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions
   secrets/variables; host-only secrets live in `~/tuttitrip/*.env` on the host.
 
+## Google Calendar and Drive (on behalf of the user)
+
+`POST /trips/{id}/plans/{plan_id}/google/calendar` and `.../google/drive` save an
+approved plan to the caller's own Google account (`planning/exports/`, clients in
+`shared/google/`). The Google token is the one Auth0 stored at the user's last
+Google login: `ManagementClient.identity_access_token` reads it from
+`GET /api/v2/users/{sub}` (`identities[].access_token`). Nothing stores or logs it.
+
+- The M2M application behind `TUTTITRIP_AUTH0__MANAGEMENT_CLIENT_*` needs the
+  Management API scopes `read:users` and `read:user_idp_tokens`.
+- The user must sign in with Google asking for `calendar.app.created` and
+  `drive.file` (`connection_scope` of `/authorize`). Without a token, a scope or
+  with an expired token the endpoints answer 409 with `google.not_connected`,
+  `google.scope_missing` or `google.token_expired`, `required_scope` and
+  `fallback_url` (the `.ics` file). Google or Auth0 failing is 502.
+- Auth0 does not refresh the Google token: it lives about an hour after the login.
+  Token Vault (a Custom API Client plus a connected-accounts flow in the frontend)
+  is the way to remove that limit if it hurts.
+- Calendar event ids are UUIDv5 hex digits of trip, day and position, so saving
+  again updates the events; Drive keeps the file id in `google_exports`.
+- Tests mock Google with `httpx.MockTransport` (`tests/shared/test_google.py`,
+  `tests/domains/test_google_exports_integration.py`).
+
 ## Database and migrations
 
 - PostgreSQL 18 with pgvector 0.8.7 (`pgvector/pgvector:0.8.7-pg18-trixie`,
