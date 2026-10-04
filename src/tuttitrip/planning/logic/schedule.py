@@ -185,7 +185,7 @@ def is_open_on(place: PlaceRead, day: date, timezone: tzinfo) -> bool:
 
 def fits_opening_hours(
     place: PlaceRead, day: date, start: time, minutes: int, timezone: tzinfo
-) -> bool | None:
+) -> bool:
     """Tell whether a visit lies inside one opening interval of its day.
 
     The linter uses it (E0: opening hours), with the same intervals the
@@ -199,12 +199,12 @@ def fits_opening_hours(
         timezone: Zone of the city.
 
     Returns:
-        None when the hours are unknown; otherwise whether ``[start, start +
-        minutes]`` fits inside an interval (False also on a closed day).
+        Whether ``[start, start + minutes]`` fits inside an interval; False on
+        a closed day. Unknown hours fit anywhere (True), like in the schedule.
     """
     hours = place.hours.opening_hours
     if hours is None:
-        return None
+        return True
     begin = _instant(day, start, timezone)
     end = begin + timedelta(minutes=minutes)
     window = DayWindow(day, timezone, time.min, time.max)

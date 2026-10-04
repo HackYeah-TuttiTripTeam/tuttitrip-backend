@@ -38,7 +38,9 @@ def check(plan: LintPlan, context: LintContext) -> list[Finding]:
         Finding(
             rule=CODE,
             severity=Severity.VIOLATION,
-            message=f"Cost {total} exceeds B_max {context.b_max}",
+            message=(
+                f"Cost {total} (amounts as in the plan) exceeds B_max {context.b_max}"
+            ),
         )
     ]
 
