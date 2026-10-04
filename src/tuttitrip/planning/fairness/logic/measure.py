@@ -41,6 +41,10 @@ def min_r(r: Sequence[float]) -> float:
     return min(r, default=1.0)
 
 
+def _order(conflict: Conflict) -> tuple[str, str]:
+    return str(conflict.person_id), conflict.code.value
+
+
 def build_report(objective: GroupObjective) -> FairnessReport:
     """``floors_missed``, ``violation`` and ``conflicts`` of a plan.
 
@@ -80,8 +84,9 @@ def build_report(objective: GroupObjective) -> FairnessReport:
             for t in item.tags
             if t.have < t.required
         )
+    merged: list[Conflict] = [*floors, *own, *tags]
     return FairnessReport(
         floors_missed=[c.person_id for c in floors],
         violation=objective.violation,
-        conflicts=[*floors, *own, *tags],
+        conflicts=sorted(merged, key=_order),
     )

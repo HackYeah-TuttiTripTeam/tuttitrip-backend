@@ -20,7 +20,9 @@ from uuid import UUID
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.planning.fairness.logic.violations import (
     PersonViolation,
+    TagRequirement,
     person_violation,
+    tag_requirements,
 )
 from tuttitrip.planning.fairness.logic.welfare import welfare
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
@@ -56,6 +58,8 @@ def group_objective(  # ruff: ignore[too-many-arguments] the whole input of J
     days: Sequence[DayPlan],
     places: Mapping[UUID, PlaceRead],
     candidates: Sequence[PlaceRead],
+    has_lodging: bool = True,
+    requirements: Mapping[UUID, Sequence[TagRequirement]] | None = None,
     alpha: float = 1.0,
     params: AlgorithmParams = DEFAULT_PARAMS,
 ) -> GroupObjective:
@@ -66,6 +70,9 @@ def group_objective(  # ruff: ignore[too-many-arguments] the whole input of J
         days: The days of the plan.
         places: Places by id.
         candidates: Places that passed E0.
+        has_lodging: Whether the lodging domain is active.
+        requirements: Tag minima per person id from ``tag_requirements``; the
+            solver computes them once, here they are derived when missing.
         alpha: Fairness slider in 0 to 3.
         params: Algorithm parameters (``violation_penalty``).
 
@@ -73,15 +80,22 @@ def group_objective(  # ruff: ignore[too-many-arguments] the whole input of J
         ``W``, ``V``, ``J`` and the violations per person.
     """
     ordered = sorted(outcomes, key=lambda o: str(o.person.id))
+    alone = len(ordered) == 1  # E4: for n = 1 the floor is 0 (nobody to protect from)
+    needs = requirements or {
+        o.person.id: tag_requirements(
+            o.person, candidates, has_lodging=has_lodging, params=params
+        )
+        for o in ordered
+    }
     w = welfare(((o.utility, o.person.weight) for o in ordered), alpha)
     violations = tuple(
         person_violation(
             o.person,
             utility=o.utility,
-            floor_eff=o.floor_eff,
+            floor_eff=0.0 if alone else o.floor_eff,
             days=days,
             places=places,
-            candidates=candidates,
+            requirements=needs[o.person.id],
             params=params,
         )
         for o in ordered

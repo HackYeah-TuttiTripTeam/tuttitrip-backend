@@ -11,10 +11,12 @@ V(P) = sum_i [ (f_i^eff - u_i)+ / f_i^eff  +  1/2 * (days without an own place)
   a day with no places has none.
 * Tag minimum: a tag whose pool domain has ``a_i,dom >= theta = 0.4`` demands
   ``k = 1 + floor((a_i,dom - theta) / (1 - theta) * 2)`` places, at most as many
-  as the candidates offer. It is counted on the integer pool points with exact
-  fractions: in floats ``(0.7 - 0.4) / 0.6 * 2`` is 0.9999..., which would give
-  ``k = 1`` instead of 2 for 7 points. ``have`` counts distinct places of the
-  plan that carry the tag (a cuisine for food, a place tag for attractions).
+  as the candidates offer. ``a_i,dom`` is the pool renormalised to the active
+  domains (section 2: without nights the lodging points drop out), counted on
+  the integer points with exact fractions: in floats ``(0.7 - 0.4) / 0.6 * 2``
+  is 0.9999..., which would give ``k = 1`` instead of 2 for 7 points. ``have``
+  counts distinct places of the plan that carry the tag (a cuisine for food, a
+  place tag for attractions).
 
 The penalty (1000) is applied in ``objective``. Pure, standard library only.
 """
@@ -34,6 +36,14 @@ from tuttitrip.profiles.preferences.schemas import POOL_TOTAL, MinTag, MinTagDom
 OWN_PLACE_WEIGHT = 0.5
 """Each day without an own place counts this much in ``V``."""
 _TAG_POINTS_PER_EXTRA = 2
+
+
+@dataclass(frozen=True, slots=True)
+class TagRequirement:
+    """A tag minimum with its ``k`` after the availability cap."""
+
+    tag: MinTag
+    required: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,18 +112,24 @@ def floor_term(utility: float, floor_eff: float) -> float:
     return max(0.0, floor_eff - utility) / floor_eff
 
 
-def min_tag_count(points: int, params: AlgorithmParams = DEFAULT_PARAMS) -> int:
-    """Number of places a pool domain with ``points`` of 10 demands for a tag.
+def min_tag_count(
+    points: int, total: int = POOL_TOTAL, params: AlgorithmParams = DEFAULT_PARAMS
+) -> int:
+    """Number of places a pool domain with ``points`` demands for a tag.
 
     Args:
         points: Whole pool points of the tag's domain.
+        total: Points of the active domains (10, or less without nights).
         params: Algorithm parameters (``strong_preference``, theta).
 
     Returns:
-        0 below theta, else ``1 + floor((a - theta) / (1 - theta) * 2)``.
+        0 below theta (or with an empty pool), else
+        ``1 + floor((a - theta) / (1 - theta) * 2)`` for ``a = points / total``.
     """
+    if total <= 0:
+        return 0
     theta = Fraction(str(params.strong_preference))
-    share = Fraction(points, POOL_TOTAL)
+    share = Fraction(points, total)
     if share < theta:
         return 0
     return 1 + math.floor((share - theta) / (1 - theta) * _TAG_POINTS_PER_EXTRA)
@@ -151,39 +167,58 @@ def days_without_own_place(
     )
 
 
-def tag_shortfalls(
+def tag_requirements(
     person: PlanningPerson,
-    days: Sequence[DayPlan],
-    places: Mapping[UUID, PlaceRead],
     candidates: Sequence[PlaceRead],
+    *,
+    has_lodging: bool,
     params: AlgorithmParams = DEFAULT_PARAMS,
-) -> tuple[TagShortfall, ...]:
-    """The person's tag minima that apply and how many places the plan has.
+) -> tuple[TagRequirement, ...]:
+    """The person's tag minima with ``k``; independent of the plan, compute once.
 
     Args:
         person: The person.
-        days: The days of the plan.
-        places: Places by id.
         candidates: Places that passed E0 (limit ``k`` by availability).
+        has_lodging: Whether the lodging domain is active (renormalises the pool).
         params: Algorithm parameters.
 
     Returns:
         One entry per minimum with ``k >= 1`` after the availability cap.
     """
-    chosen = {places[pid].id: places[pid] for day in days for pid in day.place_ids}
-    result: list[TagShortfall] = []
+    pool = person.pool
+    total = POOL_TOTAL - (0 if has_lodging else pool.lodging)
+    result: list[TagRequirement] = []
     for minimum in person.min_tags:
-        points = (
-            person.pool.food
-            if minimum.domain is MinTagDomain.FOOD
-            else person.pool.attractions
-        )
+        points = pool.food if minimum.domain is MinTagDomain.FOOD else pool.attractions
         available = sum(_carries(p, minimum) for p in candidates)
-        required = min(min_tag_count(points, params), available)
+        required = min(min_tag_count(points, total, params), available)
         if required >= 1:
-            have = sum(_carries(p, minimum) for p in chosen.values())
-            result.append(TagShortfall(minimum, required, have))
+            result.append(TagRequirement(minimum, required))
     return tuple(result)
+
+
+def tag_shortfalls(
+    requirements: Sequence[TagRequirement],
+    days: Sequence[DayPlan],
+    places: Mapping[UUID, PlaceRead],
+) -> tuple[TagShortfall, ...]:
+    """How many places with each required tag the plan has.
+
+    Args:
+        requirements: From ``tag_requirements``.
+        days: The days of the plan.
+        places: Places by id.
+
+    Returns:
+        One entry per requirement.
+    """
+    chosen = {pid: places[pid] for day in days for pid in day.place_ids}
+    return tuple(
+        TagShortfall(
+            r.tag, r.required, sum(_carries(p, r.tag) for p in chosen.values())
+        )
+        for r in requirements
+    )
 
 
 def person_violation(  # ruff: ignore[too-many-arguments] the whole input of V
@@ -193,7 +228,7 @@ def person_violation(  # ruff: ignore[too-many-arguments] the whole input of V
     floor_eff: float,
     days: Sequence[DayPlan],
     places: Mapping[UUID, PlaceRead],
-    candidates: Sequence[PlaceRead],
+    requirements: Sequence[TagRequirement],
     params: AlgorithmParams = DEFAULT_PARAMS,
 ) -> PersonViolation:
     """The bracket of ``V(P)`` for one person.
@@ -204,7 +239,7 @@ def person_violation(  # ruff: ignore[too-many-arguments] the whole input of V
         floor_eff: ``f_i^eff``.
         days: The days of the plan.
         places: Places by id.
-        candidates: Places that passed E0.
+        requirements: The person's tag minima from ``tag_requirements``.
         params: Algorithm parameters.
 
     Returns:
@@ -214,5 +249,5 @@ def person_violation(  # ruff: ignore[too-many-arguments] the whole input of V
         person_id=person.id,
         floor_term=floor_term(utility, floor_eff),
         own_days_missing=days_without_own_place(person, days, places, params),
-        tags=tag_shortfalls(person, days, places, candidates, params),
+        tags=tag_shortfalls(requirements, days, places),
     )

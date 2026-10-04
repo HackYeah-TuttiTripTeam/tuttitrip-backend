@@ -23,6 +23,7 @@ from tuttitrip.planning.fairness.logic.violations import (
     floor_term,
     min_tag_count,
     person_violation,
+    tag_requirements,
     tag_shortfalls,
 )
 from tuttitrip.planning.fairness.logic.welfare import (
@@ -31,13 +32,14 @@ from tuttitrip.planning.fairness.logic.welfare import (
     welfare,
 )
 from tuttitrip.planning.fairness.schemas import ConflictCode
-from tuttitrip.planning.schemas import DayPlan, PlanningInput
+from tuttitrip.planning.schemas import DayPlan
 
 CATALOG = places()
 BY_ID = {p.id: p for p in CATALOG.values()}
 DATA = planning_input(reference())
 TY, KASIA, TOMEK, BABCIA = DATA.people
 CANDIDATES = [p for p in DATA.places if p.category.value != "lodging"]
+REQUIREMENTS = tag_requirements(TOMEK, CANDIDATES, has_lodging=True)
 
 
 def plan(*days: tuple[str, ...]) -> list[DayPlan]:
@@ -64,15 +66,22 @@ def test_balanced_plan_wins_for_nash() -> None:
 
 
 def test_phi_hand_computed_for_alpha_0_2_and_3() -> None:
-    assert phi(9, 0) == pytest.approx(10)  # (1 + u)
-    assert phi(9, 2) == pytest.approx(-0.1)  # -1 / (1 + u)
-    assert phi(9, 3) == pytest.approx(-0.005)  # (1 + u)^-2 / -2
+    # ((1 + u)^(1 - alpha) - 1) / (1 - alpha), the spec's form shifted by 1/(1 - alpha).
+    assert phi(9, 0) == pytest.approx(9)  # (10 - 1) / 1
+    assert phi(9, 2) == pytest.approx(0.9)  # (0.1 - 1) / -1
+    assert phi(9, 3) == pytest.approx(0.495)  # (0.01 - 1) / -2
     assert phi(9, 1) == pytest.approx(math.log(10))
 
 
 def test_alpha_two_hand_computed_welfare() -> None:
-    # w = (2, 1), u = (9, 19): 2 * (-0.1) + (-0.05) = -0.25.
-    assert welfare([(9, 2), (19, 1)], alpha=2) == pytest.approx(-0.25)
+    # w = (2, 1), u = (9, 19): 2 * 0.9 + (1 - 0.05) = 2.75.
+    assert welfare([(9, 2), (19, 1)], alpha=2) == pytest.approx(2.75)
+
+
+def test_phi_is_continuous_at_alpha_one() -> None:
+    near = phi(30, 1 + 1e-7)
+    assert near == pytest.approx(math.log(31), abs=1e-5)
+    assert phi(30, 1 - 1e-7) == pytest.approx(math.log(31), abs=1e-5)
 
 
 def test_alpha_outside_the_slider_is_rejected() -> None:
@@ -87,25 +96,35 @@ def test_weighted_log_welfare_is_welfare_at_alpha_one() -> None:
     assert weighted_log_welfare(people) == welfare(people, 1.0)
 
 
-@pytest.mark.parametrize("alpha", [0.0, 0.5, 1.0, 2.0, 3.0])
-@pytest.mark.parametrize(
-    ("before", "after"),
-    [((90, 10), (80, 20)), ((70, 30), (50, 50)), ((60, 40), (45, 55))],
-)
-def test_transfer_to_the_worse_off_never_lowers_welfare(
+PERMUTATIONS = [(2, 0, 3, 1), (3, 2, 1, 0), (1, 3, 0, 2), (0, 2, 1, 3), (3, 0, 2, 1)]
+PAIRS = [((90, 10), (80, 20)), ((70, 30), (50, 50)), ((60, 40), (45, 55))]
+
+
+@pytest.mark.parametrize("alpha", [0.5, 1.0, 2.0, 3.0])
+@pytest.mark.parametrize(("before", "after"), PAIRS)
+def test_transfer_to_the_worse_off_strictly_raises_welfare(
     alpha: float, before: tuple[float, float], after: tuple[float, float]
 ) -> None:
-    # Pigou-Dalton: same total, smaller gap.
-    assert (
-        welfare([(u, 1) for u in after], alpha)
-        >= welfare([(u, 1) for u in before], alpha) - 1e-12
+    # Pigou-Dalton: same total, smaller gap; phi is strictly concave for alpha > 0.
+    assert welfare([(u, 1) for u in after], alpha) > welfare(
+        [(u, 1) for u in before], alpha
+    )
+
+
+@pytest.mark.parametrize(("before", "after"), PAIRS)
+def test_utilitarian_welfare_ignores_the_transfer(
+    before: tuple[float, float], after: tuple[float, float]
+) -> None:
+    assert welfare([(u, 1) for u in after], 0) == pytest.approx(
+        welfare([(u, 1) for u in before], 0)
     )
 
 
 def test_welfare_does_not_depend_on_the_order_of_people() -> None:
     people = [(12.5, 1.0), (88.1, 2.0), (47.3, 1.0), (3.9, 2.0)]
-    shuffled = [people[2], people[0], people[3], people[1]]
-    assert welfare(people, 1.7) == welfare(shuffled, 1.7)
+    for order in PERMUTATIONS:
+        shuffled = [people[i] for i in order]
+        assert welfare(people, 1.7) == welfare(shuffled, 1.7)
 
 
 # --- k: tag minima ------------------------------------------------------------------
@@ -120,9 +139,18 @@ def test_minimum_count_on_integer_points(points: int, k: int) -> None:
     assert min_tag_count(points) == k
 
 
+def test_minimum_count_renormalises_the_pool_without_lodging() -> None:
+    # 5 of 10 points is 0.5 -> k = 1; with 4 lodging points dropped it is 5 of 6.
+    assert min_tag_count(5, 10) == 1
+    assert min_tag_count(5, 6) == 2  # (5/6 - 2/5) / (3/5) * 2 = 1.44
+    assert min_tag_count(2, 6) == 0  # 1/3 < 0.4
+    assert min_tag_count(2, 4) == 1  # 1/2 -> k = 1
+    assert min_tag_count(0, 0) == 0
+
+
 def test_tomek_needs_one_indian_place_and_the_plan_has_it() -> None:
     assert TOMEK.pool.food == 4
-    (short,) = tag_shortfalls(TOMEK, REFERENCE, BY_ID, CANDIDATES)
+    (short,) = tag_shortfalls(REQUIREMENTS, REFERENCE, BY_ID)
     assert (short.required, short.have, short.term) == (1, 1, 0)
 
 
@@ -134,7 +162,7 @@ def test_missing_minimum_adds_one_to_v_and_to_the_report() -> None:
             floor_eff=0.0,
             days=days,
             places=BY_ID,
-            candidates=CANDIDATES,
+            requirements=REQUIREMENTS,
         )
 
     base, missing = violation(REFERENCE), violation(NO_INDIAN)
@@ -146,7 +174,7 @@ def test_missing_minimum_adds_one_to_v_and_to_the_report() -> None:
 
 def test_minimum_is_capped_by_availability() -> None:
     no_indian_on_offer = [p for p in CANDIDATES if p.cuisine is None]
-    assert tag_shortfalls(TOMEK, NO_INDIAN, BY_ID, no_indian_on_offer) == ()
+    assert tag_requirements(TOMEK, no_indian_on_offer, has_lodging=True) == ()
 
 
 # --- own places and floors -------------------------------------------------------
@@ -196,6 +224,36 @@ def objective(items: list[PersonOutcome], days: list[DayPlan], alpha: float = 1.
     )
 
 
+def test_j_hand_computed_literal() -> None:
+    # u = (50, 20, 40, 60) for Ty, Kasia, Tomek, Babcia with weights (1, 2, 2, 1).
+    # W = ln51 + 2 ln21 + 2 ln41 + ln61 = 21.5589.
+    # V: Kasia floor 15/35 = 3/7, Kasia no own place on day 1 = 1/2, Tomek no own
+    # place on day 1 = 1/2 and the missing Indian minimum = 1, so V = 17/7.
+    # J = 21.5589 - 1000 * 17/7 = -2407.0125.
+    result = objective(outcomes((50, 20, 40, 60), (30, 35, 26.3, 30)), NO_INDIAN)
+    assert result.welfare == pytest.approx(21.5589, abs=1e-4)
+    assert result.violation == pytest.approx(17 / 7)
+    assert result.value == pytest.approx(-2407.0125, abs=1e-3)
+
+
+def test_for_one_person_the_floor_is_zero() -> None:
+    # E4: nobody to protect from, so a floor of 30 with u = 10 is no violation.
+    solo = group_objective(
+        [PersonOutcome(TY, 10.0, 30.0)],
+        days=REFERENCE,
+        places=BY_ID,
+        candidates=CANDIDATES,
+    )
+    assert solo.violations[0].floor_term == pytest.approx(0)
+    pair = group_objective(
+        [PersonOutcome(TY, 10.0, 30.0), PersonOutcome(KASIA, 10.0, 0.0)],
+        days=REFERENCE,
+        places=BY_ID,
+        candidates=CANDIDATES,
+    )
+    assert pair.violations[0].floor_term == pytest.approx(2 / 3)
+
+
 def test_j_is_welfare_minus_1000_times_violation() -> None:
     items = outcomes((50, 20, 40, 60), (30, 35, 26.3, 30))
     result = objective(items, NO_INDIAN)
@@ -217,14 +275,16 @@ def test_penalty_dominates_welfare_differences() -> None:
 
 def test_j_does_not_depend_on_the_order_of_people() -> None:
     items = outcomes((50, 20, 40, 60), (30, 35, 26.3, 30))
-    shuffled = [items[2], items[0], items[3], items[1]]
-    a, b = objective(items, NO_INDIAN), objective(shuffled, NO_INDIAN)
-    assert a.value == b.value
-    assert [v.person_id for v in a.violations] == [v.person_id for v in b.violations]
+    a = objective(items, NO_INDIAN)
+    for order in PERMUTATIONS:
+        b = objective([items[i] for i in order], NO_INDIAN)
+        assert a.value == b.value
+        assert [v.person_id for v in a.violations] == [
+            v.person_id for v in b.violations
+        ]
 
 
 def test_for_one_person_the_weight_does_not_change_the_ranking() -> None:
-    plans = [REFERENCE, NO_INDIAN]
     ranking = []
     for weight in (1.0, 2.0, 3.0):
         solo = TY.model_copy(update={"weight": weight})
@@ -239,7 +299,6 @@ def test_for_one_person_the_weight_does_not_change_the_ranking() -> None:
         ]
         ranking.append(scored.index(max(scored)))
     assert ranking == [0, 0, 0]
-    assert plans  # both plans were compared
 
 
 def test_tie_break_is_j_then_lower_cost_then_ids() -> None:
@@ -297,6 +356,9 @@ def test_report_lists_every_miss_with_its_cause() -> None:
 
 
 def test_reference_plan_misses_only_kasias_first_day() -> None:
+    # The 0.5 comes from fixture data (Kasia's interests vs the museum and the Indian
+    # lunch on day 1), not from the formula; the reference-numbers check in #152 must
+    # confirm the fixture against the reference implementation.
     items = outcomes((50, 40, 40, 60), (30, 35, 26.3, 30))
     report = build_report(objective(items, REFERENCE))
     assert report.floors_missed == []
@@ -311,4 +373,5 @@ def test_ids_are_uuids_in_the_report() -> None:
         objective(outcomes((50, 20, 40, 60), (30, 35, 26.3, 30)), NO_INDIAN)
     )
     assert all(isinstance(c.person_id, UUID) for c in report.conflicts)
-    assert isinstance(DATA, PlanningInput)
+    keys = [(str(c.person_id), c.code.value) for c in report.conflicts]
+    assert keys == sorted(keys)

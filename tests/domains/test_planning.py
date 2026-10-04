@@ -66,5 +66,5 @@ def test_fairness_endpoint_alpha() -> None:
             "/api/v1/planning/fairness/score", json={**body, "alpha": 3.5}
         )
     assert plain.json() == nash.json()
-    assert math.isclose(two.json()["score"], -0.25)
+    assert math.isclose(two.json()["score"], 2.75)
     assert bad.status_code == 422
