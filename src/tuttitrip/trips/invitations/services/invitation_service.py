@@ -20,6 +20,12 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.notifications.schemas import (
+    NotificationAction,
+    NotificationActionCode,
+    NotificationType,
+)
+from tuttitrip.notifications.services import notification_service
 from tuttitrip.profiles.schemas import ClaimableProfile
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.profiles.services.profile_service import (
@@ -46,6 +52,7 @@ from tuttitrip.trips.invitations.schemas import (
     JoinResult,
 )
 from tuttitrip.trips.schemas import TripMembership, TripRole
+from tuttitrip.trips.services import member_service
 
 
 class InvitationNotFoundError(Exception):
@@ -205,6 +212,31 @@ async def preview(
     )
 
 
+async def _notify_joined(
+    session: AsyncSession, trip_id: UUID, sub: str, profile_id: UUID
+) -> None:
+    """Tell the organizers that someone joined (same transaction as the join).
+
+    The key ``member_joined:<trip>:<sub>`` makes a repeated join (page refresh,
+    leaving and coming back) a no-op.
+    """
+    profile = await profile_service.get_profile(
+        session,
+        TripMembership(trip_id=trip_id, sub=sub, role=TripRole.MEMBER),
+        profile_id,
+    )
+    await notification_service.notify(
+        session,
+        recipients=await member_service.organizer_subs(session, trip_id),
+        type=NotificationType.MEMBER_JOINED,
+        trip_id=trip_id,
+        params={"member_name": profile.display_name},
+        actions=[NotificationAction(code=NotificationActionCode.OPEN_PEOPLE)],
+        dedupe_key=f"member_joined:{trip_id}:{sub}",
+        actor=sub,
+    )
+
+
 async def _join(
     session: AsyncSession,
     sub: str,
@@ -250,6 +282,8 @@ async def _join(
         profile_id = await profile_service.create_account_profile(
             session, row.trip_id, sub, body.display_name or PLACEHOLDER_NAME
         )
+    if not was_member:
+        await _notify_joined(session, row.trip_id, sub, profile_id)
     await session.commit()
     return JoinResult(
         trip_id=row.trip_id,

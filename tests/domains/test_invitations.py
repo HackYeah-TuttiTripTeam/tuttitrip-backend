@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -17,9 +18,12 @@ from sqlalchemy.exc import IntegrityError
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
+from tuttitrip.notifications.schemas import NotificationActionCode, NotificationType
+from tuttitrip.notifications.services import notification_service
 from tuttitrip.profiles import db as profiles_db
 from tuttitrip.profiles.db import link_account as real_link_account
 from tuttitrip.profiles.models import Profile
+from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.permissions.services.token_service import hash_token
@@ -27,7 +31,7 @@ from tuttitrip.trips import db as trips_db
 from tuttitrip.trips.invitations import db as inv_db
 from tuttitrip.trips.invitations.models import TripInvitation
 from tuttitrip.trips.schemas import TripMembership, TripRole
-from tuttitrip.trips.services import trip_service
+from tuttitrip.trips.services import member_service, trip_service
 
 TRIP = uuid.uuid4()
 HOST = AuthenticatedUser(sub="auth0|host")
@@ -43,6 +47,7 @@ class World:
     profiles: list[Profile] = field(default_factory=list)
     invitations: dict[str, TripInvitation] = field(default_factory=dict)
     commits: int = 0
+    notify: AsyncMock = field(default_factory=AsyncMock)
 
     def invite(self, **overrides: object) -> TripInvitation:
         values: dict[str, object] = {
@@ -157,6 +162,13 @@ class World:
         profile.user_sub = sub
         return True
 
+    def name_of(
+        self, _s: object, membership: TripMembership, profile_id: uuid.UUID
+    ) -> SimpleNamespace:
+        profile = self.profile(_s, membership.trip_id, profile_id)
+        assert profile is not None
+        return SimpleNamespace(display_name=profile.display_name)
+
     def role_of(self, _s: object, _t: uuid.UUID, sub: str) -> TripRole | None:
         return self.roles.get(sub)
 
@@ -165,7 +177,12 @@ class World:
 def world(monkeypatch: pytest.MonkeyPatch) -> World:
     w = World(roles={HOST.sub: TripRole.HOST})
     w.profiles.append(Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub=HOST.sub))
+    monkeypatch.setattr(notification_service, "notify", w.notify)
+    monkeypatch.setattr(
+        member_service, "organizer_subs", AsyncMock(return_value=[HOST.sub])
+    )
     for module, name, fake in (
+        (profile_service, "get_profile", w.name_of),
         (trip_service, "get_membership", w.membership),
         (inv_db, "select_by_hash", w.by_hash),
         (inv_db, "consume_use", w.consume),
@@ -685,3 +702,30 @@ def test_a_mismatch_fails_before_any_write(guest: TestClient, world: World) -> N
     assert response.status_code == 409
     assert row.uses == 0  # no use was taken, not merely rolled back
     inv_db.consume_use.assert_not_called()  # ty: ignore[unresolved-attribute]
+
+
+def test_joining_tells_the_organizers_once(guest: TestClient, world: World) -> None:
+    world.invite()
+    guest.post(path(ACCEPT), json={**BODY, "display_name": "Ola"})
+    guest.post(path(ACCEPT), json={**BODY, "display_name": "Ola"})
+    world.notify.assert_awaited_once()
+    kwargs = world.notify.await_args.kwargs  # ty: ignore[unresolved-attribute]
+    assert kwargs["recipients"] == [HOST.sub]
+    assert kwargs["type"] is NotificationType.MEMBER_JOINED
+    assert kwargs["trip_id"] == TRIP
+    assert kwargs["params"] == {"member_name": "Ola"}
+    assert [a.code for a in kwargs["actions"]] == [NotificationActionCode.OPEN_PEOPLE]
+    assert kwargs["dedupe_key"] == f"member_joined:{TRIP}:{GUEST.sub}"
+    assert kwargs["actor"] == GUEST.sub
+
+
+def test_a_taken_over_profile_gives_its_name(guest: TestClient, world: World) -> None:
+    babcia = world.person("Babcia")
+    world.invite(profile_id=babcia.id)
+    assert guest.post(path(ACCEPT), json=BODY).status_code == 200
+    assert world.notify.await_args.kwargs["params"] == {"member_name": "Babcia"}  # ty: ignore[unresolved-attribute]
+
+
+def test_a_failed_join_notifies_nobody(guest: TestClient, world: World) -> None:
+    assert guest.post(path(ACCEPT), json=BODY).status_code == 404
+    world.notify.assert_not_awaited()

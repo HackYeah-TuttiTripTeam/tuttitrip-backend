@@ -125,6 +125,7 @@ class Feature(StrEnum):
     PLACES_CATALOG = "places.catalog"
 
     MCP = "mcp"
+    NOTIFICATIONS = "notifications"
 
     @property
     def parent(self) -> Feature | None:
@@ -194,6 +195,7 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.PLACES: "Katalog miejsc",
     Feature.PLACES_CATALOG: "Katalog miejsc i miast: ceny i godziny ze źródłem",
     Feature.MCP: "Serwer MCP: własne dane w Claude, ChatGPT i innych klientach",
+    Feature.NOTIFICATIONS: "Powiadomienia: skrzynka, licznik i strumień na żywo",
 }
 
 

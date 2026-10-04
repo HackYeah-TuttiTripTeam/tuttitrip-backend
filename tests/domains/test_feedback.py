@@ -5,6 +5,7 @@ import functools
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -18,6 +19,7 @@ from sqlalchemy.schema import CreateIndex
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
+from tuttitrip.notifications.schemas import NotificationActionCode, NotificationType
 from tuttitrip.places.services.place_service import PlaceNotFoundError
 from tuttitrip.planning.plans.schemas import ReasonCode as PlanReasonCode
 from tuttitrip.profiles.feedback import db
@@ -106,13 +108,32 @@ def session() -> AsyncMock:
 
 
 @pytest.fixture
-def granny(monkeypatch: pytest.MonkeyPatch) -> Profile:
+def notify(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """The producer call and the organizers lookup, replaced."""
+    mock = AsyncMock(return_value=1)
+    monkeypatch.setattr(feedback_service.notification_service, "notify", mock)
+    monkeypatch.setattr(
+        feedback_service.member_service,
+        "organizer_subs",
+        AsyncMock(return_value=[HOST]),
+    )
+    return mock
+
+
+@pytest.fixture
+def granny(monkeypatch: pytest.MonkeyPatch, notify: AsyncMock) -> Profile:
     """A profile linked to the account GRANNY; the place exists in the catalog."""
+    del notify  # only here so the producer call is replaced for every test
     profile = _profile(GRANNY)
+    profile.display_name = "Babcia"
     monkeypatch.setattr(
         feedback_service.profiles_db, "select_profile", AsyncMock(return_value=profile)
     )
-    monkeypatch.setattr(feedback_service.place_service, "get_place", AsyncMock())
+    monkeypatch.setattr(
+        feedback_service.place_service,
+        "get_place",
+        AsyncMock(return_value=SimpleNamespace(name="Wawel")),
+    )
     return profile
 
 
@@ -241,6 +262,53 @@ async def test_host_vetoes_on_behalf_of_granny_and_the_author_is_stored(
     )
     assert (read.on_behalf, read.created_by_sub) == (True, HOST)
     assert read.revoked_at is None
+
+
+@_sync
+async def test_a_veto_tells_the_organizers_except_its_author(
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncMock,
+    granny: Profile,
+    notify: AsyncMock,
+) -> None:
+    monkeypatch.setattr(db, "insert_veto", AsyncMock(side_effect=lambda _s, veto: veto))
+    veto_id = uuid.uuid4()
+    session.refresh.side_effect = lambda veto: (
+        setattr(veto, "id", veto_id),
+        setattr(veto, "created_at", NOW),
+    )
+    await feedback_service.create_veto(
+        session,
+        _membership(HOST, TripRole.HOST),
+        VetoCreate(profile_id=granny.id, place_id=PLACE),
+    )
+    assert notify.await_args is not None
+    kwargs = notify.await_args.kwargs
+    assert kwargs["recipients"] == [HOST]
+    assert kwargs["actor"] == HOST
+    assert kwargs["type"] is NotificationType.VETO_ADDED
+    assert kwargs["params"] == {"place_name": "Wawel", "member_name": "Babcia"}
+    assert [a.code for a in kwargs["actions"]] == [NotificationActionCode.OPEN_PLAN]
+    assert kwargs["dedupe_key"] == f"veto:{veto_id}"
+    session.commit.assert_awaited_once()
+
+
+@_sync
+async def test_a_veto_that_already_exists_notifies_nobody(
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncMock,
+    granny: Profile,
+    notify: AsyncMock,
+) -> None:
+    error = IntegrityError("x", {}, Exception(ACTIVE_VETO_INDEX))
+    monkeypatch.setattr(db, "insert_veto", AsyncMock(side_effect=error))
+    with pytest.raises(VetoExistsError):
+        await feedback_service.create_veto(
+            session,
+            _membership(HOST, TripRole.HOST),
+            VetoCreate(profile_id=granny.id, place_id=PLACE),
+        )
+    notify.assert_not_awaited()
 
 
 @_sync
