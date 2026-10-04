@@ -119,8 +119,9 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'TUTTITRIP_DATABASE__NAME=%s\n' "$database"
   printf 'TUTTITRIP_DBOS__APPLICATION_VERSION=%s\n' "$env"
   printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$demo_reset_secret"
-  # MCP server: its URL is also the Auth0 API identifier of this environment.
-  printf 'TUTTITRIP_MCP__ENABLED=true\nTUTTITRIP_MCP__RESOURCE_URL=https://%s/api/v1/mcp\n' "$host"
+  # MCP server: its URL is also the Auth0 API identifier of this environment
+  # (on only for main and develop, see tt_mcp_env).
+  tt_mcp_env "$env"
   for var in TUTTITRIP_AUTH0__DOMAIN TUTTITRIP_AUTH0__AUDIENCE TUTTITRIP_CORS_ORIGINS \
     TUTTITRIP_CORS_ORIGIN_REGEX; do
     if [ -n "${!var:-}" ]; then printf '%s=%s\n' "$var" "${!var}"; fi
