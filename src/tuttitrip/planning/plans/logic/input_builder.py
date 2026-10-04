@@ -34,6 +34,12 @@ from tuttitrip.places.schemas import (
     TransitFareRead,
 )
 from tuttitrip.planning.logic.params import AlgorithmParams
+from tuttitrip.planning.plans.schemas import (
+    MISSING_CARD,
+    MissingField,
+    MissingInput,
+    PlanMissingInputsDetail,
+)
 from tuttitrip.planning.schemas import (
     LodgingOption,
     LodgingOutcome,
@@ -140,6 +146,55 @@ def lodging_options(
     return tuple(options)
 
 
+class MissingInputsError(PlanInputError):
+    """The trip lacks data a plan needs; ``missing`` lists all of it."""
+
+    def __init__(
+        self, missing: Sequence[MissingInput], message: str | None = None
+    ) -> None:
+        """Remember what is missing.
+
+        Args:
+            missing: Everything missing, in the order of the interview.
+            message: For developers; defaults to a list of the fields.
+        """
+        self.missing = list(missing)
+        fields = ", ".join(item.field.value for item in self.missing)
+        self.message = message or f"The trip lacks data the plan needs: {fields}"
+        super().__init__(self.message)
+
+    @property
+    def detail(self) -> PlanMissingInputsDetail:
+        """The body of the 422 answer."""
+        return PlanMissingInputsDetail(message=self.message, missing=self.missing)
+
+
+def find_missing(
+    trip: TripRead, *, city_known: bool, people: int
+) -> list[MissingInput]:
+    """What the trip still lacks before a plan can be computed.
+
+    Args:
+        trip: The trip.
+        city_known: The trip has a destination or a city (any city: a place outside
+            the catalog is fetched, not asked for again).
+        people: How many people are on the trip.
+
+    Returns:
+        The missing fields in the order of the interview: city, dates, people.
+    """
+    lacks = {
+        MissingField.DESTINATION: not city_known,
+        MissingField.DATES: trip.start_date is None or trip.end_date is None,
+        MissingField.PEOPLE: people == 0,
+    }
+    return [
+        MissingInput(field=field, kind=MISSING_CARD[field])
+        for field, missing in lacks.items()
+        if missing
+    ]
+
+
 def trip_days(start: date, end: date) -> tuple[date, ...]:
     """Every date of the trip.
 
@@ -185,14 +240,13 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
         The input of the algorithm.
 
     Raises:
-        PlanInputError: When the trip has no dates or no people.
+        MissingInputsError: When the trip has no dates or no people.
     """
-    if trip.start_date is None or trip.end_date is None:
-        msg = "The trip needs start and end dates to plan"
-        raise PlanInputError(msg)
-    if not profiles:
-        msg = "The trip has no people"
-        raise PlanInputError(msg)
+    start, end = trip.start_date, trip.end_date
+    if start is None or end is None or not profiles:
+        raise MissingInputsError(
+            find_missing(trip, city_known=True, people=len(profiles))
+        )
     by_profile = {p.profile_id: p for p in preferences}
     votes: dict[UUID, dict[UUID, Vote]] = {}
     reasons: dict[UUID, dict[UUID, ReasonCode]] = {}
@@ -235,14 +289,14 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
     has_budget = trip.budget_total_max is not None
     return PlanningInput(
         trip=PlanningTrip(
-            days=trip_days(trip.start_date, trip.end_date),
+            days=trip_days(start, end),
             timezone=city.timezone,
             day_start=trip.day_start,
             day_end=trip.day_end,
             budget_from=trip.budget_total_min or Decimal(0),
             budget_to=trip.budget_total_max if has_budget else NO_BUDGET,
             flex_pct=trip.budget_flex_pct,
-            has_lodging=bool(lodgings) and trip.end_date > trip.start_date,
+            has_lodging=bool(lodgings) and end > start,
             currency=trip.currency or city.currency,
         ),
         people=tuple(people),

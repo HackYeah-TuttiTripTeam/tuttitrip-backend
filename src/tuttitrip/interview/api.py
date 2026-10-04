@@ -34,6 +34,7 @@ from tuttitrip.interview.services.session_service import (
     NoProfileError,
     SessionNotFoundError,
 )
+from tuttitrip.planning.plans.schemas import PlanMissingInputs
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
@@ -349,8 +350,12 @@ async def voice_release(membership: TripCoHost) -> None:
     status_code=status.HTTP_201_CREATED,
     responses={
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": "No city yet (`Podaj miasto`), or an unplannable trip."
-        }
+            "model": PlanMissingInputs,
+            "description": (
+                "No city yet (`detail.code` is `plan.missing_inputs`, `message` "
+                "`Podaj miasto`), or an unplannable trip."
+            ),
+        },
     },
     dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
 )
@@ -377,7 +382,12 @@ async def build_draft_plan(
         return await draft_plan_service.build(session, membership)
     except draft_plan_service.MissingCityError as exc:
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, constants.MISSING_CITY_PL
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            draft_plan_service.MISSING_CITY.model_dump(mode="json"),
+        ) from exc
+    except draft_plan_service.MissingInputsError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, exc.detail.model_dump(mode="json")
         ) from exc
     except draft_plan_service.PlanInputError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc

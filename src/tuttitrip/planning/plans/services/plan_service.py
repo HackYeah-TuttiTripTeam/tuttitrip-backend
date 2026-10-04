@@ -41,8 +41,10 @@ from tuttitrip.planning.plans import db
 from tuttitrip.planning.plans.logic.ics import build_ics
 from tuttitrip.planning.plans.logic.input_builder import (
     ALGORITHM_VERSION,
+    MissingInputsError,
     PlanInputError,
     build_input,
+    find_missing,
     input_hash,
     lodging_options,
 )
@@ -286,20 +288,27 @@ async def gather_input(
         The algorithm input, display names by profile id and the trip's alpha.
 
     Raises:
-        PlanInputError: When the trip lacks dates, a city or people.
+        MissingInputsError: When the trip lacks dates, a city or people.
+        PlanInputError: When the destination has no city slug yet.
         CatalogMissingError: When the city has no places in the catalog.
     """
     membership = caller.model_copy(update={"role": TripRole.HOST})
     trip = await trip_service.fill_city_slug(session, membership)
-    slug = trip.city_slug
-    if slug is None:
-        msg = "The trip needs a city to plan"
-        raise PlanInputError(msg)
     cities = {c.slug: c for c in await place_service.list_cities(session)}
     profiles = await profile_service.list_profiles(session, membership)
     preferences = await preference_service.list_preferences(session, membership)
     if assumptions is not None:
         trip, profiles, preferences = _assume(trip, profiles, preferences, assumptions)
+    slug = trip.city_slug
+    # A city outside the catalog is not missing: its places are fetched instead.
+    missing = find_missing(
+        trip, city_known=bool(slug or trip.destination), people=len(profiles)
+    )
+    if missing:
+        raise MissingInputsError(missing)
+    if slug is None:  # a destination the trip has no catalog slug for yet
+        msg = "The trip needs a city to plan"
+        raise PlanInputError(msg)
     feedback = await feedback_service.list_for_trip(session, membership.trip_id)
     places = await place_service.list_all_places(session, slug)
     if not places or slug not in cities:
