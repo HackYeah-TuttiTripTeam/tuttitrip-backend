@@ -200,6 +200,21 @@ class NbpSettings(BaseModel):
     timeout_seconds: float = Field(default=5.0, gt=0)
 
 
+class PhotoSettings(BaseModel):
+    """Limits of trip photos, which live in Postgres (``bytea``).
+
+    The browser shrinks the image and makes the thumbnail before uploading
+    (that also strips EXIF), so the limits are small on purpose.
+    """
+
+    # Largest accepted photo, bytes (after the browser's resize).
+    max_image_bytes: int = Field(default=2_000_000, ge=1)
+    # Largest accepted thumbnail, bytes; it is also inlined in the list.
+    max_thumbnail_bytes: int = Field(default=60_000, ge=1)
+    # Photos one trip may hold (database and backup size).
+    max_per_trip: int = Field(default=200, ge=1)
+
+
 class DemoSettings(BaseModel):
     """One-link jury login onto a regular demo account (``POST /auth/demo``).
 
@@ -303,6 +318,7 @@ class Settings(BaseSettings):
     expenses: ExpensesSettings = Field(default_factory=ExpensesSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
+    photos: PhotoSettings = Field(default_factory=PhotoSettings)
 
     cities: CitiesSettings = Field(default_factory=CitiesSettings)
 
