@@ -439,6 +439,9 @@ async def test_create_trip_creates_the_host_profile(
     monkeypatch.setattr(
         parameters_service, "default_alpha", AsyncMock(return_value=1.0)
     )
+    monkeypatch.setattr(
+        trip_service.place_service, "find_city_slug", AsyncMock(return_value=None)
+    )
     host = AsyncMock()
     monkeypatch.setattr(profile_service, "create_host_profile", host)
     await trip_service.create_trip(session, ANA, TripCreate(name="X", destination="Y"))
