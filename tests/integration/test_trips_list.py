@@ -22,7 +22,7 @@ from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.db.session import database_url
 from tuttitrip.trips.models import Trip, TripMember
-from tuttitrip.trips.schemas import TripRole
+from tuttitrip.trips.schemas import MemberStatus, TripRole
 
 pytestmark = pytest.mark.integration
 
@@ -45,6 +45,7 @@ class World:
         self,
         name: str,
         role: TripRole = TripRole.HOST,
+        status: MemberStatus = MemberStatus.CONFIRMED,
         **fields: Field,
     ) -> Trip:
         """Insert a trip of the caller (``me``) with the given role."""
@@ -53,7 +54,11 @@ class World:
             trip = Trip(owner_sub=self.me.sub, name=name, **fields)
             session.add(trip)
             await session.flush()
-            session.add(TripMember(trip_id=trip.id, user_sub=self.me.sub, role=role))
+            session.add(
+                TripMember(
+                    trip_id=trip.id, user_sub=self.me.sub, role=role, status=status
+                )
+            )
             await session.commit()
         self.trip_ids.append(trip.id)
         return trip
@@ -270,3 +275,33 @@ async def test_combined_filter_is_stable_across_a_page_boundary(world: World) ->
         body = await world.get(world.me, {**params, "page": page})
         again += [i["name"] for i in body["items"]]
     assert again == seen
+
+
+@with_world
+async def test_when_splits_history_from_upcoming_and_status_finds_pending(
+    world: World,
+) -> None:
+    today = datetime.now(UTC).date()
+    day = timedelta(days=1)
+    await world.add("past", start_date=today - 3 * day, end_date=today - day)
+    await world.add("today", start_date=today, end_date=today)
+    await world.add("future", start_date=today + day, end_date=today + 2 * day)
+    await world.add("undated")
+    await world.add(
+        "invited",
+        TripRole.MEMBER,
+        MemberStatus.PENDING,
+        start_date=today + day,
+        end_date=today + day,
+    )
+    past = await world.get(world.me, {"when": "past"})
+    assert names(past) == ["past"]
+    upcoming = await world.get(world.me, {"when": "upcoming", "sort": "name"})
+    assert set(names(upcoming)) == {"today", "future", "undated", "invited"}
+    assert upcoming["total"] == 4
+    pending = await world.get(world.me, {"status": "pending"})
+    assert names(pending) == ["invited"]
+    assert pending["items"][0]["my_status"] == "pending"
+    both = await world.get(world.me, {"status": "confirmed", "when": "upcoming"})
+    assert "invited" not in names(both)
+    assert {i["my_status"] for i in both["items"]} == {"confirmed"}

@@ -4,7 +4,17 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Select, delete, func, select, union_all, update
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    delete,
+    exists,
+    func,
+    literal,
+    select,
+    union_all,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +22,7 @@ from tuttitrip.shared.db.pagination import ordering, paginate
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.models import (
     AccessToken,
+    AccountBlock,
     PermissionAudit,
     Role,
     RoleGrant,
@@ -26,11 +37,16 @@ from tuttitrip.shared.permissions.schemas import (
     TokenScope,
 )
 
+BLOCKED_MARK = "__blocked__"
+"""Pseudo feature code of the row that tells the grants query the account is blocked."""
+
 
 async def select_effective_grants(
     session: AsyncSession, sub: str, *, default_role: str, claim_only_role: str
-) -> Sequence[tuple[str, Access]]:
-    """Every grant that applies to a user, in one round trip.
+) -> tuple[Sequence[tuple[str, Access]], bool]:
+    """Every grant that applies to a user, and whether the account is blocked.
+
+    One round trip: the block rides along as an extra row of the union.
 
     Args:
         session: Open session.
@@ -40,7 +56,7 @@ async def select_effective_grants(
 
     Returns:
         ``(feature, level)`` pairs from the user's roles, the default role and
-        direct grants (duplicates possible).
+        direct grants (duplicates possible), and the blocked flag.
     """
     assigned = select(UserRole.role_name).where(UserRole.user_sub == sub)
     from_roles = select(RoleGrant.feature, RoleGrant.level).where(
@@ -48,8 +64,71 @@ async def select_effective_grants(
         RoleGrant.role_name != claim_only_role,
     )
     direct = select(UserGrant.feature, UserGrant.level).where(UserGrant.user_sub == sub)
-    result = await session.execute(union_all(from_roles, direct))
-    return [(row[0], Access(row[1])) for row in result.all()]
+    blocked = select(literal(BLOCKED_MARK), literal(Access.READ.value)).where(
+        exists().where(AccountBlock.user_sub == sub)
+    )
+    result = await session.execute(union_all(from_roles, direct, blocked))
+    rows = result.all()
+    grants: list[tuple[str, Access]] = [
+        (str(row[0]), Access(row[1])) for row in rows if row[0] != BLOCKED_MARK
+    ]
+    return grants, len(grants) < len(rows)
+
+
+async def upsert_account_block(
+    session: AsyncSession, sub: str, *, deleted: bool, blocked_by: str
+) -> None:
+    """Block an account, or mark it deleted (idempotent; caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+        deleted: Whether the account is gone from Auth0.
+        blocked_by: Auth0 subject of the admin.
+    """
+    statement = insert(AccountBlock).values(
+        user_sub=sub, deleted=deleted, blocked_by=blocked_by
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[AccountBlock.user_sub],
+            set_={"deleted": statement.excluded.deleted},
+        )
+    )
+
+
+async def delete_account_block(session: AsyncSession, sub: str) -> None:
+    """Lift a block (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+    """
+    await session.execute(delete(AccountBlock).where(AccountBlock.user_sub == sub))
+
+
+async def select_account_block(session: AsyncSession, sub: str) -> AccountBlock | None:
+    """Find the block of an account.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        The row, or None.
+    """
+    return await session.get(AccountBlock, sub)
+
+
+async def delete_user_access(session: AsyncSession, sub: str) -> None:
+    """Remove a user's role assignments and direct grants (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+    """
+    await session.execute(delete(UserRole).where(UserRole.user_sub == sub))
+    await session.execute(delete(UserGrant).where(UserGrant.user_sub == sub))
 
 
 async def select_roles(session: AsyncSession) -> Sequence[Role]:
@@ -532,3 +611,25 @@ async def revoke_active_tokens(
         )
         .values(revoked_at=now)
     )
+
+
+async def revoke_tokens_created_by(
+    session: AsyncSession, sub: str, now: datetime
+) -> int:
+    """Revoke the access tokens a user issued that are still open (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject of the issuer.
+        now: Revocation time.
+
+    Returns:
+        How many tokens were revoked.
+    """
+    result = await session.execute(
+        update(AccessToken)
+        .where(AccessToken.created_by == sub, AccessToken.revoked_at.is_(None))
+        .values(revoked_at=now)
+        .returning(AccessToken.id)
+    )
+    return len(result.all())

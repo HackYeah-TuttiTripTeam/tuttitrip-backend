@@ -771,6 +771,9 @@ the unfinished checks of the same branch, never a deployment.
 Slug: lowercase, every run of non-alphanumerics becomes `-`, trimmed, label
 capped at 63 chars (`feature/cos tam` -> `tuttitrip-api-feature-cos-tam`).
 Naming lives in `deploy/lib.sh` and is tested in `tests/test_deploy_naming.py`.
+The MCP server is on only in `main` and `develop` (`tt_mcp_env`, tested in
+`tests/test_deploy_mcp.py`); previews answer 404 on `/api/v1/mcp`. How to connect
+clients and what the Auth0 tenant must enable: README, "Serwer MCP".
 
 On the host, everything is namespaced: Docker network `tuttitrip`, containers
 `tuttitrip-postgres` (pgvector image, volume `tuttitrip-postgres-data`), `tuttitrip-gateway` (nginx on `172.17.0.1:18080`, routes

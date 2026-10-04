@@ -22,7 +22,13 @@ from tuttitrip.shared.permissions.logic.resolution import Grant
 from tuttitrip.shared.permissions.registry import Access
 from tuttitrip.shared.permissions.services import permission_service
 from tuttitrip.trips.models import Trip
-from tuttitrip.trips.schemas import TripDetails, TripListQuery, TripRead, TripRole
+from tuttitrip.trips.schemas import (
+    MemberStatus,
+    TripDetails,
+    TripListQuery,
+    TripRead,
+    TripRole,
+)
 from tuttitrip.trips.services import trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
@@ -59,14 +65,18 @@ def trip_read() -> TripRead:
         fairness_alpha=1.0,
     )
     details = TripDetails.model_validate(trip, from_attributes=True)
-    return TripRead(**details.model_dump(exclude={"kind"}), my_role=TripRole.HOST)
+    return TripRead(
+        **details.model_dump(exclude={"kind"}),
+        my_role=TripRole.HOST,
+        my_status=MemberStatus.CONFIRMED,
+    )
 
 
 @pytest.fixture
 def grants(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """The caller's stored grants; also counts how often they are loaded."""
-    load = AsyncMock(return_value=USER_GRANTS)
-    monkeypatch.setattr(permission_service, "load_grants", load)
+    load = AsyncMock(return_value=(USER_GRANTS, False))
+    monkeypatch.setattr(permission_service, "load_access", load)
 
     @asynccontextmanager
     async def no_session() -> AsyncGenerator[None]:
@@ -182,19 +192,24 @@ def test_a_user_sees_the_tools(client: TestClient) -> None:
 def test_without_mcp_read_the_tool_list_is_empty(
     client: TestClient, grants: AsyncMock
 ) -> None:
-    grants.return_value = [Grant("trips", Access.WRITE)]
+    grants.return_value = ([Grant("trips", Access.WRITE)], False)
     assert tool_names(client) == []
 
 
 def test_without_trips_the_trip_tools_are_hidden(
     client: TestClient, grants: AsyncMock
 ) -> None:
-    grants.return_value = [Grant("mcp", Access.READ)]
+    grants.return_value = ([Grant("mcp", Access.READ)], False)
     assert tool_names(client) == ["whoami"]
 
 
+def test_a_blocked_account_sees_no_tools(client: TestClient, grants: AsyncMock) -> None:
+    grants.return_value = (USER_GRANTS, True)
+    assert tool_names(client) == []
+
+
 def test_a_hidden_tool_cannot_be_called(client: TestClient, grants: AsyncMock) -> None:
-    grants.return_value = [Grant("trips", Access.WRITE)]
+    grants.return_value = ([Grant("trips", Access.WRITE)], False)
     response = rpc(client, "tools/call", {"name": "whoami", "arguments": {}})
     body = response.json()
     assert "error" in body or body["result"]["isError"]

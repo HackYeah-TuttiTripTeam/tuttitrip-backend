@@ -100,6 +100,37 @@ class City(Base):
     bbox_east: Mapped[float]
 
 
+class CityFetch(Base):
+    """When a city was last fetched from OpenStreetMap (written by the worker).
+
+    The refresh period starts at ``fetched_at``; ``osm_relation_id`` saves a
+    geocoding call on the next refresh.
+    """
+
+    __tablename__ = "city_fetches"
+
+    city_slug: Mapped[str] = mapped_column(
+        ForeignKey("cities.slug", ondelete="CASCADE"), primary_key=True
+    )
+    osm_relation_id: Mapped[int] = mapped_column(BigInteger)
+    fetched_at: Mapped[datetime]
+    stored: Mapped[int]  # places written by that fetch
+
+
+class CityFetchAttempt(Base):
+    """One Overpass reservation of a worker workflow (the daily quota).
+
+    Failed attempts count too, so a row is written before the call. No FK to
+    ``cities``: the reservation can precede the city row.
+    """
+
+    __tablename__ = "city_fetch_attempts"
+
+    workflow_id: Mapped[str] = mapped_column(String(300), primary_key=True)
+    city_slug: Mapped[str] = mapped_column(String(64))
+    reserved_at: Mapped[datetime] = mapped_column(index=True)
+
+
 class Place(Base):
     """A catalog place (attraction, restaurant, lodging...) with planning inputs."""
 
