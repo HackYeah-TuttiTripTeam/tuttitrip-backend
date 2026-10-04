@@ -394,9 +394,9 @@ Co liczy czysty kod z `planning/` i `expenses/` (plansze na danych przykładowyc
 
 <table>
   <tr>
-    <td width="33%"><img src="docs/readme/04-fairness.webp" alt="Wykres zadowolenia pięciu osób w skali 0–100 z podłogą 40 punktów. W planie TuttiTrip najniższy wynik ma Kuba, 58; w planie z czatbota babcia miała 22."><br><sub>Solver sprawiedliwości: najmniej zadowolona osoba ma 58 punktów zamiast 22.</sub></td>
-    <td width="33%"><img src="docs/readme/02-problem.webp" alt="Plan poniedziałku z czatbota z trzema problemami: muzeum zamknięte w poniedziałek, 9 km pieszo z babcią, budżet przekroczony o 240 zł. Obok wynik sprawdzenia: 3 problemy kontra 0 w planie TuttiTrip."><br><sub>Linter planu: 3 problemy w planie z czatbota, 0 w planie TuttiTrip.</sub></td>
-    <td width="33%"><img src="docs/readme/05-decision.webp" alt="Telefon z propozycją przeniesienia Westerplatte na sobotę i kartą „Czeka na Twoją decyzję”: sprawiedliwość 0,87 na 0,71, Kuba 58 na 34, budżet plus 80 zł."><br><sub>Koszt decyzji organizatora: sprawiedliwość, najmniej zadowolona osoba, budżet.</sub></td>
+    <td width="33%"><img width="100%" src="docs/readme/04-fairness.webp" alt="Wykres zadowolenia pięciu osób w skali 0–100 z podłogą 40 punktów. W planie TuttiTrip najniższy wynik ma Kuba, 58; w planie z czatbota babcia miała 22."><br><sub>Solver sprawiedliwości: najmniej zadowolona osoba ma 58 punktów zamiast 22.</sub></td>
+    <td width="33%"><img width="100%" src="docs/readme/02-problem.webp" alt="Plan poniedziałku z czatbota z trzema problemami: muzeum zamknięte w poniedziałek, 9 km pieszo z babcią, budżet przekroczony o 240 zł. Obok wynik sprawdzenia: 3 problemy kontra 0 w planie TuttiTrip."><br><sub>Linter planu: 3 problemy w planie z czatbota, 0 w planie TuttiTrip.</sub></td>
+    <td width="33%"><img width="100%" src="docs/readme/05-decision.webp" alt="Telefon z propozycją przeniesienia Westerplatte na sobotę i kartą „Czeka na Twoją decyzję”: sprawiedliwość 0,87 na 0,71, Kuba 58 na 34, budżet plus 80 zł."><br><sub>Koszt decyzji organizatora: sprawiedliwość, najmniej zadowolona osoba, budżet.</sub></td>
   </tr>
 </table>
 
