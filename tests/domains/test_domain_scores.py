@@ -21,6 +21,7 @@ from tuttitrip.planning.logic.domains import (
 )
 from tuttitrip.planning.logic.welfare_person import (
     domain_scores,
+    person_scores,
     renormalised_pool,
     welfare,
 )
@@ -80,7 +81,8 @@ def test_attractions_one_visit_hand_computed() -> None:
 def test_attractions_scale_with_visit_time() -> None:
     a = sight(60)
     score = attractions_score([day(a)], index(a), {a.id: 50})
-    assert score == pytest.approx(100 * (1 - math.exp(-0.6 * (60 / 90) * 0.5)))
+    # (60 / 90) * 50 / 100 = 1/3; 100 * (1 - exp(-0.2)) = 18.1269.
+    assert score == pytest.approx(18.1269, abs=1e-4)
 
 
 def test_attractions_are_averaged_over_all_days_including_empty() -> None:
@@ -275,3 +277,55 @@ def test_domain_scores_are_rounded_to_four_places() -> None:
     assert result.attractions == pytest.approx(33.3333)
     assert round(result.attractions, 4) == result.attractions
     assert round(result.welfare, 4) == result.welfare
+
+
+def test_pace_counts_empty_days_in_the_average() -> None:
+    p = person()
+    over = day(km=15, minutes=900)  # 0.5 over its limits
+    assert pace_score([over, day()], p) == pytest.approx(75)
+    assert pace_score([over], p) == pytest.approx(50)
+
+
+def test_a_plan_needs_at_least_one_day() -> None:
+    with pytest.raises(ValueError, match="at least one day"):
+        pace_score([], person())
+    with pytest.raises(ValueError, match="at least one day"):
+        food_score([], {}, {})
+
+
+def test_scores_do_not_depend_on_the_order_of_places() -> None:
+    a, b, f = sight(), sight(120), meal()
+    u = {a.id: 40.0, b.id: 70.0, f.id: 90.0}
+    forward = day(a, b, f)
+    backward = day(f, b, a)
+    pl = index(a, b, f)
+    assert attractions_score([forward], pl, u) == attractions_score([backward], pl, u)
+    assert food_score([forward], pl, u) == food_score([backward], pl, u)
+
+
+def test_a_day_with_food_and_attractions_keeps_them_apart() -> None:
+    a, b, f = sight(), sight(), meal()
+    u = {a.id: 50.0, b.id: 50.0, f.id: 80.0}
+    pl = index(a, b, f)
+    assert attractions_score([day(a, b, f)], pl, u) == pytest.approx(45.1188, abs=1e-4)
+    assert food_score([day(a, b, f)], pl, u) == pytest.approx(61.7107, abs=1e-4)
+
+
+def test_person_scores_reads_lodging_from_the_trip() -> None:
+    a, f = sight(), meal()
+    u = {a.id: 50.0, f.id: 80.0}
+    pl = index(a, f)
+    p = person(ImportancePool(lodging=0, food=0, attractions=5, pace=5, cost=0))
+    nights = trip().model_copy(update={"has_lodging": False})
+    result = person_scores(
+        p, [day(a, f)], pl, u, trip=nights, cost=Decimal(1000), lodging=None
+    )
+    assert result.lodging is None
+    assert result.attractions == pytest.approx(25.9182, abs=1e-4)
+    assert result.cost == pytest.approx(100)
+    # 5/5 over attractions and pace (pace 100): sqrt(101 * 26.9182) - 1.
+    assert result.welfare == pytest.approx(math.sqrt(101 * 26.9182) - 1, abs=1e-3)
+    with pytest.raises(ValueError, match="nights"):
+        person_scores(p, [day(a)], pl, u, trip=trip(), cost=Decimal(1000), lodging=None)
+    with pytest.raises(ValueError, match="nights"):
+        person_scores(p, [day(a)], pl, u, trip=nights, cost=Decimal(1000), lodging=[])

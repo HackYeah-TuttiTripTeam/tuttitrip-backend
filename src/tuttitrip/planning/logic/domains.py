@@ -38,6 +38,12 @@ class RequirementOutcome:
     status: RequirementStatus
 
 
+def _require_days(days: Sequence[DayPlan]) -> None:
+    if not days:
+        msg = "A plan has at least one day"
+        raise ValueError(msg)
+
+
 def _saturation(load: float, kappa: float) -> float:
     return _FULL * (1 - math.exp(-kappa * load))
 
@@ -50,6 +56,7 @@ def _day_average(
     kappa: float,
 ) -> float:
     # Mean over all days of the saturated load of the day's places in a domain.
+    _require_days(days)
     per_day = [
         _saturation(
             math.fsum(
@@ -122,6 +129,7 @@ def pace_score(days: Sequence[DayPlan], person: PlanningPerson) -> float:
     Returns:
         ``100 * (1 - min(1, mean_d [(L_d - D_i)+ / 2D_i + (A_d - A_i)+ / 2A_i]))``.
     """
+    _require_days(days)
     over = [
         max(0.0, day.distance_km - person.daily_km) / (2 * person.daily_km)
         + max(0, day.active_min - person.active_min) / (2 * person.active_min)

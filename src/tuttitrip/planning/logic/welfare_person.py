@@ -8,15 +8,34 @@ The pool ``a_ij`` is renormalised to the active domains first (lodging only
 when the trip has nights). A domain with ``a_ij = 0`` does not affect the
 result. A pool whose points all sit on an inactive domain cannot be
 renormalised (the spec is silent); it falls back to equal shares of the active
-domains so a person is never worth nothing by accident. Computed as
+domains so a person is never worth nothing by accident. This is the
+limit of the ``lambda_floor`` idea of E1, where an empty pool gives even shares.
+Computed as
 ``expm1(sum a_ij * ln(1 + q_ij))``, which is the same number. Results are
 rounded to four places at the module boundary so plan hashes stay stable.
 """
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from decimal import Decimal
+from uuid import UUID
 
-from tuttitrip.planning.schemas import DomainScores, PlanningPerson
+from tuttitrip.places.schemas import PlaceRead
+from tuttitrip.planning.logic.domains import (
+    RequirementOutcome,
+    attractions_score,
+    cost_score,
+    food_score,
+    lodging_score,
+    pace_score,
+)
+from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
+from tuttitrip.planning.schemas import (
+    DayPlan,
+    DomainScores,
+    PlanningPerson,
+    PlanningTrip,
+)
 from tuttitrip.profiles.preferences.schemas import ImportanceDomain
 
 ROUNDING = 4
@@ -100,3 +119,51 @@ def domain_scores(
         cost=round(scores[ImportanceDomain.COST], ROUNDING),
         welfare=round(welfare(person, scores, has_lodging=has_lodging), ROUNDING),
     )
+
+
+def person_scores(  # ruff: ignore[too-many-arguments] the whole input of E2 and E3
+    person: PlanningPerson,
+    days: Sequence[DayPlan],
+    places: Mapping[UUID, PlaceRead],
+    utilities: Mapping[UUID, float],
+    *,
+    trip: PlanningTrip,
+    cost: Decimal,
+    lodging: Sequence[RequirementOutcome] | None,
+    params: AlgorithmParams = DEFAULT_PARAMS,
+) -> DomainScores:
+    """E2 and E3 for one person and one plan.
+
+    Whether the lodging domain is active is read from ``trip.has_lodging`` only.
+
+    Args:
+        person: The person.
+        days: The days of the plan (all days of the trip).
+        places: Places by id.
+        utilities: ``u_ip`` of this person by place id.
+        trip: Budget, whether there are nights.
+        cost: ``c(P)`` of the plan.
+        lodging: The requirements checked against the chosen offer; given
+            exactly when the trip has nights.
+        params: Algorithm parameters.
+
+    Returns:
+        The five ``q_ij`` and the welfare ``u_i``.
+
+    Raises:
+        ValueError: When ``lodging`` and ``trip.has_lodging`` disagree.
+    """
+    if (lodging is not None) != trip.has_lodging:
+        msg = "lodging outcomes must be given exactly when the trip has nights"
+        raise ValueError(msg)
+    q = {
+        ImportanceDomain.FOOD: food_score(days, places, utilities, params),
+        ImportanceDomain.ATTRACTIONS: attractions_score(
+            days, places, utilities, params
+        ),
+        ImportanceDomain.PACE: pace_score(days, person),
+        ImportanceDomain.COST: cost_score(cost, trip, params),
+    }
+    if lodging is not None:
+        q[ImportanceDomain.LODGING] = lodging_score(lodging, params)
+    return domain_scores(person, q, has_lodging=trip.has_lodging)

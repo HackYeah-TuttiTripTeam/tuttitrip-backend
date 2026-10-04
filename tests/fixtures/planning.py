@@ -67,6 +67,7 @@ def planning_input(scenario: Scenario, *, lodging: bool = True) -> PlanningInput
             budget_to=trip.budget_total_max,
             flex_pct=trip.budget_flex_pct or 0,
             has_lodging=lodging,
+            currency=trip.currency or "PLN",
         ),
         people=tuple(planning_person(p, catalog) for p in scenario.group.people),
         places=tuple(p for p in catalog.values() if key_of(p)),

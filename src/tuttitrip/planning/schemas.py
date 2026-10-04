@@ -84,6 +84,7 @@ class PlanningTrip(_Frozen):
     has_lodging: bool = Field(
         description="Whether the lodging domain is active (there are nights)."
     )
+    currency: str = Field(default="PLN", description="ISO 4217; prices in it count.")
 
     @property
     def budget_max(self) -> Decimal:
@@ -149,7 +150,11 @@ class DayPlan(_Frozen):
 
 
 class LodgingStay(_Frozen):
-    """The one lodging base of the trip (docs/algorytm.md, section 9)."""
+    """The one lodging base of the trip (docs/algorytm.md, section 9).
+
+    The night price is taken as given: E6 has no markup for lodging, so an
+    unverified night price is not raised by ``delta``.
+    """
 
     nights: int = Field(gt=0)
     price_per_night: Decimal = Field(ge=0)
