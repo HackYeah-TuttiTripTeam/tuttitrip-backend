@@ -130,6 +130,15 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'FORWARDED_ALLOW_IPS=%s\n' "$(docker network inspect "$TT_NETWORK" \
     -f '{{range .IPAM.Config}}{{.Subnet}},{{end}}' 2>/dev/null | sed 's/,$//;s/,\{2,\}/,/g' \
     | grep . || echo '172.16.0.0/12,192.168.0.0/16,10.0.0.0/8')"
+  # Superadmins the API never blocks or deletes: the Discord ids in the admin
+  # tools' allow-list (admin.env, SUPERADMIN_ALLOW_LIST), as a JSON list. Never
+  # echoed; an app.env entry below wins.
+  if [ -f "$TT_STATE_DIR/admin.env" ]; then
+    ids=$(grep -E '^SUPERADMIN_ALLOW_LIST=' "$TT_STATE_DIR/admin.env" | tail -n1 | cut -d= -f2- \
+      | tr -d '\r"'"'"' ' | tr ',' '\n' | grep -E '^[0-9]+$' | sed 's/.*/"&"/' | paste -sd, - || true)
+    if [ -n "$ids" ]; then printf 'TUTTITRIP_ADMIN__PROTECTED_DISCORD_IDS=[%s]\n' "$ids"; fi
+    unset ids
+  fi
   if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
 } >"$envfile"
 {
