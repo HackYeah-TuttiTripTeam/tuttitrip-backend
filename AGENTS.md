@@ -311,7 +311,7 @@ edytować wyjazd X, decyduje jego rola na X.
 - Endpointy wymagają tylko liści. Własne dane grupy mają liść `<grupa>.core`
   (np. `trips.core`, `profiles.core`, `expenses.core`).
 - Wszystko, co tylko dla administratorów, jest pod `admin.*`
-  (`admin.permissions`, `admin.users`, `admin.planning_weights`).
+  (`admin.permissions`, `admin.users`, `admin.planning_weights`, `admin.demo`).
 - Efektywny poziom = maksimum ze wszystkich uprawnień (role, domyślna rola
   `user`, uprawnienia bezpośrednie, claim superadmina) na danym węźle albo
   jego przodku. Kody spoza rejestru (np. usuniętej funkcji) są ignorowane.

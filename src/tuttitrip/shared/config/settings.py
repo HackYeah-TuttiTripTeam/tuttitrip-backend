@@ -57,6 +57,11 @@ class McpSettings(BaseModel):
     resource_url: str = "https://tuttitrip-api.gburek.app/api/v1/mcp"
     # Host names besides the one in `resource_url` accepted in the Host header.
     allowed_hosts: list[str] = Field(default_factory=list)
+    write_calls_per_minute: int = Field(
+        default=10,
+        ge=1,
+        description="Calls of tools that change data, per user per minute.",
+    )
 
     @field_validator("resource_url")
     @classmethod

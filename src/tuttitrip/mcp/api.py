@@ -13,6 +13,8 @@ FastMCP skips ``auth`` checks there.
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Annotated, override
 from urllib.parse import urlsplit
@@ -28,12 +30,17 @@ from fastmcp.server.auth import (
 )
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.http import StarletteWithLifespan
+from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 from starlette.routing import Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from tuttitrip.mcp.schemas import WhoAmI
+from tuttitrip.mcp import schemas as constants
+from tuttitrip.mcp.schemas import McpFairness, McpPlan, VetoResult, WhoAmI
 from tuttitrip.mcp.services import tool_service
+from tuttitrip.mcp.services.tool_service import ToolCall, ToolFailedError
+from tuttitrip.planning.linter.schemas import LintReport, NamedPlan
+from tuttitrip.profiles.feedback.schemas import RatingRead, RatingValue, ReasonCode
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.auth.services.token_verifier import (
     InvalidTokenError,
@@ -54,7 +61,24 @@ INSTRUCTIONS = (
     "TuttiTrip plans group and family trips fairly. These tools read the "
     "signed-in user's own trips; they never show other people's trips."
 )
-TRIP_NOT_FOUND = "Trip not found"
+TRIP_NOT_FOUND = constants.TRIP_NOT_FOUND
+
+READ_ONLY = ToolAnnotations(read_only_hint=True, open_world_hint=False)
+"""Tools that only read: ChatGPT does not ask the user to confirm them."""
+RATING = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+"""Setting a rating again changes nothing."""
+VETO = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=False,
+    open_world_hint=False,
+)
+"""A veto is final and recomputes the plan."""
 
 _USER_KEY = "tuttitrip_user"
 _PERMISSIONS_KEY = "tuttitrip_permissions"
@@ -169,7 +193,241 @@ def _caller() -> tuple[AccessToken, AuthenticatedUser]:
     return token, _user_of(token)
 
 
+@asynccontextmanager
+async def _tool(name: str, trip_id: UUID | None = None) -> AsyncGenerator[ToolCall]:
+    """Session and caller for one tool call; refusals become ``ToolError``.
+
+    Args:
+        name: Tool name, for the call log.
+        trip_id: The trip the tool works on, for the call log.
+
+    Yields:
+        An open session and the caller.
+
+    Raises:
+        ToolError: The service refused (``ToolFailedError``); only its message.
+    """
+    _, user = _caller()
+    try:
+        async with tool_service.tool_call(name, user, trip_id) as call:
+            yield call
+    except ToolFailedError as exc:
+        raise ToolError(str(exc)) from exc
+
+
 # --- server ------------------------------------------------------------------
+
+
+def _add_trip_tools(server: FastMCP) -> None:
+    """Tools for the caller and their trips.
+
+    Args:
+        server: The server to add them to.
+    """
+
+    @server.tool(auth=mcp_requires(Feature.MCP, Access.READ), annotations=READ_ONLY)
+    async def whoami() -> WhoAmI:
+        """Say who is signed in and what they may use.
+
+        Returns:
+            Identity and the permission map.
+        """
+        token, user = _caller()
+        return tool_service.whoami(user, await _permissions_of(token))
+
+    @server.tool(
+        auth=mcp_requires(Feature.TRIPS_CORE, Access.READ), annotations=READ_ONLY
+    )
+    async def list_trips(
+        page: Annotated[int, Field(ge=1, description="Page number, from 1.")] = 1,
+        size: Annotated[int, Field(ge=1, le=MAX_SIZE)] = 20,
+    ) -> Page[TripRead]:
+        """List the signed-in user's trips, newest first, with their role on each.
+
+        Args:
+            page: Page number, from 1.
+            size: Trips per page.
+
+        Returns:
+            One page of trips.
+        """
+        _, user = _caller()
+        async with tool_service.open_session() as session:
+            return await tool_service.list_trips(
+                session, user, PageParams(page=page, size=size)
+            )
+
+    @server.tool(
+        auth=mcp_requires(Feature.TRIPS_CORE, Access.READ), annotations=READ_ONLY
+    )
+    async def get_trip(trip_id: UUID) -> TripRead:
+        """Read one trip the signed-in user is a member of.
+
+        Args:
+            trip_id: Id of the trip, from list_trips.
+
+        Returns:
+            The trip with the user's role.
+
+        Raises:
+            ToolError: The trip does not exist or the user is not on it.
+        """
+        _, user = _caller()
+        async with tool_service.open_session() as session:
+            try:
+                return await tool_service.get_trip(session, user, trip_id)
+            except TripNotFoundError as exc:
+                raise ToolError(TRIP_NOT_FOUND) from exc
+
+
+def _add_plan_tools(server: FastMCP) -> None:
+    """Read-only tools for the plan, the ledger and the linter.
+
+    Args:
+        server: The server to add them to.
+    """
+
+    @server.tool(
+        auth=mcp_requires(Feature.PLANNING_PLANS, Access.READ), annotations=READ_ONLY
+    )
+    async def get_plan(
+        trip_id: UUID,
+        day: Annotated[
+            int | None, Field(ge=1, description="Day number from 1; omit for all days.")
+        ] = None,
+    ) -> McpPlan:
+        """Read the newest plan of a trip, day by day.
+
+        Each stop has its hours, cost, source link and whether the price and the
+        opening hours are verified. Ask for one `day` when the trip is long.
+
+        Args:
+            trip_id: Id of the trip, from list_trips.
+            day: Day number from 1, or omitted for every day.
+
+        Returns:
+            The plan with the requested day or days.
+        """
+        async with _tool("get_plan", trip_id) as call:
+            return await tool_service.get_plan(call.session, call.user, trip_id, day)
+
+    @server.tool(
+        auth=mcp_requires(Feature.PLANNING_FAIRNESS, Access.READ),
+        annotations=READ_ONLY,
+    )
+    async def get_fairness(trip_id: UUID) -> McpFairness:
+        """Read the fairness ledger of the newest plan.
+
+        Per person: welfare `u`, what they would get alone `u_star`, `r` ("x% of
+        their own maximum"), the floor and the five domains; for the group `min_r`
+        and Jain's index. Also the guarantees that were missed and the conflicts.
+
+        Args:
+            trip_id: Id of the trip, from list_trips.
+
+        Returns:
+            The ledger.
+        """
+        async with _tool("get_fairness", trip_id) as call:
+            return await tool_service.get_fairness(call.session, call.user, trip_id)
+
+    @server.tool(
+        auth=mcp_requires(Feature.PLANNING_LINTER, Access.READ), annotations=READ_ONLY
+    )
+    async def get_violations(trip_id: UUID) -> LintReport:
+        """List the rule violations of the newest plan (opening hours, pace, budget...).
+
+        Args:
+            trip_id: Id of the trip, from list_trips.
+
+        Returns:
+            Every rule of the linter with its violations and warnings.
+        """
+        async with _tool("get_violations", trip_id) as call:
+            return await tool_service.get_violations(call.session, call.user, trip_id)
+
+    @server.tool(
+        auth=mcp_requires(Feature.PLANNING_LINTER, Access.READ), annotations=READ_ONLY
+    )
+    async def lint_plan(trip_id: UUID, plan: NamedPlan) -> LintReport:
+        """Check a plan from another tool against this trip's people and city.
+
+        Split the plan into days (`day` as YYYY-MM-DD) and stops (`name`, `start`
+        and `end` as HH:MM, local time). Names are matched to the city's catalog;
+        a name that is not clearly one place is reported as an unknown place.
+        Nothing is stored.
+
+        Args:
+            trip_id: Id of the trip, from list_trips.
+            plan: The days and stops.
+
+        Returns:
+            Every rule of the linter with its violations and warnings.
+        """
+        async with _tool("lint_plan", trip_id) as call:
+            return await tool_service.lint_plan(call.session, call.user, trip_id, plan)
+
+
+def _add_write_tools(server: FastMCP) -> None:
+    """Tools that change data (rate limited per user).
+
+    Args:
+        server: The server to add them to.
+    """
+
+    @server.tool(
+        auth=mcp_requires(Feature.PROFILES_FEEDBACK, Access.WRITE),
+        annotations=RATING,
+    )
+    async def rate_place(
+        trip_id: UUID,
+        place_id: UUID,
+        rating: RatingValue,
+        reason: Annotated[
+            ReasonCode | None, Field(description="Required for dont_want only.")
+        ] = None,
+    ) -> RatingRead:
+        """Set your own rating of a place; setting it again changes nothing.
+
+        Args:
+            trip_id: Id of the trip, from list_trips.
+            place_id: Id of the catalog place.
+            rating: want, neutral or dont_want.
+            reason: Why, for dont_want.
+
+        Returns:
+            The stored rating.
+        """
+        async with _tool("rate_place", trip_id) as call:
+            return await tool_service.rate_place(
+                call.session, call.user, trip_id, place_id, rating, reason
+            )
+
+    @server.tool(
+        auth=mcp_requires(Feature.PROFILES_FEEDBACK, Access.WRITE), annotations=VETO
+    )
+    async def veto_place(
+        trip_id: UUID,
+        place_id: UUID,
+        on_behalf_of: Annotated[
+            UUID | None,
+            Field(description="Profile id of another person; host or co-host only."),
+        ] = None,
+    ) -> VetoResult:
+        """File a veto on a place: it is final and the plan is recomputed without it.
+
+        Args:
+            trip_id: Id of the trip, from list_trips.
+            place_id: Id of the catalog place.
+            on_behalf_of: Profile id of another person (host or co-host only).
+
+        Returns:
+            The veto, the new plan version and the places that left the plan.
+        """
+        async with _tool("veto_place", trip_id) as call:
+            return await tool_service.veto_place(
+                call.session, call.user, trip_id, place_id, on_behalf_of
+            )
 
 
 def create_mcp(
@@ -201,55 +459,9 @@ def create_mcp(
         ),
     )
 
-    @server.tool(auth=mcp_requires(Feature.MCP, Access.READ))
-    async def whoami() -> WhoAmI:
-        """Say who is signed in and what they may use.
-
-        Returns:
-            Identity and the permission map.
-        """
-        token, user = _caller()
-        return tool_service.whoami(user, await _permissions_of(token))
-
-    @server.tool(auth=mcp_requires(Feature.TRIPS_CORE, Access.READ))
-    async def list_trips(
-        page: Annotated[int, Field(ge=1, description="Page number, from 1.")] = 1,
-        size: Annotated[int, Field(ge=1, le=MAX_SIZE)] = 20,
-    ) -> Page[TripRead]:
-        """List the signed-in user's trips, newest first, with their role on each.
-
-        Args:
-            page: Page number, from 1.
-            size: Trips per page.
-
-        Returns:
-            One page of trips.
-        """
-        _, user = _caller()
-        async with tool_service.open_session() as session:
-            return await tool_service.list_trips(
-                session, user, PageParams(page=page, size=size)
-            )
-
-    @server.tool(auth=mcp_requires(Feature.TRIPS_CORE, Access.READ))
-    async def get_trip(trip_id: UUID) -> TripRead:
-        """Read one trip the signed-in user is a member of.
-
-        Args:
-            trip_id: Id of the trip, from list_trips.
-
-        Returns:
-            The trip with the user's role.
-
-        Raises:
-            ToolError: The trip does not exist or the user is not on it.
-        """
-        _, user = _caller()
-        async with tool_service.open_session() as session:
-            try:
-                return await tool_service.get_trip(session, user, trip_id)
-            except TripNotFoundError as exc:
-                raise ToolError(TRIP_NOT_FOUND) from exc
+    _add_trip_tools(server)
+    _add_plan_tools(server)
+    _add_write_tools(server)
 
     return server
 

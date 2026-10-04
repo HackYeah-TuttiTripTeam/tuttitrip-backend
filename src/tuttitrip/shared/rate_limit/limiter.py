@@ -1,7 +1,7 @@
 """A small in-memory sliding-window rate limiter keyed by client.
 
 Per process: with several API workers each has its own budget, so the demo
-runs a single worker.
+and the MCP write tools assume a single worker.
 """
 
 from collections import OrderedDict, deque
@@ -37,7 +37,7 @@ class RateLimiter:
         """Record a hit and say whether it is within the limit.
 
         Args:
-            key: Who is calling (the client IP).
+            key: Who is calling (a client IP or a user).
 
         Returns:
             False when the key already used its hits in the window.
