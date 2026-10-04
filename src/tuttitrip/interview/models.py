@@ -61,6 +61,8 @@ class InterviewSession(Base):
     # One run (text turn or voice call) at a time: set while it runs, to the moment
     # after which the marker counts as abandoned. See `db.try_start_run`.
     running_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # What holds the session while `running_until` is in the future: `text` or `voice`.
+    running_kind: Mapped[str | None] = mapped_column(String(5))
     # Seconds of voice calls already used on this interview (the trip's voice budget).
     voice_seconds: Mapped[int] = mapped_column(server_default=text("0"))
     # `ModelMessagesTypeAdapter.dump_python(..., mode="json")` of the whole run.

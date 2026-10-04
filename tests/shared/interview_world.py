@@ -84,7 +84,8 @@ class World:
         self.saved: dict[uuid.UUID, PreferencesWrite] = {}
         self.digests: dict[FieldRef, str] = {}
         self.writes = 0
-        self.running: dict[uuid.UUID, tuple[datetime, float]] = {}
+        # session id -> (token, expiry on the monotonic clock, kind)
+        self.running: dict[uuid.UUID, tuple[datetime, float, str]] = {}
         self.voice_used: dict[uuid.UUID, int] = {}
         self.known_sessions: set[uuid.UUID] | None = None
         # The profile a member's session belongs to; None: the trip's own.
@@ -115,6 +116,11 @@ class World:
         monkeypatch.setattr(interview_db, "try_start_run", self._try_start)
         monkeypatch.setattr(interview_db, "end_run", self._end_run)
         monkeypatch.setattr(interview_db, "select_session", self._select_session)
+        monkeypatch.setattr(interview_db, "extend_run", self._extend_run)
+        monkeypatch.setattr(interview_db, "clear_voice_run", self._clear_voice_run)
+        monkeypatch.setattr(
+            interview_db, "select_open_session", self._select_open_session
+        )
 
     def deps(self, own_profile_id: uuid.UUID | None = None) -> InterviewDeps:
         """Deps whose sessions are the fake one.
@@ -258,7 +264,8 @@ class World:
             return None
         self._claims += 1
         token = NOW + timedelta(seconds=self._claims)
-        self.running[session_id] = (token, time.monotonic() + ttl)
+        kind = "text" if voice_limit is None else "voice"
+        self.running[session_id] = (token, time.monotonic() + ttl, kind)
         return token
 
     async def _end_run(
@@ -271,14 +278,47 @@ class World:
             used = self.voice_used.get(session_id, 0)
             self.voice_used[session_id] = used + voice_seconds
 
+    async def _extend_run(
+        self, _s: object, session_id: uuid.UUID, token: datetime, ttl: float
+    ) -> datetime | None:
+        held = self.running.get(session_id)
+        if held is None or held[0] != token:
+            return None
+        self._claims += 1
+        fresh = NOW + timedelta(seconds=self._claims)
+        self.running[session_id] = (fresh, time.monotonic() + ttl, held[2])
+        return fresh
+
+    async def _clear_voice_run(
+        self, _s: object, trip_id: uuid.UUID, session_id: uuid.UUID
+    ) -> bool:
+        held = self.running.get(session_id)
+        if trip_id != self.trip_id or held is None or held[2] != "voice":
+            return False
+        del self.running[session_id]
+        return True
+
+    async def _select_open_session(
+        self, _s: object, trip_id: uuid.UUID, **_kw: object
+    ) -> SimpleNamespace | None:
+        if trip_id != self.trip_id or self.known_sessions is None:
+            return None
+        return SimpleNamespace(id=next(iter(self.known_sessions)))
+
     async def _select_session(
         self, _s: object, trip_id: uuid.UUID, session_id: uuid.UUID, **_kw: object
     ) -> SimpleNamespace | None:
         if trip_id != self.trip_id or not self._exists(session_id):
             return None
+        held = self.running.get(session_id)
+        kind = None
+        if held is not None and held[1] > time.monotonic():
+            kind = held[2]
         return SimpleNamespace(
             voice_seconds=self.voice_used.get(session_id, 0),
             profile_id=self.session_owner,
+            running_until=NOW + timedelta(days=3650) if kind else None,
+            running_kind=kind,
         )
 
     def _exists(self, session_id: uuid.UUID) -> bool:

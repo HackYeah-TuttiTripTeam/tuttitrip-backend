@@ -152,6 +152,19 @@ class InterviewSettings(BaseModel):
     voice_max_seconds: float = Field(
         default=300.0, gt=0, description="A voice conversation is closed after this."
     )
+    voice_claim_ttl_seconds: float = Field(
+        default=45.0,
+        gt=0,
+        description=(
+            "A live call holds its session this long without a heartbeat; a dead "
+            "call frees the session after it."
+        ),
+    )
+    voice_heartbeat_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="How often a live call extends its hold on the session.",
+    )
     voice_attach_timeout_seconds: float = Field(
         default=10.0,
         gt=0,

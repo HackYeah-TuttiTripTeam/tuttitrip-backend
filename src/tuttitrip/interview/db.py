@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.interview import constants
 from tuttitrip.interview.models import AssistantValue, InterviewSession
 from tuttitrip.interview.schemas import FieldRef, SessionStatus
 
@@ -163,6 +164,7 @@ async def try_start_run(
         The claim's expiry (the token for ``end_run``), or None when the session
         is missing, busy or out of voice time.
     """
+    kind = constants.RUN_TEXT if voice_limit is None else constants.RUN_VOICE
     now = func.now()
     free = or_(
         InterviewSession.running_until.is_(None), InterviewSession.running_until < now
@@ -177,7 +179,10 @@ async def try_start_run(
     stmt = (
         update(InterviewSession)
         .where(*conditions)
-        .values(running_until=now + func.make_interval(0, 0, 0, 0, 0, 0, ttl_seconds))
+        .values(
+            running_until=now + func.make_interval(0, 0, 0, 0, 0, 0, ttl_seconds),
+            running_kind=kind,
+        )
         .returning(InterviewSession.running_until)
     )
     claimed = await session.scalar(stmt)
@@ -205,7 +210,7 @@ async def end_run(
             InterviewSession.id == session_id,
             InterviewSession.running_until == token,
         )
-        .values(running_until=None)
+        .values(running_until=None, running_kind=None)
     )
     if voice_seconds:
         await session.execute(
@@ -214,3 +219,63 @@ async def end_run(
             .values(voice_seconds=InterviewSession.voice_seconds + voice_seconds)
         )
     await session.commit()
+
+
+async def extend_run(
+    session: AsyncSession, session_id: UUID, token: datetime, ttl_seconds: float
+) -> datetime | None:
+    """Push the expiry of a claim forward (the heartbeat of a live call).
+
+    Args:
+        session: Open session (committed).
+        session_id: Session id.
+        token: The current expiry of the claim.
+        ttl_seconds: The claim lasts this long from now.
+
+    Returns:
+        The new expiry (the new token), or None when the claim is gone: it
+        expired and someone else took the session, or it was released.
+    """
+    stmt = (
+        update(InterviewSession)
+        .where(
+            InterviewSession.id == session_id,
+            InterviewSession.running_until == token,
+        )
+        .values(
+            running_until=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, ttl_seconds)
+        )
+        .returning(InterviewSession.running_until)
+    )
+    extended = await session.scalar(stmt)
+    await session.commit()
+    return extended
+
+
+async def clear_voice_run(
+    session: AsyncSession, trip_id: UUID, session_id: UUID
+) -> bool:
+    """Free a session that a voice call holds, whatever claim holds it.
+
+    A text turn is left alone: its stream ends by itself within its time limit.
+
+    Args:
+        session: Open session (committed).
+        trip_id: Trip id (a session of another trip does not match).
+        session_id: Session id.
+
+    Returns:
+        Whether a voice claim was cleared.
+    """
+    cleared = await session.scalar(
+        update(InterviewSession)
+        .where(
+            InterviewSession.id == session_id,
+            InterviewSession.trip_id == trip_id,
+            InterviewSession.running_kind == constants.RUN_VOICE,
+        )
+        .values(running_until=None, running_kind=None)
+        .returning(InterviewSession.id)
+    )
+    await session.commit()
+    return cleared is not None
