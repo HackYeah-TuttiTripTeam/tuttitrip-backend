@@ -12,9 +12,9 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy import update
 
-from tests.domains.test_plan_service_integration import _add_person, _seed, _unseed
 from tests.fixtures.personas import reference_family
 from tests.fixtures.scenarios import reference
+from tests.shared.db_seed import add_person, seed_city, unseed_city
 from tests.shared.fakes import authorize
 from tuttitrip.main import create_app
 from tuttitrip.profiles.models import Profile
@@ -45,7 +45,7 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals, too-
         try:
             ids = {}
             for persona in reference_family().people:
-                ids[persona.key] = await _add_person(http, base, persona)
+                ids[persona.key] = await add_person(http, base, persona)
             first = (await http.post(f"{base}/plans")).json()
             museum = _planned(first)[0]
 
@@ -143,11 +143,11 @@ def test_voting_through_a_link_end_to_end() -> None:
         get_engine.cache_clear()
         get_sessionmaker.cache_clear()
         try:
-            await _seed()
+            await seed_city()
             try:
                 await _scenario(app)
             finally:
-                await _unseed()
+                await unseed_city()
         finally:
             await dispose_engine()
 

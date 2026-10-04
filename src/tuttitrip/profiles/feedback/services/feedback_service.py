@@ -341,7 +341,7 @@ async def veto_by_author(
     Returns:
         The veto in force (the existing one when it was already filed).
     """
-    await _require_place(session, place_id)
+    place = await _require_place(session, place_id)
     try:
         veto = await _insert_veto(
             session,
@@ -360,6 +360,23 @@ async def veto_by_author(
                 session, actor.trip_id, actor.profile_id
             )
             if v.place_id == place_id
+        )
+    else:  # a new veto: the organizers are told, a repeat is not news
+        profile = await profiles_db.select_profile(
+            session, actor.trip_id, actor.profile_id
+        )
+        await notification_service.notify(
+            session,
+            recipients=await member_service.organizer_subs(session, actor.trip_id),
+            type=NotificationType.VETO_ADDED,
+            trip_id=actor.trip_id,
+            params={
+                "place_name": place.name,
+                "member_name": profile.display_name if profile else "",
+            },
+            actions=[NotificationAction(code=NotificationActionCode.OPEN_PLAN)],
+            dedupe_key=f"veto:{veto.id}",
+            actor=actor.author,
         )
     read = VetoRead.model_validate(veto)
     await session.commit()
