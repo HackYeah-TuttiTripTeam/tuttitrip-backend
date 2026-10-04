@@ -58,7 +58,7 @@ def test_agents_import_and_run_without_any_provider_key(
     fresh = ModelCatalog()
     with fresh.override(TestModel()):
         assert fresh.get(ModelKey.DECIDE) is fresh.get(ModelKey.AGENT)
-    assert interview_agent.model == "tuttitrip:agent"
+    assert interview_agent.model == "tuttitrip:interview"
     assert planner_agent.model == "tuttitrip:agent"
     assert catalog.resolve(None, "openai:gpt-5.2") is None  # ty: ignore[invalid-argument-type]
 

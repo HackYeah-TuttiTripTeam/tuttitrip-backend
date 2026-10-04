@@ -122,6 +122,12 @@ class InterviewSettings(BaseModel):
             "Model of the interview agent; None = the catalog route tuttitrip:agent"
         ),
     )
+
+    @field_validator("agent_model", mode="before")
+    @classmethod
+    def _empty_agent_model_is_none(cls, value: object) -> object:
+        return value or None
+
     trip_budget_usd: Decimal = Field(
         default=Decimal(2),
         gt=0,
