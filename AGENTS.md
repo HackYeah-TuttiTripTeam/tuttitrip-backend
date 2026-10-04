@@ -753,6 +753,12 @@ read (an approved request disappears from the basket).
 - An `AFTER INSERT` trigger sends `pg_notify('notifications', {id, user_sub})`
   (ids only: the payload is capped at 8000 bytes). The worker may `SELECT`,
   `INSERT` and `DELETE` on the table (`deploy/worker-grants.sql`).
+- `GET /notifications` (`Page[NotificationRead]`: `page`, `size`, `sort` = `created_at`|`type`,
+  `dir` default `desc`, filters `read`, repeatable `type`, `trip_id`, `created_from` inclusive,
+  `created_to` exclusive, UTC) and `GET /notifications/unread-count` (`{"count": n}`) need
+  `notifications:READ`. Every query is `WHERE user_sub = <caller>`; another user's rows simply
+  do not exist for you (no 403). `NotificationFilter` is the one filter model for the list and
+  for bulk marking.
 - Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
   is marked `integration`.
 

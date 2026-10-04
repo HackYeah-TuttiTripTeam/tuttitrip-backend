@@ -3,11 +3,108 @@
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import delete, func, update
+from sqlalchemy import Select, delete, extract, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.notifications.models import Notification
+from tuttitrip.notifications.schemas import (
+    NotificationFilter,
+    NotificationQuery,
+    NotificationSort,
+)
+from tuttitrip.shared.db.pagination import ordering, paginate
+from tuttitrip.shared.pagination.schemas import Page, SortDir
+
+COLUMNS = {
+    NotificationSort.CREATED_AT: Notification.created_at,
+    NotificationSort.TYPE: Notification.type,
+}
+
+
+def scoped(caller: str) -> Select[Notification]:
+    """Every query starts here: the caller's own notifications.
+
+    Args:
+        caller: ``sub`` of the signed-in user.
+
+    Returns:
+        A select of ``Notification``; other users' rows never appear.
+    """
+    return select(Notification).where(Notification.user_sub == caller)
+
+
+def apply_filters(
+    stmt: Select[Notification], filters: NotificationFilter
+) -> Select[Notification]:
+    """Add the filters to a select.
+
+    Args:
+        stmt: A select of ``Notification`` (already scoped to the caller).
+        filters: The requested filters; unset ones add nothing.
+
+    Returns:
+        The narrowed select.
+    """
+    if filters.read is not None:
+        stmt = stmt.where(
+            Notification.read_at.is_not(None)
+            if filters.read
+            else Notification.read_at.is_(None)
+        )
+    if filters.type:
+        stmt = stmt.where(Notification.type.in_(filters.type))
+    if filters.trip_id is not None:
+        stmt = stmt.where(Notification.trip_id == filters.trip_id)
+    if filters.created_from is not None:
+        stmt = stmt.where(Notification.created_at >= filters.created_from)
+    if filters.created_to is not None:
+        stmt = stmt.where(Notification.created_at < filters.created_to)
+    return stmt
+
+
+async def select_page(
+    session: AsyncSession, caller: str, query: NotificationQuery
+) -> Page[Notification]:
+    """One page of the caller's notifications.
+
+    Sorting by type breaks ties by ``created_at`` newest first (whatever the
+    direction), then by ``id``, so pages are stable.
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user.
+        query: Paging, sorting and filters.
+
+    Returns:
+        The page with the total of matching rows.
+    """
+    order = ordering(COLUMNS, query.sort, Notification.id)
+    if query.sort is NotificationSort.TYPE:
+        # `paginate` applies one direction to every key; flip the epoch so the
+        # tie-break stays "newest first" for both directions.
+        epoch = extract("epoch", Notification.created_at)
+        order = (order[0], epoch if query.dir is SortDir.DESC else -epoch, order[-1])
+    return await paginate(session, apply_filters(scoped(caller), query), query, order)
+
+
+async def count_unread(session: AsyncSession, caller: str) -> int:
+    """How many unread notifications the caller has (one indexed count).
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user.
+
+    Returns:
+        The number of rows with ``read_at IS NULL``.
+    """
+    return (
+        await session.scalar(
+            select(func.count()).where(
+                Notification.user_sub == caller, Notification.read_at.is_(None)
+            )
+        )
+    ) or 0
 
 
 async def insert_for_recipients(

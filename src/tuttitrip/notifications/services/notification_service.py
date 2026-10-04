@@ -12,7 +12,14 @@ from collections.abc import Iterable, Sequence
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.notifications import db
-from tuttitrip.notifications.schemas import NotificationAction, NotificationType
+from tuttitrip.notifications.schemas import (
+    NotificationAction,
+    NotificationQuery,
+    NotificationRead,
+    NotificationType,
+    UnreadCount,
+)
+from tuttitrip.shared.pagination.schemas import Page
 
 
 async def notify(  # ruff: ignore[too-many-arguments] one keyword-only producer call
@@ -69,6 +76,42 @@ async def resolve(session: AsyncSession, dedupe_key: str) -> int:
         How many notifications changed.
     """
     return await db.mark_read_by_key(session, dedupe_key)
+
+
+async def list_notifications(
+    session: AsyncSession, caller: str, query: NotificationQuery
+) -> Page[NotificationRead]:
+    """One page of the caller's notifications, filtered and sorted.
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user; others' rows never appear.
+        query: Paging, sorting and filters.
+
+    Returns:
+        The page of notifications.
+    """
+    page = await db.select_page(session, caller, query)
+    return Page[NotificationRead](
+        items=[NotificationRead.model_validate(n) for n in page.items],
+        total=page.total,
+        page=page.page,
+        size=page.size,
+        pages=page.pages,
+    )
+
+
+async def unread_count(session: AsyncSession, caller: str) -> UnreadCount:
+    """How many notifications the caller has not read.
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user.
+
+    Returns:
+        The count.
+    """
+    return UnreadCount(count=await db.count_unread(session, caller))
 
 
 async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
