@@ -93,7 +93,7 @@ async def check_plan(
         PlanInputError: The trip lacks dates, a city or people.
         CatalogMissingError: The city has no places.
     """
-    plan = await plan_service.get_plan(session, queue, membership, plan_id)
+    plan = await plan_service.get_plan(session, membership, plan_id, queue=queue)
     data, context = await _context(session, membership)
     return lint(plan_to_lint(plan, data.trip.days[0]), context)
 

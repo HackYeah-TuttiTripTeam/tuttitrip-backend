@@ -86,10 +86,10 @@ async def lint_plan(
         return await trip_lint_service.check_plan(session, queue, membership, plan_id)
     except PlanNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
-    except PlanInputError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except CatalogMissingError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, "catalog_missing") from exc
+    except PlanInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
 
 @router.post(
@@ -172,10 +172,10 @@ async def get_paste(
         return await trip_lint_service.get_paste(session, queue, membership, paste_id)
     except PasteNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Paste not found") from exc
-    except PlanInputError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except CatalogMissingError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, "catalog_missing") from exc
+    except PlanInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except JobQueueUnavailableError as exc:
         raise _unavailable(exc) from exc
 
@@ -230,9 +230,9 @@ async def pick_item(  # ruff: ignore[too-many-arguments, too-many-positional-arg
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except PasteInputError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
-    except PlanInputError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except CatalogMissingError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, "catalog_missing") from exc
+    except PlanInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except JobQueueUnavailableError as exc:
         raise _unavailable(exc) from exc

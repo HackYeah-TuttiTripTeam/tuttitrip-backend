@@ -119,10 +119,8 @@ async def create_plan(
     """
     try:
         plan, created = await plan_service.generate_plan(
-            session, queue, membership, data
+            session, membership, data, queue=queue
         )
-    except PlanInputError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except CatalogMissingError as exc:
         job_id = await candidate_service.job_for_missing_catalog(
             session, queue, membership.sub, exc.city_slug
@@ -135,6 +133,8 @@ async def create_plan(
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail.model_dump(mode="json")
         ) from exc
+    except PlanInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if not created:
         response.status_code = status.HTTP_200_OK
     return plan
@@ -173,7 +173,7 @@ async def get_latest_plan(
         HTTPException: 404 when there is no plan.
     """
     try:
-        return await plan_service.latest_plan(session, queue, membership, locale)
+        return await plan_service.latest_plan(session, membership, locale, queue=queue)
     except PlanNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No plan yet") from exc
 
@@ -207,7 +207,9 @@ async def get_plan(
         HTTPException: 404 when the trip has no such version.
     """
     try:
-        return await plan_service.get_plan(session, queue, membership, plan_id, locale)
+        return await plan_service.get_plan(
+            session, membership, plan_id, locale, queue=queue
+        )
     except PlanNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Plan not found") from exc
 

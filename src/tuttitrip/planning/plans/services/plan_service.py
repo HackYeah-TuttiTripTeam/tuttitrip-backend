@@ -91,7 +91,7 @@ class PlanNotFoundError(Exception):
     """The trip has no such plan version."""
 
 
-class CatalogMissingError(Exception):
+class CatalogMissingError(PlanInputError):
     """The trip's city has no places in the catalog, so there is nothing to plan."""
 
     def __init__(self, city_slug: str) -> None:
@@ -406,7 +406,7 @@ async def _start_justifications(  # ruff: ignore[too-many-arguments, too-many-po
         log.info("justifications of plan %s not started: no worker", plan_id)
 
 
-async def generate_plan(  # ruff: ignore[too-many-arguments] the request, its caller and the queue
+async def generate_plan(
     session: AsyncSession,
     membership: TripMembership,
     data: PlanCreate | None,
@@ -539,7 +539,7 @@ async def latest_plan(
     return await _read(session, queue, membership, row, locale, latest=True)
 
 
-async def get_plan(  # ruff: ignore[too-many-arguments] the version, its locale and the queue
+async def get_plan(
     session: AsyncSession,
     membership: TripMembership,
     plan_id: UUID,
