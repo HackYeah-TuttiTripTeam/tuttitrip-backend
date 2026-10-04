@@ -152,6 +152,15 @@ def test_family_and_student_rows_are_not_used() -> None:
     assert cost(zoo, PEOPLE).total == Decimal("120.00")
 
 
+def test_reduced_rows_are_never_applied_so_a_reduced_only_place_is_unknown() -> None:
+    zoo = place(price("30"), price("10", category=TicketCategory.REDUCED))
+    assert cost(zoo, PEOPLE).total == Decimal("120.00")  # all four pay the adult row
+    reduced_only = place(price("10", category=TicketCategory.REDUCED))
+    result = cost(reduced_only, PEOPLE)
+    assert result.total == Decimal("0.00")
+    assert result.unknown_price_place_ids == (reduced_only.id,)
+
+
 def test_a_person_without_an_applicable_row_makes_the_place_unknown() -> None:
     child_only = place(price("10", category=TicketCategory.CHILD))
     result = cost(child_only, PEOPLE)  # Kasia and Tomek are priced, Ty and Babcia not

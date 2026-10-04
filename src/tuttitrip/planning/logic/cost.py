@@ -88,6 +88,10 @@ def _applies(row: PlacePriceRead, age: int) -> bool:
             return low <= age <= high
         case TicketCategory.FAMILY | TicketCategory.STUDENT:
             return False  # not used: no family size or student flag in the input
+        case TicketCategory.REDUCED:
+            # "ulgowa" from the sheet does not say for whom (child, senior, student):
+            # applying it would guess. A place with only this row is unpriced.
+            return False
 
 
 def _charged(row: PlacePriceRead, delta: Decimal) -> Decimal:
