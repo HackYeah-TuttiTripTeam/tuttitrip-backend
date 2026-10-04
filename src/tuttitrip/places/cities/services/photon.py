@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 import httpx
 
-from tuttitrip.places.cities.logic.slug import slugify
+from tuttitrip.places.candidates.logic.slug import slugify
 from tuttitrip.places.cities.logic.suggest import GeocoderHit, parse_photon
 from tuttitrip.places.cities.schemas import CityLang
 from tuttitrip.shared.config.settings import GeocoderSettings

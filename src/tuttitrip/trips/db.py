@@ -300,6 +300,50 @@ async def update_member_status(
     )
 
 
+async def has_sample(session: AsyncSession, owner_sub: str) -> bool:
+    """Whether the user owns a sample trip.
+
+    Args:
+        session: Open session.
+        owner_sub: Auth0 subject of the creator.
+
+    Returns:
+        True when a trip with ``is_sample`` exists.
+    """
+    found = await session.scalar(
+        select(Trip.id).where(Trip.owner_sub == owner_sub, Trip.is_sample).limit(1)
+    )
+    return found is not None
+
+
+async def delete_samples_owned_by(session: AsyncSession, owner_sub: str) -> int:
+    """Delete the user's sample trips.
+
+    Args:
+        session: Open session (caller commits).
+        owner_sub: Auth0 subject of the creator.
+
+    Returns:
+        How many trips were deleted.
+    """
+    result = await session.execute(
+        delete(Trip)
+        .where(Trip.owner_sub == owner_sub, Trip.is_sample)
+        .returning(Trip.id)
+    )
+    return len(result.all())
+
+
+async def mark_sample(session: AsyncSession, trip_id: UUID) -> None:
+    """Set ``is_sample`` on one trip.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+    """
+    await session.execute(update(Trip).where(Trip.id == trip_id).values(is_sample=True))
+
+
 async def delete_trips_owned_by(session: AsyncSession, owner_sub: str) -> int:
     """Delete every trip created by one user (the database cascades).
 

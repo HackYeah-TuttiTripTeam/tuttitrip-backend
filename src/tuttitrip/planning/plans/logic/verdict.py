@@ -8,7 +8,8 @@ marked as an extension; the thresholds live in ``AlgorithmParams``.
 skip     a veto, a host block or an E0 rejection (with its code)
 must     the host forced it (override)
 fits     the place is in the plan, or V_p >= 0.1
-iconic   -0.3 <= V_p < 0.1 and the catalog marks the place iconic
+iconic   -0.3 <= V_p < 0.1 and the catalog marks the place iconic or a
+         unique experience
 V_p      sum_i w_i v_ip / sum_i w_i
 v_ip     the vote, else +1 when m_ip >= 0.6, else 0
 ```
@@ -30,6 +31,7 @@ from tuttitrip.planning.logic.hard_constraints import (
 )
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.utility import match, utility
+from tuttitrip.planning.plans.logic.justification import template_justification
 from tuttitrip.planning.plans.schemas import PlanVerdict, VerdictKind, VoteReason
 from tuttitrip.planning.schemas import PlanningInput, PlanningPerson
 from tuttitrip.profiles.feedback.schemas import ReasonCode
@@ -156,10 +158,11 @@ def build_verdicts(
             kind = VerdictKind.MUST
         elif place.id in in_plan or v_p >= params.verdict_fits:
             kind = VerdictKind.FITS
-        elif place.iconic and v_p >= params.verdict_iconic:
+        elif (place.iconic or place.unique_experience) and v_p >= params.verdict_iconic:
             kind = VerdictKind.ICONIC_NOT_YOURS
         else:
             kind = VerdictKind.SKIP
+        codes = sorted({r.code.value for r in rejections})
         options = [] if place.id in in_plan else substitutes.get(place.category, [])
         substitute = next((pid for _, _, pid in options if pid != place.id), None)
         verdicts.append(
@@ -169,8 +172,12 @@ def build_verdicts(
                 v_p=v_p,
                 yes=yes,
                 no=no,
-                skip_codes=sorted({r.code.value for r in rejections}),
+                skip_codes=codes,
                 substitute_place_id=substitute,
+                justification=template_justification(
+                    kind, len(yes), len(no), codes, "pl"
+                ),
+                justification_source="template",
             )
         )
     return verdicts

@@ -235,8 +235,14 @@ class DbosJobQueue:
 
         Args:
             workflow_id: Workflow id.
+
+        Raises:
+            JobNotFoundError: No workflow with this id.
+            JobQueueUnavailableError: The system database is unreachable.
         """
         try:
             await self._client.cancel_workflow_async(workflow_id)
+        except dbos_error.DBOSNonExistentWorkflowError as exc:
+            raise JobNotFoundError(workflow_id) from exc
         except _UNAVAILABLE as exc:
             raise JobQueueUnavailableError(str(exc)) from exc

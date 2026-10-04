@@ -15,8 +15,8 @@ from tests.shared.paths import path
 from tests.shared.tokens import bearer, make_verifier
 from tuttitrip.main import create_app
 from tuttitrip.places import db
+from tuttitrip.places.candidates.logic.slug import slugify
 from tuttitrip.places.cities.api import get_geocoder
-from tuttitrip.places.cities.logic.slug import slugify
 from tuttitrip.places.cities.logic.suggest import GeocoderHit, parse_photon
 from tuttitrip.places.cities.schemas import CityLang
 from tuttitrip.places.cities.services.photon import PhotonGeocoder

@@ -4,6 +4,7 @@ The author comes in as a parameter (a trip membership), never as the logged-in
 user, so a voting link without an account can reuse the same service.
 """
 
+from collections.abc import Collection
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from tuttitrip.profiles.feedback.models import PlaceRating, PlaceVeto
 from tuttitrip.profiles.feedback.schemas import (
     RatingRead,
     RatingUpdate,
+    RatingValue,
     TripFeedback,
     VetoCreate,
     VetoRead,
@@ -146,6 +148,49 @@ async def rate_place(
     read = RatingRead.model_validate(row)
     await session.commit()
     return read
+
+
+async def like_places(
+    session: AsyncSession,
+    membership: TripMembership,
+    profile_id: UUID,
+    place_ids: Collection[UUID],
+) -> frozenset[UUID]:
+    """Mark places as wanted by a person, keeping the votes they already cast.
+
+    One transaction for the whole batch (an import of a saved list). The places
+    must exist: the caller took them from the catalog.
+
+    Args:
+        session: Open session.
+        membership: The author's membership of the trip.
+        profile_id: Whose votes they are.
+        place_ids: Catalog places to mark as wanted.
+
+    Returns:
+        The places newly marked as wanted; the rest the person had already
+        rated (any value) and are left as they were.
+    """
+    await _profile_for_author(session, membership, profile_id)
+    rated = {
+        r.place_id
+        for r in await db.select_ratings_by_trip(session, membership.trip_id)
+        if r.profile_id == profile_id
+    }
+    liked: set[UUID] = set()
+    for place_id in dict.fromkeys(place_ids):
+        if place_id in rated:
+            continue
+        await stage_rating(
+            session,
+            membership,
+            profile_id,
+            place_id,
+            RatingUpdate(value=RatingValue.WANT),
+        )
+        liked.add(place_id)
+    await session.commit()
+    return frozenset(liked)
 
 
 async def list_ratings(

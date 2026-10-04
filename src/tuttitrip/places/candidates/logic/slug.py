@@ -1,9 +1,4 @@
-"""City slug from a free-text name (pure).
-
-The same rule as ``places.candidates.logic.slug`` (backend #201) and the worker:
-``slugify(city_query)`` must give the trip's ``city_slug``. Replace this copy
-with an import once #201 is merged.
-"""
+"""City slug from a free-text name: the one rule backend and worker share (pure)."""
 
 import re
 import unicodedata
