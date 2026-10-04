@@ -116,6 +116,12 @@ class InterviewSettings(BaseModel):
         gt=0,
         description="One text turn is cut off after this long (gateway: 300 s).",
     )
+    agent_model: str | None = Field(
+        default=None,
+        description=(
+            "Model of the interview agent; None = the catalog route tuttitrip:agent"
+        ),
+    )
     trip_budget_usd: Decimal = Field(
         default=Decimal(2),
         gt=0,

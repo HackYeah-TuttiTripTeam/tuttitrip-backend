@@ -20,7 +20,7 @@ from pydantic_ai.models.test import TestModel
 
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.planning.services.planner_agent import planner_agent
-from tuttitrip.shared.config.settings import LlmSettings
+from tuttitrip.shared.config.settings import LlmSettings, get_settings
 from tuttitrip.shared.llm.services import model_catalog
 from tuttitrip.shared.llm.services.model_catalog import (
     ModelCatalog,
@@ -168,3 +168,32 @@ def test_unfillable_route_escalates_to_the_chat_model() -> None:
     decide.models = [FunctionModel(basal), FunctionModel(qwen)]
     result = asyncio.run(Agent(decide).run("Zrób coś"))
     assert result.output == "odpowiada Qwen"
+
+
+def test_interview_entry_defaults_to_the_agent_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TUTTITRIP_INTERVIEW__AGENT_MODEL", raising=False)
+    get_settings.cache_clear()
+    try:
+        interview = build_model(ModelKey.INTERVIEW, FAKE_KEYS)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(interview, FallbackModel)
+    assert isinstance(interview.models[0], OpenAIChatModel)
+    assert interview.models[0].model_name == "qwen3.8-27b"
+
+
+def test_interview_agent_model_setting_uses_openrouter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "TUTTITRIP_INTERVIEW__AGENT_MODEL", "openrouter:anthropic/claude-opus-5.5"
+    )
+    get_settings.cache_clear()
+    try:
+        interview = build_model(ModelKey.INTERVIEW, FAKE_KEYS)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(interview, OpenRouterModel)
+    assert interview.model_name == "anthropic/claude-opus-5.5"
