@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.pagination.schemas import Page
-from tuttitrip.shared.permissions.api import requires
+from tuttitrip.shared.permissions.api import no_store, requires
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.api import TripMember
 from tuttitrip.trips.checkins.schemas import CheckinQuery, CheckinRead, CheckinUpdate
@@ -36,7 +36,7 @@ EDIT_ERRORS: dict[int | str, dict[str, str]] = {
 @router.get(
     "",
     summary="Where everyone stays",
-    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.READ)],
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.READ), no_store()],
 )
 async def list_checkins(
     membership: TripMember,
@@ -61,7 +61,7 @@ async def list_checkins(
 @router.put(
     "/{profile_id}",
     responses={**EDIT_ERRORS, 409: {"description": TRIP_OVER}},
-    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE)],
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE), no_store()],
 )
 async def set_checkin(
     profile_id: UUID,
@@ -96,7 +96,7 @@ async def set_checkin(
     "/{profile_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     responses=EDIT_ERRORS,
-    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE)],
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE), no_store()],
 )
 async def delete_checkin(
     profile_id: UUID, membership: TripMember, session: SessionDep

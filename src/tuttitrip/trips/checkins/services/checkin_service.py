@@ -1,8 +1,9 @@
 """Check-ins: members tell the group where they stay.
 
 Entries are personal data and are removed once the trip is over. There is no
-background job: the first read or write after the end date deletes them, and
-nothing is returned or accepted from that day on.
+background job: the first read or write after the end date (UTC; 14 days after
+the start when there is no end date) deletes them, and nothing is returned or
+accepted from that day on.
 """
 
 from datetime import UTC, datetime
@@ -52,7 +53,7 @@ async def _purge_if_over(session: AsyncSession, membership: TripMembership) -> b
         Whether the trip is over.
     """
     trip = await trip_service.get_trip(session, membership)
-    if not rules.is_over(trip.end_date, datetime.now(UTC).date()):
+    if not rules.is_over(trip.end_date, trip.start_date, datetime.now(UTC).date()):
         return False
     await db.delete_trip_checkins(session, membership.trip_id)
     await session.commit()
@@ -70,6 +71,17 @@ async def _editable_profile(
         msg = "Only the owner of the profile (the host for profiles without an account)"
         raise CheckinForbiddenError(msg)
     return profile
+
+
+async def clear_profile(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> None:
+    """Forget a person's check-in (they left the trip). No commit.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+        profile_id: The person's profile.
+    """
+    await db.delete_checkin(session, trip_id, profile_id)
 
 
 async def list_checkins(
@@ -91,11 +103,8 @@ async def list_checkins(
     profiles = {
         p.id: p for p in await profile_service.list_profiles(session, membership)
     }
-    items = [
-        _read(row, profiles[row.profile_id], membership.sub)
-        for row in page.items
-        if row.profile_id in profiles
-    ]
+    # Every row has a profile (the foreign key cascades), so `total` stays true.
+    items = [_read(row, profiles[row.profile_id], membership.sub) for row in page.items]
     return Page[CheckinRead](
         items=items, total=page.total, page=page.page, size=page.size, pages=page.pages
     )

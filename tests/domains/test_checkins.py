@@ -30,7 +30,7 @@ from tuttitrip.trips.checkins.models import TripCheckin
 from tuttitrip.trips.checkins.schemas import CheckinQuery, CheckinSort, CheckinUpdate
 from tuttitrip.trips.models import Trip
 from tuttitrip.trips.schemas import TripMembership, TripRole
-from tuttitrip.trips.services import trip_service
+from tuttitrip.trips.services import member_service, trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
 HOST, CO_HOST, MEMBER = TripRole.HOST, TripRole.CO_HOST, TripRole.MEMBER
@@ -54,9 +54,15 @@ def test_only_host_edits_accountless_profiles(role: TripRole, allowed: bool) -> 
 
 def test_trip_is_over_the_day_after_its_end() -> None:
     end = date(2026, 7, 10)
-    assert is_over(end, end) is False
-    assert is_over(end, end + timedelta(days=1)) is True
-    assert is_over(None, date(2099, 1, 1)) is False
+    assert is_over(end, None, end) is False
+    assert is_over(end, None, end + timedelta(days=1)) is True
+    assert is_over(None, None, date(2099, 1, 1)) is False
+
+
+def test_without_end_date_the_trip_is_over_14_days_after_the_start() -> None:
+    start = date(2026, 7, 1)
+    assert is_over(None, start, start + timedelta(days=14)) is False
+    assert is_over(None, start, start + timedelta(days=15)) is True
 
 
 class State:
@@ -67,6 +73,7 @@ class State:
         self.profiles: dict[uuid.UUID, SimpleNamespace] = {}
         self.rows: dict[uuid.UUID, TripCheckin] = {}
         self.end_date: date | None = None
+        self.start_date: date | None = None
 
     def add(
         self, name: str, role: TripRole | None, sub: str | None = None
@@ -122,7 +129,11 @@ def state(monkeypatch: pytest.MonkeyPatch) -> State:
     monkeypatch.setattr(
         trip_service,
         "get_trip",
-        AsyncMock(side_effect=lambda *_: SimpleNamespace(end_date=trip.end_date)),
+        AsyncMock(
+            side_effect=lambda *_: SimpleNamespace(
+                end_date=trip.end_date, start_date=trip.start_date
+            )
+        ),
     )
     monkeypatch.setattr(
         profile_service, "get_profile", AsyncMock(side_effect=get_profile)
@@ -137,7 +148,7 @@ def state(monkeypatch: pytest.MonkeyPatch) -> State:
     monkeypatch.setattr(
         checkins_db,
         "delete_checkin",
-        AsyncMock(side_effect=lambda _s, _t, pid: trip.rows.pop(pid, None) is not None),
+        AsyncMock(side_effect=lambda _s, _t, pid: trip.rows.pop(pid, None)),
     )
     monkeypatch.setattr(
         checkins_db,
@@ -322,10 +333,39 @@ def test_sql_upsert_filter_sort_and_cascade() -> None:
                 session, trip.id, CheckinQuery(accommodation="BET")
             )
             assert [r.profile_id for r in only.items] == [a.id]
-            assert await checkins_db.delete_checkin(session, trip.id, b.id) is True
-            assert await checkins_db.delete_checkin(session, trip.id, b.id) is False
+            await checkins_db.delete_checkin(session, trip.id, b.id)
+            await checkins_db.delete_checkin(session, trip.id, b.id)
+            left = await checkins_db.select_checkins(session, trip.id, CheckinQuery())
+            assert [r.profile_id for r in left.items] == [a.id]
             await session.delete(trip)
             await session.commit()
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_entries_are_gone_after_14_days_when_the_trip_has_no_end_date(
+    client: TestClient, state: State
+) -> None:
+    mine = state.add("Ja", MEMBER, ME.sub)
+    _put(client, mine)
+    state.start_date = datetime.now(UTC).date() - timedelta(days=15)
+    assert client.get(path("list_checkins", trip_id=TRIP)).json()["items"] == []
+    assert not state.rows
+
+
+def test_responses_are_not_cached(client: TestClient, state: State) -> None:
+    mine = state.add("Ja", MEMBER, ME.sub)
+    assert _put(client, mine).headers["cache-control"] == "no-store"
+    listing = client.get(path("list_checkins", trip_id=TRIP))
+    assert listing.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.usefixtures("client")
+def test_a_member_who_left_loses_the_room_number(state: State) -> None:
+    mine = state.add("Zosia", MEMBER, "auth0|zosia")
+    state.rows[mine.id] = TripCheckin(
+        trip_id=TRIP, profile_id=mine.id, accommodation="Hotel", room="1"
+    )
+    asyncio.run(member_service.member_left(AsyncMock(), TRIP, mine.id))
+    assert mine.id not in state.rows

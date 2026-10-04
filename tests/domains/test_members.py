@@ -405,8 +405,17 @@ def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
     host = TripMembership(trip_id=TRIP, sub=ME.sub, role=HOST)
     _run(member_service.remove_member(session, host, profile.id))
     calls = [c[0] for c in session.method_calls]
-    assert calls == ["scalar", "scalar", "execute", "scalar", "flush", "commit"]
-    assert _sql(session.execute.call_args.args[0]).startswith(
+    # The second execute deletes the leaver's check-in (member_left).
+    assert calls == [
+        "scalar",
+        "scalar",
+        "execute",
+        "scalar",
+        "flush",
+        "execute",
+        "commit",
+    ]
+    assert _sql(session.execute.call_args_list[0].args[0]).startswith(
         "DELETE FROM trip_members"
     )
     assert profile.user_sub is None

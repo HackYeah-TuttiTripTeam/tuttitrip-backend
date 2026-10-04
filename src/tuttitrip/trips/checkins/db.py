@@ -89,23 +89,19 @@ async def upsert_checkin(
 
 async def delete_checkin(
     session: AsyncSession, trip_id: UUID, profile_id: UUID
-) -> bool:
-    """Delete a profile's check-in.
+) -> None:
+    """Delete a profile's check-in (nothing to delete is fine).
 
     Args:
         session: Open session (caller commits).
         trip_id: Trip id.
         profile_id: Profile the entry belongs to.
-
-    Returns:
-        Whether a row existed.
     """
-    result = await session.execute(
-        delete(TripCheckin)
-        .where(TripCheckin.trip_id == trip_id, TripCheckin.profile_id == profile_id)
-        .returning(TripCheckin.profile_id)
+    await session.execute(
+        delete(TripCheckin).where(
+            TripCheckin.trip_id == trip_id, TripCheckin.profile_id == profile_id
+        )
     )
-    return result.first() is not None
 
 
 async def delete_trip_checkins(session: AsyncSession, trip_id: UUID) -> None:
