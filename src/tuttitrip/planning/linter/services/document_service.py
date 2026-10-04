@@ -1,5 +1,7 @@
 """Store and read pasted plan and offer texts (also used by accommodation)."""
 
+from uuid import UUID
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.planning.linter import db
@@ -29,3 +31,20 @@ async def create_document(
     )
     await session.commit()
     return DocumentRead.model_validate(row)
+
+
+async def get_document(
+    session: AsyncSession, trip_id: UUID, document_id: UUID
+) -> DocumentRead | None:
+    """Read a pasted text's metadata (never its text) within one trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        document_id: Document id.
+
+    Returns:
+        The document, or None when the trip has no such document.
+    """
+    row = await db.select_document(session, trip_id, document_id)
+    return None if row is None else DocumentRead.model_validate(row)

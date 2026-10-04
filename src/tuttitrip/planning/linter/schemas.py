@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from tuttitrip.accommodation.schemas import RequirementCheck, RequirementItem
 from tuttitrip.places.schemas import PlaceRead
 
 
@@ -88,6 +89,24 @@ class LintLunch(BaseModel):
     minutes: int = Field(gt=0, le=240)
 
 
+class LintOffer(BaseModel):
+    """A checked lodging offer: copy ``nights`` and ``checks`` from ``OfferRead``."""
+
+    id: UUID | None = None
+    nights: list[date] = Field(min_length=1)
+    checks: list[RequirementCheck]
+
+
+class LintLodging(BaseModel):
+    """Nights of the trip, its lodging requirements and the checked offers."""
+
+    nights: list[date] = Field(description="Every night that needs a bed.")
+    requirements: list[RequirementItem] = Field(
+        description="As in `GET .../accommodation/requirements`; only hard ones count."
+    )
+    offers: list[LintOffer] = Field(default_factory=list)
+
+
 class LintContext(BaseModel):
     """What the rules compare a plan with."""
 
@@ -99,6 +118,10 @@ class LintContext(BaseModel):
         default=None, description="Lunch window; null disables the lunch check."
     )
     timezone: str = Field(description="IANA zone of the city; hours are local.")
+    lodging: LintLodging | None = Field(
+        default=None,
+        description="Lodging offers per night; null disables the lodging check.",
+    )
     budget: Decimal = Field(ge=0, description="B_do.")
     flex_pct: int = Field(default=0, ge=0, le=50, description="Margin of B_max.")
 

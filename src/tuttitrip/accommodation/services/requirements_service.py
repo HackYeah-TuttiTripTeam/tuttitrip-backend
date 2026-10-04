@@ -1,17 +1,12 @@
-"""Check an offer against the contract; read and replace a trip's requirements."""
+"""Read and replace a trip's lodging requirements."""
 
-from collections.abc import Iterable
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.accommodation import db
-from tuttitrip.accommodation.logic.contract import evaluate
 from tuttitrip.accommodation.models import AccommodationRequirement
 from tuttitrip.accommodation.schemas import (
-    OfferFeatures,
-    Requirement,
-    RequirementCheck,
     RequirementItem,
     RequirementsRead,
     RequirementsWrite,
@@ -22,21 +17,6 @@ from tuttitrip.trips.services import trip_service
 
 class RequirementsInvalidError(Exception):
     """The requirements do not fit the trip (an outing has no lodging)."""
-
-
-def check_offer(
-    requirements: Iterable[Requirement], offer: OfferFeatures
-) -> list[RequirementCheck]:
-    """Evaluate every requirement.
-
-    Args:
-        requirements: The contract.
-        offer: Known offer features.
-
-    Returns:
-        One check per requirement.
-    """
-    return [evaluate(requirement, offer) for requirement in requirements]
 
 
 def _ordered(items: list[RequirementItem]) -> list[RequirementItem]:

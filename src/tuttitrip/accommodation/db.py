@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.accommodation.models import (
+    AccommodationOffer,
     AccommodationRequirement,
     RequirementsVersion,
     SearchOpening,
@@ -123,3 +124,35 @@ async def select_openings(
         stmt = stmt.where(SearchOpening.platform == query.platform)
     order = ordering(_OPENING_SORT, query.sort, SearchOpening.id)
     return await paginate(session, stmt, query, order)
+
+
+async def insert_offer(session: AsyncSession, offer: AccommodationOffer) -> None:
+    """Add a pasted offer and load its server defaults.
+
+    Args:
+        session: Open session (caller commits).
+        offer: The new row.
+    """
+    session.add(offer)
+    await session.flush()
+    await session.refresh(offer)
+
+
+async def select_offer(
+    session: AsyncSession, trip_id: UUID, offer_id: UUID
+) -> AccommodationOffer | None:
+    """One offer of a trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id (an offer of another trip is not found).
+        offer_id: Offer id.
+
+    Returns:
+        The row, or None.
+    """
+    return await session.scalar(
+        select(AccommodationOffer).where(
+            AccommodationOffer.trip_id == trip_id, AccommodationOffer.id == offer_id
+        )
+    )

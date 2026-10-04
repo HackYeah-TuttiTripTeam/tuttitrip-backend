@@ -31,6 +31,7 @@ CODES = [
     "pace",
     "rest_window",
     "accessibility",
+    "accommodation_requirements",
 ]
 
 

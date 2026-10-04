@@ -7,6 +7,7 @@ the report.
 
 from tuttitrip.planning.linter.logic import (
     accessibility,
+    accommodation_requirements,
     budget,
     closed_day,
     distance,
@@ -36,6 +37,7 @@ RULES: tuple[Rule, ...] = (
     pace.RULE,
     rest_window.RULE,
     accessibility.RULE,
+    accommodation_requirements.RULE,
 )
 
 
