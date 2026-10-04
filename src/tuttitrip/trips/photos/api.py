@@ -67,7 +67,9 @@ async def upload_photo(
     The browser resizes the picture (dropping EXIF) and makes the thumbnail.
     JPEG, PNG and WebP only (the type is read from the bytes, not the header);
     limits come from the `photos` settings: 2 MB image, 60 KB thumbnail and 200
-    photos per trip by default. Anything over a limit answers 422.
+    photos per trip by default. Anything over a limit answers 422; a body larger
+    than both files together answers 413 before it is read. A file that still
+    carries EXIF/XMP metadata is refused with 422.
 
     Args:
         membership: The caller's membership of `{trip_id}`.
@@ -131,7 +133,7 @@ async def get_photo_image(
         session: Database session.
 
     Returns:
-        The image with its content type; not cacheable by shared caches.
+        The image with its content type; cached by the browser only, for a minute.
     """
     try:
         data, content_type = await photo_service.get_image(
@@ -143,7 +145,9 @@ async def get_photo_image(
         data,
         media_type=content_type,
         headers={
-            "Cache-Control": "private, max-age=3600",
+            "Cache-Control": "private, max-age=60",
+            "Content-Disposition": "inline",
+            "Content-Security-Policy": "default-src 'none'; sandbox",
             "X-Content-Type-Options": "nosniff",
         },
     )

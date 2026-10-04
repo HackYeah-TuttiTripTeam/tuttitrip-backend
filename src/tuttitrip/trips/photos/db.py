@@ -2,12 +2,13 @@
 
 from uuid import UUID
 
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from tuttitrip.shared.db.pagination import ordering, paginate
 from tuttitrip.shared.pagination.schemas import Page
+from tuttitrip.trips.models import Trip
 from tuttitrip.trips.photos.models import TripPhoto
 from tuttitrip.trips.photos.schemas import PhotoFilters, PhotoQuery, PhotoSort
 
@@ -53,6 +54,50 @@ async def select_photos(
     return await paginate(
         session, _apply_filters(_scoped(trip_id), query, sub), query, order
     )
+
+
+async def lock_trip(session: AsyncSession, trip_id: UUID) -> None:
+    """Lock the trip row until the transaction ends, so uploads count one by one.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+    """
+    await session.execute(select(Trip.id).where(Trip.id == trip_id).with_for_update())
+
+
+async def detach_author(session: AsyncSession, trip_id: UUID, sub: str) -> None:
+    """Unattribute the photos of an author who left the trip.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+        sub: Auth0 subject of the author.
+    """
+    await session.execute(
+        update(TripPhoto)
+        .where(TripPhoto.trip_id == trip_id, TripPhoto.author_sub == sub)
+        .values(author_sub=None)
+    )
+
+
+async def detach_author_everywhere(session: AsyncSession, sub: str) -> int:
+    """Unattribute the photos an account uploaded, on every trip.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject of the author.
+
+    Returns:
+        How many photos were unattributed.
+    """
+    result = await session.execute(
+        update(TripPhoto)
+        .where(TripPhoto.author_sub == sub)
+        .values(author_sub=None)
+        .returning(TripPhoto.id)
+    )
+    return len(result.all())
 
 
 async def count_photos(session: AsyncSession, trip_id: UUID) -> int:

@@ -6,6 +6,7 @@ Run with ``uvicorn tuttitrip.main:app``.
 """
 
 import logging
+import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -34,6 +35,7 @@ from tuttitrip.profiles.preferences.api import router as preferences_router
 from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.admin_users.api import router as admin_users_router
 from tuttitrip.shared.admin_users.services import erasure
+from tuttitrip.shared.bodylimit.api import BodyLimit, BodyLimitMiddleware
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
 from tuttitrip.shared.errors.api import register_error_handlers
@@ -46,12 +48,15 @@ from tuttitrip.trips.checkins.api import router as checkins_router
 from tuttitrip.trips.invitations.api import router as invitations_router
 from tuttitrip.trips.invitations.services import invitation_service
 from tuttitrip.trips.photos.api import router as photos_router
+from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.services import trip_service
 from tuttitrip.voting.api import router as voting_router
 
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
+# Room for the multipart boundaries and part headers around the two photo files.
+MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +94,7 @@ ROUTERS: tuple[APIRouter, ...] = (
 erasure.register(trip_service.erase_account)
 erasure.register(invitation_service.erase_account)
 erasure.register(notification_service.erase_account)
+erasure.register(photo_service.erase_account)
 
 
 @asynccontextmanager
@@ -136,6 +142,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=f"{API_PREFIX}/redoc",
         swagger_ui_oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
         lifespan=combine_lifespans(lifespan, mcp_app.lifespan) if mcp_app else lifespan,
+    )
+    photos = settings.photos
+    app.add_middleware(
+        BodyLimitMiddleware,
+        limits=[
+            BodyLimit(
+                "POST",
+                re.compile(rf"{re.escape(API_PREFIX)}/trips/[^/]+/photos"),
+                photos.max_image_bytes
+                + photos.max_thumbnail_bytes
+                + MULTIPART_OVERHEAD_BYTES,
+            )
+        ],
     )
     app.add_middleware(
         CORSMiddleware,

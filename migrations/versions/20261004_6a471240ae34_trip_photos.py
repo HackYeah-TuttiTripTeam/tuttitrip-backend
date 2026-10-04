@@ -23,7 +23,7 @@ def upgrade() -> None:
         "trip_photos",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("trip_id", sa.Uuid(), nullable=False),
-        sa.Column("author_sub", sa.String(length=255), nullable=False),
+        sa.Column("author_sub", sa.String(length=255), nullable=True),
         sa.Column("content_type", sa.String(length=20), nullable=False),
         sa.Column("size_bytes", sa.Integer(), nullable=False),
         sa.Column("thumbnail_type", sa.String(length=20), nullable=False),

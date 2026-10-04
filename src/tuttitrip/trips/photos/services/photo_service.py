@@ -37,7 +37,7 @@ def _read(photo: TripPhoto, names: dict[str, str], caller_sub: str) -> PhotoRead
     encoded = base64.b64encode(photo.thumbnail).decode("ascii")
     return PhotoRead(
         id=photo.id,
-        author_name=names.get(photo.author_sub),
+        author_name=names.get(photo.author_sub or ""),
         is_mine=photo.author_sub == caller_sub,
         content_type=photo.content_type,
         size_bytes=photo.size_bytes,
@@ -69,19 +69,18 @@ async def upload(
         PhotoRejectedError: Too large, empty, not JPEG/PNG/WebP, or the trip is full.
     """
     limits = get_settings().photos
-    for data, limit, what in (
-        (image, limits.max_image_bytes, "image"),
-        (thumbnail, limits.max_thumbnail_bytes, "thumbnail"),
-    ):
-        if (message := rules.problem(data, limit, what)) is not None:
-            raise PhotoRejectedError(message)
+    try:
+        content_type = rules.accept(image, limits.max_image_bytes, "image")
+        thumbnail_type = rules.accept(
+            thumbnail, limits.max_thumbnail_bytes, "thumbnail"
+        )
+    except rules.UploadRejectedError as exc:
+        raise PhotoRejectedError(str(exc)) from exc
+    # The trip row lock makes the count below and the insert one step, so
+    # parallel uploads cannot overshoot the limit.
+    await db.lock_trip(session, membership.trip_id)
     if await db.count_photos(session, membership.trip_id) >= limits.max_per_trip:
         msg = f"A trip holds at most {limits.max_per_trip} photos"
-        raise PhotoRejectedError(msg)
-    content_type = rules.sniff_type(image)
-    thumbnail_type = rules.sniff_type(thumbnail)
-    if content_type is None or thumbnail_type is None:  # unreachable: checked above
-        msg = "Unsupported image type"
         raise PhotoRejectedError(msg)
     photo = await db.insert_photo(
         session,
@@ -97,6 +96,34 @@ async def upload(
     )
     await session.commit()
     return _read(photo, await _names(session, membership), membership.sub)
+
+
+async def author_left(session: AsyncSession, trip_id: UUID, sub: str) -> None:
+    """Unattribute the photos of a member who left the trip. No commit.
+
+    The photos stay for the group; only the host can delete them now.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+        sub: Auth0 subject of the account that left.
+    """
+    await db.detach_author(session, trip_id, sub)
+
+
+async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
+    """Unattribute the photos of a deleted account, without committing.
+
+    The photos stay for the group; only the link to the person is removed.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject of the deleted account.
+
+    Returns:
+        ``photos_unattributed``.
+    """
+    return {"photos_unattributed": await db.detach_author_everywhere(session, sub)}
 
 
 async def list_photos(

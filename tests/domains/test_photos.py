@@ -28,14 +28,15 @@ from tuttitrip.trips.photos.logic.rules import (
     JPEG,
     PNG,
     WEBP,
+    UploadRejectedError,
+    accept,
     can_delete,
-    problem,
     sniff_type,
 )
 from tuttitrip.trips.photos.models import TripPhoto
 from tuttitrip.trips.photos.schemas import PhotoQuery
 from tuttitrip.trips.schemas import TripMembership, TripRole
-from tuttitrip.trips.services import trip_service
+from tuttitrip.trips.services import member_service, trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
 HOST, CO_HOST, MEMBER = TripRole.HOST, TripRole.CO_HOST, TripRole.MEMBER
@@ -63,13 +64,43 @@ def test_type_comes_from_the_bytes(data: bytes, expected: str | None) -> None:
     assert sniff_type(data) == expected
 
 
-def test_problem_reports_empty_large_and_foreign_files() -> None:
-    assert problem(JPEG_BYTES, 100, "image") is None
-    assert problem(b"", 100, "image") == "The image is empty"
-    assert problem(JPEG_BYTES, 10, "image") == "The image is larger than 10 bytes"
-    assert problem(b"GIF89a....", 100, "thumbnail") == (
-        "The thumbnail must be a JPEG, PNG or WebP image"
-    )
+def _png_chunk(kind: bytes, body: bytes = b"") -> bytes:
+    return len(body).to_bytes(4, "big") + kind + body + b"\0\0\0\0"
+
+
+EXIF_JPEG = b"\xff\xd8\xff\xe1\x00\x10Exif\x00\x00" + b"G" * 8 + b"\xff\xda\x00\x02"
+XMP_JPEG = b"\xff\xd8\xff\xe1\x00\x20http://ns.adobe.com/xap/1.0/\x00" + b"x" * 6
+CLEAN_JPEG = b"\xff\xd8\xff\xe0\x00\x04JF\xff\xdb\x00\x04qq\xff\xda\x00\x02"
+EXIF_PNG = PNG_BYTES[:8] + _png_chunk(b"IHDR", b"h" * 13) + _png_chunk(b"eXIf", b"GPS")
+CLEAN_PNG = PNG_BYTES[:8] + _png_chunk(b"IHDR", b"h" * 13) + _png_chunk(b"IEND")
+EXIF_WEBP = (
+    b"RIFF\x20\x00\x00\x00WEBPVP8 \x04\x00\x00\x00abcdEXIF\x03\x00\x00\x00GPS\x00"
+)
+CLEAN_WEBP = b"RIFF\x20\x00\x00\x00WEBPVP8 \x04\x00\x00\x00abcd"
+
+
+def test_accept_reports_empty_large_and_foreign_files() -> None:
+    assert accept(JPEG_BYTES, 100, "image") == JPEG
+    with pytest.raises(UploadRejectedError, match="The image is empty"):
+        accept(b"", 100, "image")
+    with pytest.raises(UploadRejectedError, match="larger than 10 bytes"):
+        accept(JPEG_BYTES, 10, "image")
+    with pytest.raises(UploadRejectedError, match="thumbnail must be a JPEG"):
+        accept(b"GIF89a....", 100, "thumbnail")
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [(CLEAN_JPEG, JPEG), (CLEAN_PNG, PNG), (CLEAN_WEBP, WEBP)],
+)
+def test_clean_images_pass(data: bytes, expected: str) -> None:
+    assert accept(data, 10_000, "image") == expected
+
+
+@pytest.mark.parametrize("data", [EXIF_JPEG, XMP_JPEG, EXIF_PNG, EXIF_WEBP])
+def test_images_with_exif_or_xmp_are_refused(data: bytes) -> None:
+    with pytest.raises(UploadRejectedError, match="EXIF/XMP"):
+        accept(data, 10_000, "image")
 
 
 @pytest.mark.parametrize(
@@ -226,6 +257,31 @@ def test_type_is_taken_from_bytes_not_from_the_header(
     assert len(state.photos) == 1
 
 
+def test_upload_with_exif_is_422(client: TestClient, state: State) -> None:
+    state.roles[ME.sub] = MEMBER
+    response = _upload(client, image=EXIF_JPEG)
+    assert response.status_code == 422
+    assert "EXIF" in response.json()["detail"]
+    assert not state.photos
+
+
+def test_upload_locks_the_trip_before_counting(
+    client: TestClient, state: State, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state.roles[ME.sub] = MEMBER
+    order: list[str] = []
+    monkeypatch.setattr(
+        photos_db, "lock_trip", AsyncMock(side_effect=lambda *_: order.append("lock"))
+    )
+    monkeypatch.setattr(
+        photos_db,
+        "count_photos",
+        AsyncMock(side_effect=lambda *_: order.append("count") or 0),
+    )
+    assert _upload(client).status_code == 201
+    assert order == ["lock", "count"]
+
+
 def test_oversize_and_empty_files_are_422(
     client: TestClient, state: State, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -271,7 +327,9 @@ def test_member_downloads_the_image_with_safe_headers(
     assert response.content == JPEG_BYTES
     assert response.headers["content-type"] == JPEG
     assert response.headers["x-content-type-options"] == "nosniff"
-    assert response.headers["cache-control"].startswith("private")
+    assert response.headers["cache-control"] == "private, max-age=60"
+    assert response.headers["content-disposition"] == "inline"
+    assert response.headers["content-security-policy"] == "default-src 'none'; sandbox"
 
 
 def test_photo_of_another_trip_is_404(client: TestClient, state: State) -> None:
@@ -350,3 +408,30 @@ def test_sql_list_defers_the_image_and_filters_by_author() -> None:
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_member_left_unattributes_their_photos(
+    state: State, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mine = state.add_photo("auth0|zosia")
+    other = state.add_photo("auth0|ola")
+
+    def detach(_s: object, _t: uuid.UUID, sub: str) -> None:
+        for photo in state.photos.values():
+            if photo.author_sub == sub:
+                photo.author_sub = None
+
+    monkeypatch.setattr(photos_db, "detach_author", AsyncMock(side_effect=detach))
+    asyncio.run(
+        member_service.member_left(AsyncMock(), TRIP, uuid.uuid4(), "auth0|zosia")
+    )
+    assert mine.author_sub is None
+    assert other.author_sub == "auth0|ola"
+
+
+@pytest.mark.parametrize(("role", "allowed"), [(MEMBER, False), (HOST, True)])
+def test_orphaned_photo_is_deleted_only_by_the_host(
+    role: TripRole,
+    allowed: bool,  # ruff: ignore[boolean-type-hint-positional-argument]
+) -> None:
+    assert can_delete(role, "auth0|x", None) is allowed

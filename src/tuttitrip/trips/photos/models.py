@@ -23,7 +23,8 @@ class TripPhoto(Base):
     trip_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("trips.id", ondelete="CASCADE")
     )
-    author_sub: Mapped[str] = mapped_column(String(255))
+    # NULL once the author left the trip: the photo stays, unattributed.
+    author_sub: Mapped[str | None] = mapped_column(String(255))
     content_type: Mapped[str] = mapped_column(String(20))
     size_bytes: Mapped[int]
     thumbnail_type: Mapped[str] = mapped_column(String(20))
