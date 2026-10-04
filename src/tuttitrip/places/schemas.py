@@ -320,6 +320,12 @@ class PlaceRead(BaseModel):
         "No row means the price is unknown (unverified)."
     )
     typical_visit_min: int = Field(description="Typical visit length (tau_p), min.")
+    description: str | None = Field(
+        default=None, description="Short text from the worker's web research."
+    )
+    child_friendly: bool | None = Field(
+        default=None, description="Null when unknown; from the web research."
+    )
     segment_km: float = Field(description="Walking segment at the place (d_p), km.")
     transfer_min: int = Field(description="Fixed transfer time (transfer_p), min.")
     queue_min: int = Field(description="Typical queue, min.")
@@ -333,6 +339,13 @@ class PlaceRead(BaseModel):
         description="Null when unknown (not the same as outdoors)."
     )
     iconic: bool
+    unique_experience: bool = Field(
+        default=False,
+        description=(
+            "A one-off experience of the place (not a landmark); like `iconic`, it "
+            'makes the place a candidate for the daily "anyway" suggestion.'
+        ),
+    )
     cuisine: Cuisine | None
     diet_tags: list[DietTag]
     amenities: list[Amenity] = Field(description="Lodging amenities.")

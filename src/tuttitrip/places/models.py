@@ -200,6 +200,9 @@ class Place(Base):
     wheelchair: Mapped[bool | None]
     indoor: Mapped[bool | None]  # NULL = unknown, which is not "outdoors"
     iconic: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    unique_experience: Mapped[bool] = mapped_column(
+        default=False, server_default=text("false")
+    )
     cuisine: Mapped[str | None] = mapped_column(String(32))
     diet_tags: Mapped[list[str]] = mapped_column(
         ARRAY(String(32)), default=list, server_default=_EMPTY_ARRAY
@@ -209,6 +212,11 @@ class Place(Base):
         ARRAY(String(32)), default=list, server_default=_EMPTY_ARRAY
     )
     source: Mapped[str] = mapped_column(String(16))
+    # Web research by the worker (unverified; hours and prices carry their own
+    # source URL). `enriched_at` is the worker's cache stamp.
+    description: Mapped[str | None] = mapped_column(Text)
+    child_friendly: Mapped[bool | None]
+    enriched_at: Mapped[datetime | None]
 
     prices: Mapped[list[PlacePrice]] = relationship(
         back_populates="place", lazy="raise", order_by="PlacePrice.ticket_category"

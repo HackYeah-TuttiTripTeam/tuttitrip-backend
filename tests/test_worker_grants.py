@@ -93,6 +93,9 @@ def test_osm_import_updates_only_the_columns_its_upsert_sets() -> None:
     assert columns == {
         "name", "category", "tags", "lat", "lon", "wheelchair", "indoor",
         "cuisine", "diet_tags", "amenities", "opening_hours",
+        # web research (fetch_place_candidates enrichment), always unverified
+        "hours_source_url", "hours_checked_at", "typical_visit_min",
+        "description", "child_friendly", "enriched_at",
     }  # fmt: skip
     assert not columns & {"city_slug", "source", "hours_verified", "osm_id", "id"}
 

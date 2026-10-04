@@ -17,6 +17,12 @@ from tuttitrip.planning.fairness.logic.measure import jain, min_r
 from tuttitrip.planning.fairness.logic.violations import effective_floor
 from tuttitrip.planning.logic.domains import RequirementOutcome
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
+from tuttitrip.planning.logic.progress import (
+    PlanProgress,
+    PlanStep,
+    ProgressSink,
+    ignore_progress,
+)
 from tuttitrip.planning.logic.reference import relative_satisfaction, solo_utility
 from tuttitrip.planning.logic.solver import PlanResult, Solver, solve
 from tuttitrip.planning.schemas import DomainScores, LodgingStay, PlanningInput
@@ -77,6 +83,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
     cost_cap: Decimal | None = None,
     u_star: Mapping[UUID, float] | None = None,
     solver: Solver = solve,
+    progress: ProgressSink = ignore_progress,
 ) -> GroupPlan:
     """Solo runs, floors, the group plan and the fairness measures.
 
@@ -93,6 +100,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
             budget consent (E6) compares three group plans against the same
             reference points.
         solver: The solver of every run (default: the local search).
+        progress: Told which stage is running; it never changes the result.
 
     Returns:
         The plan, a ledger row per person (id order), ``min r`` and Jain's index.
@@ -103,7 +111,8 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
     reference: dict[UUID, float] = dict(u_star or {})
     ran_solo = not alone and u_star is None
     if ran_solo:
-        for person in people:
+        for number, person in enumerate(people, start=1):
+            progress(PlanProgress(PlanStep.REFERENCE, number, len(people)))
             run = solo_utility(
                 data,
                 person,
@@ -120,6 +129,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         p.id: 0.0 if alone else effective_floor(p.floor, reference[p.id], params)
         for p in people
     }
+    progress(PlanProgress(PlanStep.SEARCH))
     plan = solver(
         data,
         params,
@@ -130,6 +140,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         cost_cap=cost_cap,
         max_evaluations=max_evaluations,
     )
+    progress(PlanProgress(PlanStep.FLOORS))
     by_person = {s.person_id: s for s in plan.scores}
     rows = tuple(
         PersonReference(
