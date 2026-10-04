@@ -152,6 +152,9 @@ class PlanStop(BaseModel):
     place_id: UUID
     name: str
     kind: PlaceKind
+    address: str | None = Field(
+        default=None, description="Street address of the place; null: no data."
+    )
     lat: float
     lon: float
     start: dt.time = Field(description="Arrival time.")

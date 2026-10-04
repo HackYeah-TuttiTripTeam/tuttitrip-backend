@@ -138,6 +138,8 @@ class Place(Base):
     city_slug: Mapped[str] = mapped_column(ForeignKey("cities.slug"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     category: Mapped[str] = mapped_column(String(32), index=True)
+    # Street address as printed on a plan; NULL when the import has none.
+    address: Mapped[str | None] = mapped_column(String(300))
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(String(32)), default=list, server_default=_EMPTY_ARRAY
     )
