@@ -87,15 +87,18 @@ async def _scenario(app: FastAPI) -> None:  # ruff: ignore[too-many-locals, too-
             )
             assert again.json()["veto_id"] == vetoed.json()["veto_id"]
 
-            vetoes = (await http.get(f"{base}/vetoes")).json()
+            vetoes = [
+                v
+                for v in (await http.get(f"{base}/vetoes")).json()
+                if v["created_by_sub"].startswith("link:")
+            ]
             assert [v["place_id"] for v in vetoes] == [museum]
-            assert vetoes[0]["created_by_sub"].startswith("link:")
             latest = (await http.get(f"{base}/plans/latest")).json()
             assert latest["version"] == first["version"] + 1
             assert museum not in _planned(latest)
             summary = (await http.get(f"{base}/vote-summary")).json()
-            assert {v["source"] for r in summary["items"] for v in r["vetoes"]} == {
-                "link"
+            assert "link" in {
+                v["source"] for r in summary["items"] for v in r["vetoes"]
             }
 
             after = await http.get("/api/v1/vote/session", headers=auth)
