@@ -5,6 +5,7 @@ from uuid import UUID
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.places.services import place_service
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips import db
@@ -63,9 +64,12 @@ async def create_trip(
     Returns:
         The created trip.
     """
-    trip = await db.insert_trip(
-        session, owner_sub=owner_sub, fields=data.model_dump(exclude_unset=True)
-    )
+    fields = data.model_dump(exclude_unset=True)
+    if fields.get("city_slug") is None and data.destination:
+        slug = await place_service.find_city_slug(session, data.destination)
+        if slug is not None:
+            fields["city_slug"] = slug
+    trip = await db.insert_trip(session, owner_sub=owner_sub, fields=fields)
     await profile_service.create_host_profile(session, trip.id, owner_sub)
     await session.commit()
     return _read(trip, TripRole.HOST, MemberStatus.CONFIRMED)
@@ -135,6 +139,34 @@ async def get_trip(session: AsyncSession, membership: TripMembership) -> TripRea
     return _read(trip, membership.role, membership.status)
 
 
+async def fill_city_slug(session: AsyncSession, membership: TripMembership) -> TripRead:
+    """Read the trip and, when it has no city, set it from the destination.
+
+    Trips made from the UI carry only a destination text. When it names a
+    catalog city (``"Kraków"`` gives ``krakow``) the slug is saved.
+
+    Args:
+        session: Open session.
+        membership: Proof from ``TripAccess``.
+
+    Returns:
+        The trip, with ``city_slug`` filled in when the destination matched.
+
+    Raises:
+        TripNotFoundError: The trip vanished after the access check.
+    """
+    trip = await db.select_trip(session, membership.trip_id)
+    if trip is None:
+        raise TripNotFoundError(str(membership.trip_id)) from None
+    if trip.city_slug is None and trip.destination:
+        slug = await place_service.find_city_slug(session, trip.destination)
+        if slug is not None:
+            trip.city_slug = slug
+            await session.commit()
+            await session.refresh(trip)
+    return _read(trip, membership.role, membership.status)
+
+
 async def update_trip(
     session: AsyncSession, membership: TripMembership, data: TripUpdate
 ) -> TripRead:
@@ -159,6 +191,11 @@ async def update_trip(
     if trip is None:
         raise TripNotFoundError(str(membership.trip_id))
     changes = data.model_dump(exclude_unset=True)
+    destination = changes.get("destination", trip.destination)
+    if changes.get("city_slug", trip.city_slug) is None and destination:
+        slug = await place_service.find_city_slug(session, destination)
+        if slug is not None:
+            changes["city_slug"] = slug
     merged = TripUpdate.model_validate(trip, from_attributes=True).model_copy(
         update=changes
     )
