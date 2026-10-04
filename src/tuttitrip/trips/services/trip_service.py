@@ -207,8 +207,9 @@ async def delete_trips_owned_by(session: AsyncSession, owner_sub: str) -> int:
 async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
     """Clear a deleted account out of the trips, without committing.
 
-    Trips it hosts pass to the co-host who joined first; a trip without a
-    co-host is deleted with everything under it. Memberships go and profiles
+    Trips it hosts pass to the co-host who joined first, else to the member
+    who joined first; a trip where the host was alone is deleted with
+    everything under it. Memberships go and profiles
     lose the link to the account (the person stays in the plan); expenses are
     untouched.
 
@@ -221,8 +222,8 @@ async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
     """
     handed = deleted = 0
     for trip_id in await db.select_hosted_trip_ids(session, sub):
-        if co_host := await db.select_first_co_host(session, trip_id):
-            await db.hand_over_trip(session, trip_id, co_host)
+        if heir := await db.select_successor(session, trip_id, sub):
+            await db.hand_over_trip(session, trip_id, heir)
             handed += 1
         else:
             await db.delete_trip(session, trip_id)
