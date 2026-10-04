@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 from tuttitrip.shared.permissions.registry import Access, Feature
 
 
@@ -56,6 +57,40 @@ class AccessTokenCreated(AccessTokenRead):
             "fragment (`#t=...`) and send it back as `X-Access-Token`."
         )
     )
+
+
+@unique
+class AccessTokenState(StrEnum):
+    """Whether a token still works."""
+
+    ACTIVE = "active"
+    EXPIRED = "expired"
+    REVOKED = "revoked"
+
+
+@unique
+class AccessTokenSort(StrEnum):
+    """Sort keys of a trip's token list."""
+
+    CREATED_AT = "created_at"
+    EXPIRES_AT = "expires_at"
+    LAST_USED_AT = "last_used_at"
+
+
+class AccessTokenFilters(ListFilters):
+    """Filters of a trip's token list."""
+
+    profile_id: UUID | None = Field(default=None, description="Only this profile's.")
+    state: AccessTokenState | None = Field(
+        default=None, description="Only active, expired or revoked tokens."
+    )
+
+
+class AccessTokenQuery(PageParams, AccessTokenFilters):
+    """Query of a trip's token list."""
+
+    sort: AccessTokenSort = AccessTokenSort.CREATED_AT
+    dir: SortDir = SortDir.DESC
 
 
 RoleName = Annotated[
