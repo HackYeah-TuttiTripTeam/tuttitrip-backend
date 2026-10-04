@@ -71,8 +71,21 @@ def test_worker_reads_pasted_texts_and_the_catalog() -> None:
     } <= _granted("SELECT")
 
 
-def test_catalog_import_may_insert_and_update_but_never_delete() -> None:
-    assert _granted("INSERT, UPDATE") == {"places", "cities", "place_prices"}
+def test_catalog_import_may_insert_but_never_delete() -> None:
+    assert _granted("INSERT") == {"places", "cities", "place_prices"}
     assert not {"places", "cities", "pasted_documents"} & _granted(
         "SELECT, INSERT, UPDATE, DELETE"
     )
+
+
+def test_osm_import_updates_only_the_columns_its_upsert_sets() -> None:
+    sql = GRANTS.read_text()
+    assert _granted("UPDATE") == {"place_prices"}  # table-wide; none on cities/places
+    match = re.search(r"GRANT UPDATE \(([^)]+)\)\s+ON public\.places", sql)
+    assert match is not None
+    columns = {name.strip() for name in match.group(1).split(",")}
+    assert columns == {
+        "name", "category", "tags", "lat", "lon", "wheelchair", "indoor",
+        "cuisine", "diet_tags", "amenities", "opening_hours",
+    }  # fmt: skip
+    assert not columns & {"city_slug", "source", "hours_verified", "osm_id", "id"}
