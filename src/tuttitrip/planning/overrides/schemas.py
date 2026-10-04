@@ -48,6 +48,26 @@ class PersonDelta(BaseModel):
     d_r: float
 
 
+@unique
+class BudgetOutcome(StrEnum):
+    """What the host decided about going over ``B_do``."""
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class BudgetConsent(BaseModel):
+    """The facts of a budget consent (E6), copied into the log entry."""
+
+    approval_id: UUID
+    outcome: BudgetOutcome
+    currency: str
+    over_budget: Decimal = Field(description="Amount above B_do of P_flex.")
+    kappa: Decimal = Field(description="Price of a point, currency per point.")
+    gain_profile_id: UUID | None = Field(description="Who gains most from going over.")
+    gain_points: float | None = Field(description="Their gain in points.")
+
+
 class DecisionEffects(BaseModel):
     """What a decision costs: the plan with it minus the plan without it.
 
@@ -62,6 +82,12 @@ class DecisionEffects(BaseModel):
     d_r: list[PersonDelta]
     d_cost: Decimal = Field(description="Change of c(P), in the trip currency.")
     d_minutes: int = Field(description="Change of the active minutes of the plan.")
+    budget: BudgetConsent | None = Field(
+        default=None,
+        description=(
+            "Set for a budget consent: the numbers above are P_flex minus P_strict."
+        ),
+    )
 
 
 class OverridePreview(BaseModel):

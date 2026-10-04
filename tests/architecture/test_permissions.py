@@ -43,7 +43,13 @@ API_ROUTES = api_routes(APP)
 PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status", "demo_login", "reset_demo"}
 # Endpoint function names of the only routes reachable with an access token
 # instead of an account (the token's trip and profile come from the token).
-TOKEN_ENDPOINTS = {"read_vote_access"}
+TOKEN_ENDPOINTS = {
+    "read_vote_access",
+    "read_vote_session",
+    "rate_place_by_link",
+    "veto_place_by_link",
+    "withdraw_veto_by_link",
+}
 
 
 # The only non-API routes that carry their own guard instead of a marker: the

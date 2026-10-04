@@ -43,6 +43,19 @@ async def select_cities(session: AsyncSession) -> Sequence[City]:
     return (await session.scalars(select(City).order_by(City.name))).all()
 
 
+async def select_city_slugs_with_places(session: AsyncSession) -> set[str]:
+    """List the cities that have at least one place.
+
+    Args:
+        session: Open session.
+
+    Returns:
+        Their slugs.
+    """
+    rows = await session.scalars(select(Place.city_slug).distinct())
+    return set(rows)
+
+
 async def select_places(
     session: AsyncSession,
     city_slug: str,

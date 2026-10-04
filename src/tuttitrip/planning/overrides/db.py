@@ -70,3 +70,13 @@ async def select_decisions(
         stmt = stmt.where(PlanDecision.kind == query.kind.value)
     order = ordering(_SORT, query.sort, PlanDecision.id)
     return await paginate(session, stmt, query, order)
+
+
+def log_decision(session: AsyncSession, decision: PlanDecision) -> None:
+    """Append an entry to the decision log (the caller commits).
+
+    Args:
+        session: Open session.
+        decision: The entry.
+    """
+    session.add(decision)
