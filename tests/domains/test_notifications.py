@@ -13,6 +13,7 @@ from alembic.script import ScriptDirectory
 from pydantic import ValidationError
 from sqlalchemy import Table
 
+from tuttitrip.main import create_app as _create_app  # ruff: ignore[unused-import] - registers erasers
 from tuttitrip.notifications.models import Notification
 from tuttitrip.notifications.schemas import (
     NotificationAction,
@@ -21,6 +22,7 @@ from tuttitrip.notifications.schemas import (
     NotificationType,
 )
 from tuttitrip.notifications.services import notification_service
+from tuttitrip.shared.admin_users.services import erasure
 from tuttitrip.shared.permissions.registry import DESCRIPTIONS, Feature, is_leaf
 
 REVISION = "b7c3e1f09a42"
@@ -153,3 +155,16 @@ def test_migration_creates_table_trigger_and_user_grant_and_reverts_them() -> No
     assert "DROP TRIGGER notifications_notify" in down
     assert "DROP TABLE notifications" in down
     assert "feature = 'notifications'" in down
+
+
+def test_erasing_an_account_deletes_its_notifications() -> None:
+    delete = AsyncMock(return_value=4)
+    with patch.object(notification_service.db, "delete_for_user", delete):
+        counts = asyncio.run(notification_service.erase_account(MagicMock(), "sub"))
+    assert counts == {"notifications_deleted": 4}
+    assert delete.await_args is not None
+    assert delete.await_args.args[1] == "sub"
+
+
+def test_the_eraser_is_registered() -> None:
+    assert notification_service.erase_account in erasure._ERASERS  # ruff: ignore[private-member-access]

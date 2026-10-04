@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import func, update
+from sqlalchemy import delete, func, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +47,24 @@ async def mark_read_by_key(session: AsyncSession, dedupe_key: str) -> int:
         update(Notification)
         .where(Notification.dedupe_key == dedupe_key, Notification.read_at.is_(None))
         .values(read_at=func.now())
+        .returning(Notification.id)
+    )
+    return len(result.all())
+
+
+async def delete_for_user(session: AsyncSession, sub: str) -> int:
+    """Delete every notification of one account.
+
+    Args:
+        session: Open session (the caller commits).
+        sub: Auth0 subject of the deleted account.
+
+    Returns:
+        How many rows were deleted.
+    """
+    result = await session.execute(
+        delete(Notification)
+        .where(Notification.user_sub == sub)
         .returning(Notification.id)
     )
     return len(result.all())

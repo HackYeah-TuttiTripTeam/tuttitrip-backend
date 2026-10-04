@@ -69,3 +69,16 @@ async def resolve(session: AsyncSession, dedupe_key: str) -> int:
         How many notifications changed.
     """
     return await db.mark_read_by_key(session, dedupe_key)
+
+
+async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
+    """Delete the notifications of a deleted account, without committing.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject of the deleted account.
+
+    Returns:
+        ``notifications_deleted``.
+    """
+    return {"notifications_deleted": await db.delete_for_user(session, sub)}
