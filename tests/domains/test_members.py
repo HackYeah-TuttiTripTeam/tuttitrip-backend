@@ -453,11 +453,11 @@ def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
     host = TripMembership(trip_id=TRIP, sub=ME.sub, role=HOST)
     _run(member_service.remove_member(session, host, profile.id))
     calls = [c[0] for c in session.method_calls]
-    # The last two executes delete the leaver's check-in and unattribute their
-    # photos (member_left).
+    # The last executes delete the leaver's check-in, shared location and consent
+    # and unattribute their photos (member_left).
     assert calls == [
         *("scalar", "scalar", "execute", "scalar", "flush"),
-        *("execute", "execute", "commit"),
+        *("execute", "execute", "execute", "execute", "commit"),
     ]
     assert _sql(session.execute.call_args_list[0].args[0]).startswith(
         "DELETE FROM trip_members"

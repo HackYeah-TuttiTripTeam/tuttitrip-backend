@@ -147,3 +147,20 @@ async def detach_account_everywhere(session: AsyncSession, sub: str) -> None:
     await session.execute(
         update(Profile).where(Profile.user_sub == sub).values(user_sub=None)
     )
+
+
+async def select_profile_ids_of_account(
+    session: AsyncSession, sub: str
+) -> Sequence[UUID]:
+    """Ids of all the profiles linked to an account, on every trip.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        The profile ids.
+    """
+    return (
+        await session.scalars(select(Profile.id).where(Profile.user_sub == sub))
+    ).all()

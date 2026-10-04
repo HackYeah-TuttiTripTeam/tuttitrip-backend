@@ -48,8 +48,11 @@ from tuttitrip.shared.permissions.api import router as permissions_router
 from tuttitrip.shared.uploadlimit.middleware import UploadSizeLimit
 from tuttitrip.trips.api import router as trips_router
 from tuttitrip.trips.checkins.api import router as checkins_router
+from tuttitrip.trips.checkins.services import checkin_service
 from tuttitrip.trips.invitations.api import router as invitations_router
 from tuttitrip.trips.invitations.services import invitation_service
+from tuttitrip.trips.locations.api import router as locations_router
+from tuttitrip.trips.locations.services import location_service
 from tuttitrip.trips.photos.api import router as photos_router
 from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.services import trip_service
@@ -76,6 +79,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     trips_router,
     invitations_router,
     checkins_router,
+    locations_router,
     voting_router,
     photos_router,
     profiles_router,
@@ -95,6 +99,9 @@ ROUTERS: tuple[APIRouter, ...] = (
 )
 
 # Domain data cleared when an administrator deletes an account.
+# Profile-keyed data first: trip_service.erase_account unlinks the profiles.
+erasure.register(checkin_service.erase_account)
+erasure.register(location_service.erase_account)
 erasure.register(trip_service.erase_account)
 erasure.register(invitation_service.erase_account)
 erasure.register(notification_service.erase_account)
