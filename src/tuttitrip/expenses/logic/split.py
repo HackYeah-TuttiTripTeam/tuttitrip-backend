@@ -6,6 +6,7 @@ from decimal import Decimal
 from fractions import Fraction
 from uuid import UUID
 
+from tuttitrip.expenses.logic.rates import has_two_decimals
 from tuttitrip.expenses.schemas import ExpenseErrorCode, SplitMethod
 
 CENTS = 100
@@ -82,12 +83,12 @@ def check_expense(  # ruff: ignore[too-many-arguments] one rule set, merged stat
                 "The trip has no currency, so the expense needs one",
             )
         )
-    elif currency is not None and trip_currency not in {None, currency}:
+    elif currency is not None and not has_two_decimals(currency):
         found.append(
             Violation(
-                ExpenseErrorCode.CURRENCY_MISMATCH,
+                ExpenseErrorCode.CURRENCY_UNSUPPORTED,
                 "currency",
-                f"The expense must be in the trip's currency ({trip_currency})",
+                f"{currency} does not use 2 decimal places, which we do not support",
             )
         )
     if payer not in trip_profiles:

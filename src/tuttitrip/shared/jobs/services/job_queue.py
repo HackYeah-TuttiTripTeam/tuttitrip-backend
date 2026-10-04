@@ -37,6 +37,8 @@ TIMEOUT_SECONDS: dict[Workflow, float] = {
     Workflow.EXTRACT_OFFER_EVIDENCE: 600.0,
     Workflow.FETCH_PLACE_CANDIDATES: 900.0,
     Workflow.WRITE_JUSTIFICATIONS: 600.0,
+    Workflow.PARSE_EXPENSE_TEXT: 120.0,
+    Workflow.READ_RECEIPT: 300.0,
 }
 
 NOT_IMPLEMENTED_MESSAGE = "Jeszcze niedostępne"

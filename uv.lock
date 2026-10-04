@@ -2287,6 +2287,7 @@ dependencies = [
     { name = "dbos" },
     { name = "fastapi" },
     { name = "fastmcp-slim", extra = ["server"] },
+    { name = "httpx" },
     { name = "openpyxl" },
     { name = "pgvector" },
     { name = "pydantic" },
@@ -2302,7 +2303,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-archon" },
     { name = "ruff" },
@@ -2317,6 +2317,7 @@ requires-dist = [
     { name = "dbos", specifier = ">=3.2.0" },
     { name = "fastapi", specifier = ">=0.142.2" },
     { name = "fastmcp-slim", extras = ["server"], specifier = ">=4.0.10" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pgvector", specifier = ">=0.5.0" },
     { name = "pydantic", specifier = ">=2.13.5" },
@@ -2332,7 +2333,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-archon", specifier = ">=0.0.7" },
     { name = "ruff", specifier = ">=0.16.10" },
