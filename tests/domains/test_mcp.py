@@ -17,11 +17,12 @@ from tuttitrip.main import create_app
 from tuttitrip.mcp import api as mcp_api
 from tuttitrip.mcp.services import tool_service
 from tuttitrip.shared.config.settings import McpSettings, Settings
+from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.logic.resolution import Grant
 from tuttitrip.shared.permissions.registry import Access
 from tuttitrip.shared.permissions.services import permission_service
 from tuttitrip.trips.models import Trip
-from tuttitrip.trips.schemas import TripDetails, TripRead, TripRole
+from tuttitrip.trips.schemas import TripDetails, TripListQuery, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
@@ -231,12 +232,15 @@ def test_whoami_reports_the_caller_and_permissions(client: TestClient) -> None:
 def test_list_trips_returns_a_page(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    lister = AsyncMock(return_value=[trip_read()])
+    lister = AsyncMock(
+        return_value=Page[TripRead].of([trip_read()], 1, TripListQuery(size=5))
+    )
     monkeypatch.setattr(trip_service, "list_trips", lister)
     page = call(client, "list_trips", {"size": 5})["structuredContent"]
     assert (page["total"], page["size"], page["pages"]) == (1, 5, 1)
     assert page["items"][0]["my_role"] == "host"
     assert lister.call_args.args[1] == "google-oauth2|42"
+    assert lister.call_args.args[2].size == 5
 
 
 def test_get_trip_checks_membership(
