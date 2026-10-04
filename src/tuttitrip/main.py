@@ -18,6 +18,7 @@ from tuttitrip.accommodation.api import router as accommodation_router
 from tuttitrip.accounts.api import router as accounts_router
 from tuttitrip.demo.api import internal_router as demo_internal_router
 from tuttitrip.demo.api import router as demo_router
+from tuttitrip.demo.services import sample_trip_service
 from tuttitrip.expenses.api import router as expenses_router
 from tuttitrip.expenses.logic.receipts import MAX_BYTES as RECEIPT_MAX_BYTES
 from tuttitrip.expenses.services.nbp_client import close_client as close_nbp_client
@@ -118,6 +119,7 @@ erasure.register(trip_service.erase_account)
 erasure.register(invitation_service.erase_account)
 erasure.register(notification_service.erase_account)
 erasure.register(photo_service.erase_account)
+erasure.register(sample_trip_service.erase_account)
 
 
 @asynccontextmanager
