@@ -82,7 +82,8 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         alpha: Fairness slider in 0 to 3.
         lodging: The lodging base, given exactly when the trip has nights.
         lodging_outcomes: The trip's lodging requirements checked against it.
-        max_evaluations: Work limit of every run (solo and group); default scales with the instance.
+        max_evaluations: Work limit of every run (solo and group); default
+            scales with the instance.
 
     Returns:
         The plan, a ledger row per person (id order), ``min r`` and Jain's index.
