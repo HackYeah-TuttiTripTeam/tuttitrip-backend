@@ -1,6 +1,8 @@
 """Notification queries on PostgreSQL."""
 
+import uuid
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Select, delete, func, select, update
@@ -178,6 +180,68 @@ async def set_read(
         .returning(Notification.id)
     )
     return len(result.all())
+
+
+async def select_one(
+    session: AsyncSession, caller: str, notification_id: uuid.UUID
+) -> Notification | None:
+    """One of the caller's notifications.
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user.
+        notification_id: The notification.
+
+    Returns:
+        The row, or None when it does not exist or is someone else's.
+    """
+    return await session.scalar(
+        scoped(caller).where(Notification.id == notification_id)
+    )
+
+
+async def select_by_id(
+    session: AsyncSession, notification_id: uuid.UUID
+) -> Notification | None:
+    """A notification by id, for the hub that fans a ``NOTIFY`` out to its owner.
+
+    Args:
+        session: Open session.
+        notification_id: The id from the ``NOTIFY`` payload.
+
+    Returns:
+        The row, or None when it is gone already.
+    """
+    return await session.get(Notification, notification_id)
+
+
+async def select_missed(
+    session: AsyncSession,
+    caller: str,
+    *,
+    after: datetime,
+    skip_id: uuid.UUID | None,
+    limit: int,
+) -> list[Notification]:
+    """The caller's notifications created since a moment, oldest first.
+
+    Args:
+        session: Open session.
+        caller: ``sub`` of the signed-in user.
+        after: Only rows created at or after this moment.
+        skip_id: A row to leave out (the one the client already has).
+        limit: Most rows to return.
+
+    Returns:
+        The rows, ordered by ``created_at`` and ``id``.
+    """
+    stmt = scoped(caller).where(Notification.created_at >= after)
+    if skip_id is not None:
+        stmt = stmt.where(Notification.id != skip_id)
+    rows = await session.scalars(
+        stmt.order_by(Notification.created_at, Notification.id).limit(limit)
+    )
+    return list(rows)
 
 
 async def delete_for_user(session: AsyncSession, sub: str) -> int:

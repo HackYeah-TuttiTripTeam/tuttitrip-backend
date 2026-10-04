@@ -210,7 +210,7 @@ def test_a_row_from_a_newer_producer_does_not_break_the_list(
         read_at=None,
         created_at=datetime(2026, 10, 1, tzinfo=UTC),
     )
-    read = notification_service._read(row)  # ruff: ignore[private-member-access] - the tolerance under test
+    read = notification_service.to_read(row)
     assert [a.code for a in read.actions] == [NotificationActionCode.OPEN_PLAN]
     assert read.params == {"name": "Ola", "count": "3"}
     assert "teleport" in caplog.text

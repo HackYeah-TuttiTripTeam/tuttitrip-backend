@@ -1,8 +1,11 @@
 """Notification endpoints: the caller's own list, unread counter and marking."""
 
+from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from tuttitrip.notifications.schemas import (
     MarkResult,
@@ -11,7 +14,8 @@ from tuttitrip.notifications.schemas import (
     NotificationRead,
     UnreadCount,
 )
-from tuttitrip.notifications.services import notification_service
+from tuttitrip.notifications.services import notification_service, stream_service
+from tuttitrip.notifications.services.hub import NotificationHub
 from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.pagination.schemas import Page
@@ -79,3 +83,72 @@ async def mark_notifications(
         How many notifications actually changed state.
     """
     return await notification_service.mark(session, user.sub, body)
+
+
+def get_hub(request: Request) -> NotificationHub:
+    """The process-wide hub (created on first use, stopped by the lifespan).
+
+    Args:
+        request: The current request.
+
+    Returns:
+        The notification hub kept on the application state.
+    """
+    state = request.app.state
+    hub = getattr(state, "notification_hub", None)
+    if not isinstance(hub, NotificationHub):
+        hub = NotificationHub()
+        state.notification_hub = hub
+    return hub
+
+
+HubDep = Annotated[NotificationHub, Depends(get_hub)]
+
+
+@router.get(
+    "/stream",
+    response_class=EventSourceResponse,
+    dependencies=[requires(Feature.NOTIFICATIONS, Access.READ)],
+)
+async def stream_notifications(
+    user: CurrentUser,
+    session: SessionDep,
+    hub: HubDep,
+    last_event_id: Annotated[
+        str | None,
+        Header(
+            description="Id of the last notification the client received (sent "
+            "by EventSource itself; fetch clients set it by hand)."
+        ),
+    ] = None,
+    since: Annotated[
+        datetime | None,
+        Query(description="Alternative to Last-Event-ID: send what was created since."),
+    ] = None,
+) -> AsyncIterator[ServerSentEvent]:
+    """Live stream (Server-Sent Events) of the caller's new notifications.
+
+    Authorized by the usual `Authorization: Bearer` header, so read it with
+    `fetch`, not `EventSource`. Events: `ready` (`{"unread": n}`),
+    `notification` (id = notification id, data = a notification) and `resync`
+    (reload the list and the counter). A comment `ping` arrives every 15 s. The
+    stream ends at the token's expiry and after 30 minutes at the latest;
+    reconnect with `Last-Event-ID` (or `since`) to get what was missed.
+
+    Args:
+        user: The signed-in user.
+        session: Database session (released at once: a stream holds none).
+        hub: Source of live notifications.
+        last_event_id: Id of the last notification the client has.
+        since: Alternative to `last_event_id`.
+
+    Yields:
+        The events.
+    """
+    await session.close()
+    async for item in stream_service.events(
+        hub, user.sub, token_exp=user.exp, last_event_id=last_event_id, since=since
+    ):
+        yield ServerSentEvent(
+            event=item.event, id=item.id, data=item.data.model_dump(mode="json")
+        )

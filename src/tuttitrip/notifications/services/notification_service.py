@@ -85,7 +85,7 @@ async def resolve(session: AsyncSession, dedupe_key: str) -> int:
     return await db.mark_read_by_key(session, dedupe_key)
 
 
-def _read(row: Notification) -> NotificationRead:
+def to_read(row: Notification) -> NotificationRead:
     """Read a row without failing on what a newer producer wrote.
 
     An action code this version does not know is dropped and params that are
@@ -135,7 +135,7 @@ async def list_notifications(
     """
     page = await db.select_page(session, caller, query)
     return Page[NotificationRead](
-        items=[_read(n) for n in page.items],
+        items=[to_read(n) for n in page.items],
         total=page.total,
         page=page.page,
         size=page.size,

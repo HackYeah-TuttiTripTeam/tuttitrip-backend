@@ -140,3 +140,15 @@ class MarkResult(BaseModel):
     """How many notifications actually changed state."""
 
     updated: Annotated[int, Field(ge=0)]
+
+
+class StreamReady(BaseModel):
+    """First event of the stream: where the unread counter stands."""
+
+    unread: Annotated[int, Field(ge=0)]
+
+
+class StreamResync(BaseModel):
+    """Events may have been missed: reload the list and the counter."""
+
+    reason: str

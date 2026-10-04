@@ -763,6 +763,21 @@ read (an approved request disappears from the basket).
   "filters": NotificationFilter | null}`, exactly one of `ids` (1 to 100, else 422) and `filters`
   (`{}` = all); answers `{"updated": n}`, counting only rows that changed state. One `UPDATE`
   scoped to the caller (foreign ids are skipped silently).
+- `GET /notifications/stream` (SSE, `notifications:READ`, `Authorization: Bearer`, so read it with
+  `fetch`). Events: `ready` (`{"unread": n}`), `notification` (SSE `id` = notification id, data =
+  `NotificationRead`), `resync` (`{"reason"}`: reload list and counter). FastAPI sends a `ping`
+  comment every 15 s. `NotificationHub` (`notifications/services/hub.py`) keeps one direct
+  asyncpg `LISTEN notifications` connection per process (not from the pool, no PgBouncer in
+  transaction mode), starts on the first stream and is stopped by the lifespan; per-user bounded
+  queues turn an overflow or a reconnect into one `resync`. A stream holds no DB session (the
+  request one is closed at once) and ends at the token's `exp` (`AuthenticatedUser.exp`) or after
+  30 minutes. Reconnect with `Last-Event-ID` (id of the last notification) or `since`: the stream
+  first sends what was missed (up to 50, else `resync`). The reads of rows happen only for users
+  with an open stream.
+- First producers: joining a trip by invitation creates `member_joined` (`open_people`, key
+  `member_joined:<trip>:<sub>`) and a new veto creates `veto_added` (`open_plan`, key
+  `veto:<veto id>`) for the host and co-hosts (`member_service.organizer_subs`), never for the
+  author, in the same transaction as the change.
 - Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
   is marked `integration`.
 

@@ -90,11 +90,11 @@ erasure.register(notification_service.erase_account)
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    """Release database connections on shutdown.
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Close the notification streams and release database connections on shutdown.
 
     Args:
-        _app: The application (unused).
+        app: The application.
 
     Yields:
         Control while the app is running.
@@ -107,6 +107,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     try:
         yield
     finally:
+        hub = getattr(app.state, "notification_hub", None)
+        if hub is not None:
+            await hub.stop()
         await dispose_engine()
 
 
