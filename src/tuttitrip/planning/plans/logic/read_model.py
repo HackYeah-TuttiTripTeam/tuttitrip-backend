@@ -18,6 +18,7 @@ from tuttitrip.planning.logic.cost import place_cost
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 from tuttitrip.planning.logic.plan_group import GroupPlan, PersonReference
 from tuttitrip.planning.logic.solver import PlannedDay, PlanResult, SolverConflict
+from tuttitrip.planning.logic.upgrades import Upgrade
 from tuttitrip.planning.logic.utility import explain, match, place_domain
 from tuttitrip.planning.plans.logic.input_builder import NO_BUDGET
 from tuttitrip.planning.plans.schemas import (
@@ -38,6 +39,7 @@ from tuttitrip.planning.plans.schemas import (
     PlanFairness,
     PlanStop,
     PlanTelemetry,
+    PlanUpgrade,
     PlanVerdict,
     StopTransfer,
     TransferMode,
@@ -269,6 +271,22 @@ def _conflicts(
     return found
 
 
+def _upgrade(upgrade: Upgrade, places: Mapping[UUID, PlaceRead]) -> PlanUpgrade:
+    replaced = upgrade.replaces_place_id
+    return PlanUpgrade(
+        kind=upgrade.kind,
+        place_id=upgrade.place_id,
+        name=places[upgrade.place_id].name,
+        replaces_place_id=replaced,
+        replaces_name=None if replaced is None else places[replaced].name,
+        day=upgrade.day,
+        cost=upgrade.cost,
+        extra_cost=upgrade.extra_cost,
+        d_j=upgrade.d_j,
+        d_min_r=upgrade.d_min_r,
+    )
+
+
 def _budget(
     data: PlanningInput,
     plan: PlanResult,
@@ -318,6 +336,7 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
     decision: BudgetDecision | None = None,
     strict_plan_id: UUID | None = None,
     verdicts: Sequence[PlanVerdict] | None = None,
+    upgrades: Sequence[Upgrade] = (),
     elapsed_ms: int | None = None,
 ) -> dict[str, object]:
     """The part of ``PlanRead`` that the solver determines.
@@ -335,6 +354,7 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
         decision: The E6 decision when the plan went through the consent check.
         strict_plan_id: Id of the stored ``P_strict`` alternative.
         verdicts: Verdicts of the candidate places (backend#51), or None.
+        upgrades: Upgrades below ``B_od`` (backend#101), best first.
         elapsed_ms: Wall time of the whole computation; default the sum of the
             group and solo runs.
 
@@ -381,5 +401,6 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
         if verdicts is None
         else [v.model_dump(mode="json") for v in verdicts],
         "budget": _budget(data, plan, decision, strict_plan_id).model_dump(mode="json"),
+        "upgrades": [_upgrade(u, places).model_dump(mode="json") for u in upgrades],
         "telemetry": telemetry.model_dump(mode="json"),
     }

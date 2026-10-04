@@ -130,23 +130,28 @@ async def insert_for_recipients(
     return len(result.all())
 
 
-async def mark_read_by_key(session: AsyncSession, dedupe_key: str) -> int:
+async def mark_read_by_key(
+    session: AsyncSession, dedupe_key: str, user_sub: str | None = None
+) -> int:
     """Mark every unread notification with this key as read.
 
     Args:
         session: Open session (the caller commits).
         dedupe_key: The key the producer used.
+        user_sub: Only this recipient's notification; None for every recipient.
 
     Returns:
         How many rows changed.
     """
-    result = await session.execute(
+    stmt = (
         update(Notification)
         .where(Notification.dedupe_key == dedupe_key, Notification.read_at.is_(None))
         .values(read_at=func.now())
         .returning(Notification.id)
     )
-    return len(result.all())
+    if user_sub is not None:
+        stmt = stmt.where(Notification.user_sub == user_sub)
+    return len((await session.execute(stmt)).all())
 
 
 async def set_read(
