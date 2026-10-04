@@ -31,9 +31,11 @@ from tuttitrip.places.api import router as places_router
 from tuttitrip.places.candidates.api import router as candidates_router
 from tuttitrip.places.cities.api import router as city_search_router
 from tuttitrip.places.takeout.api import router as takeout_router
+from tuttitrip.planning.anyway.api import router as anyway_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.budget.api import router as budget_router
 from tuttitrip.planning.budget_approvals.api import router as budget_approvals_router
+from tuttitrip.planning.exports.api import router as exports_router
 from tuttitrip.planning.fairness.api import router as fairness_router
 from tuttitrip.planning.linter.api import router as linter_router
 from tuttitrip.planning.overrides.api import router as overrides_router
@@ -101,6 +103,8 @@ ROUTERS: tuple[APIRouter, ...] = (
     fairness_router,
     plans_router,
     budget_router,
+    exports_router,
+    anyway_router,
     overrides_router,
     budget_approvals_router,
     proposals_router,

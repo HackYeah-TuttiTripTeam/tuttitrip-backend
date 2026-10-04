@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 
 from tuttitrip.places.candidates.services import candidate_service
+from tuttitrip.planning.anyway.services import anyway_service
 from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
 from tuttitrip.planning.plans.schemas import (
     NotApprovedDetail,
@@ -137,6 +138,10 @@ async def create_plan(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if not created:
         response.status_code = status.HTTP_200_OK
+    else:
+        await anyway_service.request_justifications(
+            session, queue, plan.id, plan.anyway, owner=membership.sub
+        )
     return plan
 
 

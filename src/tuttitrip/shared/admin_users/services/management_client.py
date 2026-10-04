@@ -298,3 +298,38 @@ class ManagementClient:
             ManagementError: Auth0 refused or failed (404 means already gone).
         """
         await self._object("DELETE", _user_path(sub))
+
+    async def identity_access_token(self, sub: str, provider: str) -> str | None:
+        """Read the stored access token of one social identity of an account.
+
+        Auth0 keeps the token the identity provider issued at the last login and
+        returns it in ``identities[].access_token`` of ``GET /api/v2/users/{id}``.
+        Needs the ``read:users`` and ``read:user_idp_tokens`` scopes on the M2M
+        application. The token is never logged.
+
+        Args:
+            sub: Auth0 user id.
+            provider: Identity provider, e.g. ``google-oauth2``.
+
+        Returns:
+            The token, or None when the account has no such identity or Auth0
+            holds no token for it.
+
+        Raises:
+            ManagementError: Auth0 answered with an error or an unusable body.
+        """
+        token = await self._access_token()
+        body = await self._send(
+            "GET",
+            f"https://{self._auth0.domain}/api/v2/users/{quote(sub, safe='')}",
+            params={"fields": "identities", "include_fields": "true"},
+            token=token,
+        )
+        identities = body.get("identities")
+        if not isinstance(identities, list):
+            raise ManagementError(_Reason.BAD_BODY)
+        for identity in cast("list[Any]", identities):
+            if isinstance(identity, dict) and identity.get("provider") == provider:
+                access = cast("dict[str, Any]", identity).get("access_token")
+                return access if isinstance(access, str) and access else None
+        return None

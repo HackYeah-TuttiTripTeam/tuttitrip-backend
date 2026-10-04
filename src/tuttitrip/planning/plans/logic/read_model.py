@@ -27,6 +27,7 @@ from tuttitrip.planning.logic.utility import explain, match, place_domain
 from tuttitrip.planning.plans.logic.input_builder import NO_BUDGET
 from tuttitrip.planning.plans.logic.search_area import search_area
 from tuttitrip.planning.plans.schemas import (
+    AnywaySuggestion,
     ApprovalStatus,
     BudgetZone,
     ConflictCode,
@@ -488,6 +489,7 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
     strict_plan_id: UUID | None = None,
     verdicts: Sequence[PlanVerdict] | None = None,
     upgrades: Sequence[Upgrade] = (),
+    anyway: Sequence[AnywaySuggestion] = (),
     elapsed_ms: int | None = None,
     first_day: int = 1,
 ) -> dict[str, object]:
@@ -507,6 +509,7 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
         strict_plan_id: Id of the stored ``P_strict`` alternative.
         verdicts: Verdicts of the candidate places (backend#51), or None.
         upgrades: Upgrades below ``B_od`` (backend#101), best first.
+        anyway: The "anyway" suggestions of the days (backend#100).
         elapsed_ms: Wall time of the whole computation; default the sum of the
             group and solo runs.
         first_day: Number of the first day of ``data`` in the whole trip; above 1
@@ -565,5 +568,6 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
             t.model_dump(mode="json") for t in _transit_tickets(data, plan)
         ],
         "upgrades": [_upgrade(u, places).model_dump(mode="json") for u in upgrades],
+        "anyway": [a.model_dump(mode="json") for a in anyway],
         "telemetry": telemetry.model_dump(mode="json"),
     }
