@@ -280,6 +280,7 @@ async def create_expense(
         category=data.category,
         split_method=data.split_method,
         created_by_sub=membership.sub,
+        status=ExpenseStatus.CONFIRMED,
     )
     expense.shares = _rows(data.participants)
     await db.insert_expense(session, expense)

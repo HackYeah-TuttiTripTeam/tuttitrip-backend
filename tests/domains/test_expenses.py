@@ -25,6 +25,7 @@ from tuttitrip.expenses.models import Expense, ExpenseShare
 from tuttitrip.expenses.schemas import (
     ExpenseCreate,
     ExpenseErrorCode,
+    ExpenseStatus,
     ExpenseUpdate,
     SplitMethod,
 )
@@ -195,6 +196,7 @@ def _expense() -> Expense:
         amount=Decimal("142.00"),
         currency="PLN",
         trip_amount=Decimal("142.00"),
+        status=ExpenseStatus.CONFIRMED,
         description="Kolacja",
         spent_on=date(2026, 11, 7),
         category=None,
