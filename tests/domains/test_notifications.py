@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
 from sqlalchemy import Table
 
@@ -23,7 +24,19 @@ from tuttitrip.notifications.services import notification_service
 from tuttitrip.shared.permissions.registry import DESCRIPTIONS, Feature, is_leaf
 
 REVISION = "b7c3e1f09a42"
-PARENT = "a7bad57ce3b3"
+
+
+def _parent_revision() -> str:
+    """The migration's own parent, so the test follows a repointed ``down_revision``."""
+    script = ScriptDirectory.from_config(Config(toml_file="pyproject.toml"))
+    revision = script.get_revision(REVISION)
+    assert revision is not None
+    parent = revision.down_revision
+    assert isinstance(parent, str)
+    return parent
+
+
+PARENT = _parent_revision()
 TRIP = uuid.uuid4()
 
 

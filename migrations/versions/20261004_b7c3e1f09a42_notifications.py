@@ -1,7 +1,7 @@
 """Notifications: table, pg_notify trigger and the default user grant.
 
 Revision ID: b7c3e1f09a42
-Revises: 9c1f5a7d3b20, a7bad57ce3b3
+Revises: b28a37ba42ff
 Create Date: 2026-10-04 10:00:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "b7c3e1f09a42"
-down_revision: str | Sequence[str] | None = ("9c1f5a7d3b20", "a7bad57ce3b3")
+down_revision: str | None = "b28a37ba42ff"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
