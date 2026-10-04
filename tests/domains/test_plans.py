@@ -343,3 +343,16 @@ def test_approval_variant_over_http(
     assert body["budget"]["needs_approval"] is True
     assert body["budget"]["kappa"] is not None
     assert body["plan_hash"] == created.json()["plan_hash"]
+
+
+def test_every_sample_stop_has_an_address_and_the_schema_allows_null() -> None:
+    for trip in (TRIP, TRIP_SOLO, TRIP_APPROVAL):
+        assert all(stop.address for stop in _stops(sample_plan(trip)))
+    schema = create_app().openapi()["components"]["schemas"]["PlanStop"]
+    assert "address" in schema["properties"]
+    assert "address" not in schema.get("required", [])
+
+
+def test_address_is_in_the_plan_response(client: TestClient) -> None:
+    stop = client.post(path("create_plan", trip_id=TRIP)).json()["days"][0]["items"][0]
+    assert isinstance(stop["address"], str)

@@ -92,6 +92,7 @@ class _Stop(NamedTuple):
     hours_verified: bool = True
     mode: TransferMode = TransferMode.WALK
     transfer_cost: str | None = None  # None: no data
+    address: str | None = None
 
 
 _PEOPLE = (
@@ -104,7 +105,15 @@ _SOLO = _Person("Ty", 82.1, 82.1, 0.0, 0.0, (85, 72, 78, 60, 85), 2)
 
 _DAYS = (
     (
-        _Stop("Muzeum Gdańska", PlaceKind.ATTRACTION, "10:00", "12:00", 0, "25"),
+        _Stop(
+            "Muzeum Gdańska",
+            PlaceKind.ATTRACTION,
+            "10:00",
+            "12:00",
+            0,
+            "25",
+            address="Długa 46, 80-831 Gdańsk",
+        ),
         _Stop(
             "Restauracja indyjska",
             PlaceKind.FOOD,
@@ -114,10 +123,19 @@ _DAYS = (
             "60",
             mode=TransferMode.TRANSIT,
             transfer_cost="4.60",
+            address="Piwna 1, 80-831 Gdańsk",
         ),
     ),
     (
-        _Stop("Hevelianum", PlaceKind.ATTRACTION, "10:00", "13:00", 0, "45"),
+        _Stop(
+            "Hevelianum",
+            PlaceKind.ATTRACTION,
+            "10:00",
+            "13:00",
+            0,
+            "45",
+            address="Gradowa 1, 80-802 Gdańsk",
+        ),
         _Stop(
             "Bar mleczny",
             PlaceKind.FOOD,
@@ -126,11 +144,28 @@ _DAYS = (
             15,
             "30",
             hours_verified=False,
+            address="Wałowa 37, 80-858 Gdańsk",
         ),
-        _Stop("Kawiarnia w ogrodzie", PlaceKind.FOOD, "16:00", "17:00", 20, "35"),
+        _Stop(
+            "Kawiarnia w ogrodzie",
+            PlaceKind.FOOD,
+            "16:00",
+            "17:00",
+            20,
+            "35",
+            address="Grunwaldzka 9, 80-236 Gdańsk",
+        ),
     ),
     (
-        _Stop("Park Oliwski", PlaceKind.ATTRACTION, "10:00", "12:00", 0, "0"),
+        _Stop(
+            "Park Oliwski",
+            PlaceKind.ATTRACTION,
+            "10:00",
+            "12:00",
+            0,
+            "0",
+            address="Opata Rybińskiego 2, 80-320 Gdańsk",
+        ),
         _Stop(
             "Planszówki",
             PlaceKind.ATTRACTION,
@@ -140,8 +175,18 @@ _DAYS = (
             "20",
             mode=TransferMode.CAR,
             transfer_cost="12.00",
+            address="Garbary 21, 80-841 Gdańsk",
         ),
-        _Stop("Pizzeria", PlaceKind.FOOD, "18:00", "19:30", 15, "50", verified=False),
+        _Stop(
+            "Pizzeria",
+            PlaceKind.FOOD,
+            "18:00",
+            "19:30",
+            15,
+            "50",
+            verified=False,
+            address="Mariacka 5, 80-833 Gdańsk",
+        ),
     ),
 )
 
@@ -216,6 +261,7 @@ def _stop(trip_id: UUID, number: int, position: int, spec: _Stop) -> PlanStop:
         place_id=_id(trip_id, "place", name),
         name=name,
         kind=kind,
+        address=spec.address,
         lat=54.35 + 0.01 * position,
         lon=18.65 + 0.01 * number,
         start=dt.time.fromisoformat(spec.start),

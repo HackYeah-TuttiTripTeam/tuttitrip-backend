@@ -16,6 +16,8 @@ from pydantic import (
 )
 from pydantic_core import InitErrorDetails, PydanticCustomError
 
+from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
+
 
 @unique
 class TripRole(StrEnum):
@@ -249,6 +251,61 @@ class TripRead(TripDetails):
     """A trip as returned by the API."""
 
     my_role: TripRole = Field(description="The caller's role on this trip.")
+
+
+@unique
+class TripSort(StrEnum):
+    """Sort keys of ``GET /trips`` (``id`` is always the last key)."""
+
+    CREATED_AT = "created_at"
+    START_DATE = "start_date"
+    NAME = "name"
+
+
+class TripFilter(ListFilters):
+    """Filters of the trip list; all optional and combined with AND."""
+
+    q: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=100,
+            description="Part of the name or destination, case-insensitive.",
+        ),
+    ] = None
+    city: Annotated[
+        str | None,
+        Field(pattern=SLUG, max_length=64, description="Exact `city_slug`."),
+    ] = None
+    kind: Annotated[
+        Literal["trip", "outing"] | None,
+        Field(description="`outing` is a single day; `trip` is anything else."),
+    ] = None
+    start_from: Annotated[
+        date | None, Field(description="`start_date` on or after this day.")
+    ] = None
+    start_to: Annotated[
+        date | None, Field(description="`start_date` on or before this day.")
+    ] = None
+    role: Annotated[
+        list[TripRole] | None,
+        Field(description="The caller's role on the trip; repeat for several."),
+    ] = None
+
+    @model_validator(mode="after")
+    def _range_order(self) -> Self:
+        if self.start_from and self.start_to and self.start_from > self.start_to:
+            msg = "start_from must not be after start_to"
+            raise ValueError(msg)
+        return self
+
+
+class TripListQuery(PageParams, TripFilter):
+    """Query of ``GET /trips``: paging, sort and the filters."""
+
+    sort: TripSort = TripSort.CREATED_AT
+    # Overrides the base default (ASC): newest trips first.
+    dir: Annotated[SortDir, Field(description="Sort direction.")] = SortDir.DESC
 
 
 class TripMembership(BaseModel):

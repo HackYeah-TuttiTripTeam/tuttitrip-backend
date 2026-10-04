@@ -50,3 +50,15 @@ def test_feedback_migration_grants_and_removes_the_user_role_permission() -> Non
     down = _sql("downgrade", "f3ed8c494ca7:7b4fe93c3762")
     assert "VALUES ('user', 'profiles.feedback', 'WRITE') ON CONFLICT DO NOTHING" in up
     assert "role_name = 'user' AND feature = 'profiles.feedback'" in down
+
+
+def test_sheet_rules_migration_adds_reduced_and_protects_sheet_rows_both_ways() -> None:
+    up = _sql("upgrade", "9c1f5a7d3b20:28a40fb2f40e")
+    down = _sql("downgrade", "28a40fb2f40e:9c1f5a7d3b20")
+    assert "'family', 'reduced')" in up
+    assert "current_user = 'tuttitrip_worker' AND OLD.source = 'sheet'" in up
+    for trigger in ("places_keep_sheet_rows", "place_prices_keep_sheet_rows"):
+        assert f"CREATE TRIGGER {trigger}" in up
+        assert f"DROP TRIGGER {trigger}" in down
+    assert "'student', 'family')" in down
+    assert "ck_place_prices_ck_" not in up + down

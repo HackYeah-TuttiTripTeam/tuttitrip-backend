@@ -181,6 +181,7 @@ Uruchomienie dema: `py -3 demo.py` w folderze `algorytm\` (zapisuje `wyniki_demo
 
 - Wszyscy uczestniczą we wszystkich miejscach. **Dzielenie grupy** (babcia odpoczywa, reszta idzie dalej) nie jest zaimplementowane i zmieniłoby model kosztów.
 - Solver to deterministyczne wyszukiwanie lokalne (dodaj/usuń/zamień/przenieś/para), nie dowód optymalności. Na instancjach testowych zgadza się z brute force, na większych nie ma gwarancji. Produkcyjnie: CP-SAT z linearyzacją logarytmu stycznymi (patrz `algorytm-rekomendacji.md`).
+  Limit pracy to liczba ocenionych planów, nie czas. Gdy limit kończy szukanie, wynik jest stanem lokalnym, nie optimum (`Telemetry.exhausted`); umieszczanie „must” limitu nie uwzględnia.
 - Harmonogram dnia to heurystyka (kolejność wg terminu zamknięcia lub otwarcia) bez macierzy czasów dojazdu; stała przesiadka `transferₚ`.
 - Nocleg: jedna baza na wszystkie noce.
 - Parametry niekalibrowane. Dane w `demo_data.py` są wymyślone, to nie są dane o miejscach w Gdańsku.

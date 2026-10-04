@@ -1,17 +1,18 @@
 """Trips: create, list, read, update, delete, and the object-level role check."""
 
-from itertools import starmap
 from uuid import UUID
 
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.profiles.services import profile_service
+from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips import db
 from tuttitrip.trips.models import Trip
 from tuttitrip.trips.schemas import (
     TripCreate,
     TripDetails,
+    TripListQuery,
     TripMembership,
     TripRead,
     TripRole,
@@ -67,17 +68,22 @@ async def create_trip(
     return _read(trip, TripRole.HOST)
 
 
-async def list_trips(session: AsyncSession, sub: str) -> list[TripRead]:
-    """List the trips the user belongs to.
+async def list_trips(
+    session: AsyncSession, sub: str, query: TripListQuery
+) -> Page[TripRead]:
+    """List a page of the trips the user belongs to.
 
     Args:
         session: Open session.
         sub: Auth0 subject.
+        query: Paging, sort and filters.
 
     Returns:
-        Trips, newest first, with the user's role.
+        The page, each trip with the user's role.
     """
-    return list(starmap(_read, await db.select_trips_of_member(session, sub)))
+    page, roles = await db.select_trips_page(session, sub, query)
+    items = [_read(trip, roles[trip.id]) for trip in page.items]
+    return Page[TripRead].of(items, page.total, query)
 
 
 async def get_membership(

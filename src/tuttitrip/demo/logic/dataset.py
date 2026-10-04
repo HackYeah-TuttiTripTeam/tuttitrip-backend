@@ -21,6 +21,10 @@ from tuttitrip.profiles.preferences.schemas import (
 from tuttitrip.profiles.schemas import ProfileWeightPreset
 from tuttitrip.trips.schemas import TripCreate
 
+# Auth0 name of the shared demo account; the daily reset puts it back, since
+# every juror may rename the account (PATCH /me/account).
+DEMO_ACCOUNT_NAME = "Konto demo"
+
 
 @dataclass(frozen=True)
 class PersonSeed:

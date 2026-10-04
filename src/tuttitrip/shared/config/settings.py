@@ -7,6 +7,7 @@ Nested models use ``__`` as the delimiter, e.g. ``TUTTITRIP_DATABASE__HOST``.
 
 import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Self
 from urllib.parse import quote
 
@@ -37,8 +38,9 @@ class Auth0Settings(BaseModel):
     # Namespaced access-token claim with the user's roles, set by the Auth0
     # post-login Action ("admin" for the superadmin allow-list).
     roles_claim: str = "https://tuttitrip.gburek.app/roles"
-    # M2M application with `read:users` on the Management API; empty = the
-    # admin user list answers 503. Set in host env files / CI secrets only.
+    # M2M application with `read:users` and `update:users` on the Management
+    # API; empty = the admin user list and PATCH /me/account answer 503.
+    # Set in host env files / CI secrets only.
     management_client_id: str = ""
     management_client_secret: SecretStr = SecretStr("")
 
@@ -166,6 +168,19 @@ class DemoSettings(BaseModel):
         return self
 
 
+class CitiesSettings(BaseModel):
+    """Where the demo cities' sheet comes from and lands.
+
+    ``deploy/fetch-cities.sh`` downloads the public Google Sheet
+    (``sheet_id``) into the ``tuttitrip-cities-data`` volume, mounted at
+    ``data_dir``; the import command reads ``miasta.xlsx`` from there.
+    """
+
+    # Empty: the deploy skips the download and keeps the last copy.
+    sheet_id: str = ""
+    data_dir: Path = Path("/data/cities")
+
+
 class Settings(BaseSettings):
     """Root settings object for the whole application."""
 
@@ -193,6 +208,8 @@ class Settings(BaseSettings):
     jobs: JobsSettings = Field(default_factory=JobsSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
+
+    cities: CitiesSettings = Field(default_factory=CitiesSettings)
 
     def dbos_system_database_url(self) -> str:
         """DBOS system database URL, defaulting to the app database.

@@ -19,8 +19,8 @@ tickets are broken by ``(charged amount, listed amount)``. Amounts are
 Unknown prices. A place with no usable price (no rows, or none that applies to
 somebody) adds nothing for what it cannot price and is listed in
 ``unknown_price_place_ids``. Zero is not a promise: **a plan with any unknown
-price must be given ``needs_approval = True`` and a warning, and its
-``c(P) <= B_max`` check is not proven.** The solver (backend#47) must not favour
+price carries a warning (``has_unpriced_places``), and its ``c(P) <= B_max``
+check is not proven.** The solver (backend#47) must not favour
 unpriced places by treating them as free.
 """
 
@@ -88,6 +88,10 @@ def _applies(row: PlacePriceRead, age: int) -> bool:
             return low <= age <= high
         case TicketCategory.FAMILY | TicketCategory.STUDENT:
             return False  # not used: no family size or student flag in the input
+        case TicketCategory.REDUCED:
+            # "ulgowa" from the sheet does not say for whom (child, senior, student):
+            # applying it would guess. A place with only this row is unpriced.
+            return False
 
 
 def _charged(row: PlacePriceRead, delta: Decimal) -> Decimal:

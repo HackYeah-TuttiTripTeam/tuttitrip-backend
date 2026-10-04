@@ -12,7 +12,7 @@ from tuttitrip.shared.db.session import get_sessionmaker
 from tuttitrip.shared.pagination.schemas import Page, PageParams
 from tuttitrip.shared.permissions.logic.resolution import EffectivePermissions, resolve
 from tuttitrip.shared.permissions.services import permission_service
-from tuttitrip.trips.schemas import TripRead, TripRole
+from tuttitrip.trips.schemas import TripListQuery, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
 
 
@@ -76,11 +76,8 @@ async def list_trips(
     Returns:
         The page with the total.
     """
-    # ponytail: paged in memory, trip_service.list_trips is unpaged;
-    # page it in SQL when trips grow.
-    trips = await trip_service.list_trips(session, user.sub)
-    start = params.offset
-    return Page[TripRead].of(trips[start : start + params.size], len(trips), params)
+    query = TripListQuery(page=params.page, size=params.size)
+    return await trip_service.list_trips(session, user.sub, query)
 
 
 async def get_trip(

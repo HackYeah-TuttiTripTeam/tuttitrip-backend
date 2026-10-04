@@ -65,6 +65,23 @@ uv run dbos migrate -s postgresql://tuttitrip:tuttitrip@localhost:5432/tuttitrip
 
 Przy innym porcie bazy zmień go też w adresie dla `dbos migrate`.
 
+### Dane miast pokazowych
+
+Warszawa (demo), Gdańsk, Kraków i Berlin pochodzą z publicznego arkusza Google
+(`TUTTITRIP_CITIES__SHEET_ID`). Na serwerze pobiera go `deploy/fetch-cities.sh`
+po każdym wdrożeniu i importuje do bazy; lokalnie zrobisz to ręcznie:
+
+```bash
+mkdir -p data/cities    # katalog jest w .gitignore
+curl -fL "https://docs.google.com/spreadsheets/d/$TUTTITRIP_CITIES__SHEET_ID/export?format=xlsx" \
+  -o data/cities/miasta.xlsx
+TUTTITRIP_CITIES__DATA_DIR=data/cities uv run python -m tuttitrip.places.services.import_command
+# samo sprawdzenie pliku bez bazy:  ... import_command data/cities/miasta.xlsx --check
+```
+
+Import jest idempotentny (upsert po `source_key`) i działa w jednej transakcji:
+błędny arkusz kończy się kodem 1 z listą wierszy i niczego nie zmienia.
+
 ### 3. API
 
 ```bash
@@ -260,6 +277,7 @@ src/tuttitrip/
 │   ├── permissions/   # uprawnienia READ/WRITE, role, GET /api/v1/me, API admina
 │   ├── health/        # GET /api/v1/health, GET /api/v1/health/live
 │   └── jobs/          # klient DBOS: zlecanie zadań workerowi, kontrakt
+├── accounts/          # własne konto Auth0: zmiana nazwy (PATCH /api/v1/me/account)
 ├── trips/             # wyjazdy (wzorcowa domena: api -> services -> db)
 ├── profiles/          # uczestnicy wyjazdu (wagi, grupy wiekowe)
 ├── interview/         # wywiad prowadzony przez AI
@@ -316,6 +334,10 @@ Jak to działa na serwerze:
 - obok API działa kontener workera `tuttitrip-worker-<env>`. Jeśli worker nie ma
   jeszcze obrazu dla danej gałęzi, wdrożenie uruchamia go z obrazu `develop` albo `main`;
 - przed startem nowego kontenera migracje wykonuje jednorazowy kontener (`alembic upgrade head`);
+- arkusz miast (`deploy/fetch-cities.sh`) trafia do wolumenu `tuttitrip-cities-data` (wspólny dla
+  środowisk, `cleanup.sh` go nie usuwa) i zaraz po migracjach importuje go jednorazowy kontener.
+  Błąd pobierania albo importu to `WARNING` w logu, a nie porażka wdrożenia: zostaje ostatnia
+  poprawna kopia i dane w bazie. Brak danych Warszawy po wdrożeniu zgłasza smoke test;
 - `tuttitrip-gateway` (nginx) kieruje ruch do kontenera gałęzi według nagłówka `Host`;
 - skrypt dodaje regułę ruchu (ingress) dla gałęzi do współdzielonego Cloudflare
   Tunnel przez API i przed każdą zmianą zapisuje kopię konfiguracji w `~/tuttitrip/backups/`;

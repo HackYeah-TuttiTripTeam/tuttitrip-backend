@@ -15,9 +15,10 @@ def score(request: FairnessRequest) -> FairnessScore:
     """Score one candidate plan.
 
     Args:
-        request: Utilities and weights of every person.
+        request: Utilities and weights of every person, and optionally the
+            fairness slider ``alpha`` (0 to 3; omitted means 1, the weighted log).
 
     Returns:
-        The weighted log welfare.
+        The group welfare ``W``.
     """
     return fairness_service.score_plan(request)

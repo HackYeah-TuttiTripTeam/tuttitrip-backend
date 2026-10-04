@@ -1,4 +1,4 @@
-"""Auth0 Management API: client-credentials token and user search.
+"""Auth0 Management API: client-credentials token, user search and update.
 
 Credentials come from settings only and are never logged. The token is kept in
 process memory until shortly before it expires. Auth0 sits behind Cloudflare,
@@ -11,6 +11,7 @@ import re
 import time
 from enum import StrEnum
 from typing import Any, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -158,7 +159,7 @@ class ManagementClient:
         method: str,
         url: str,
         *,
-        json: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
         params: dict[str, str | int] | None = None,
         token: str | None = None,
     ) -> dict[str, Any]:
@@ -219,3 +220,26 @@ class ManagementClient:
         except KeyError, TypeError, ValueError:
             raise ManagementError(_Reason.BAD_BODY) from None
         return Page[AdminUserRead].of(items, total, query)
+
+    async def update_user(self, sub: str, changes: dict[str, Any]) -> dict[str, Any]:
+        """Change root attributes of one account (``PATCH /api/v2/users/{id}``).
+
+        Needs the ``update:users`` scope on the M2M application.
+
+        Args:
+            sub: Auth0 user id of the account to change.
+            changes: Attributes to set, e.g. ``{"name": "Ala"}``.
+
+        Returns:
+            The updated Auth0 user object.
+
+        Raises:
+            ManagementError: Auth0 answered with an error or an unusable body.
+        """
+        token = await self._access_token()
+        return await self._send(
+            "PATCH",
+            f"https://{self._auth0.domain}/api/v2/users/{quote(sub, safe='')}",
+            json=changes,
+            token=token,
+        )

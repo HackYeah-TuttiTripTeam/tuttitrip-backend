@@ -93,6 +93,7 @@ class TicketCategory(StrEnum):
     CHILD = "child"
     SENIOR = "senior"
     STUDENT = "student"
+    REDUCED = "reduced"  # general concession, the source does not say for whom
     FAMILY = "family"
 
 
@@ -284,6 +285,9 @@ class PlaceRead(BaseModel):
     city_slug: str
     name: str
     category: PlaceCategory
+    address: str | None = Field(
+        default=None, description="Street address; null when unknown."
+    )
     tags: list[PlaceTag]
     lat: float
     lon: float

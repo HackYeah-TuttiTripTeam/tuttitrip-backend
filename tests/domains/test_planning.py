@@ -52,3 +52,19 @@ def test_fairness_endpoint() -> None:
         )
     assert response.status_code == 200
     assert math.isclose(response.json()["score"], math.log(10))
+
+
+def test_fairness_endpoint_alpha() -> None:
+    app = create_app()
+    authorize(app, AuthenticatedUser(sub="auth0|tester"))
+    body = {"people": [{"utility": 9, "weight": 2}, {"utility": 19, "weight": 1}]}
+    with TestClient(app) as client:
+        plain = client.post("/api/v1/planning/fairness/score", json=body)
+        nash = client.post("/api/v1/planning/fairness/score", json={**body, "alpha": 1})
+        two = client.post("/api/v1/planning/fairness/score", json={**body, "alpha": 2})
+        bad = client.post(
+            "/api/v1/planning/fairness/score", json={**body, "alpha": 3.5}
+        )
+    assert plain.json() == nash.json()
+    assert math.isclose(two.json()["score"], 2.75)
+    assert bad.status_code == 422

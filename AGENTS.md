@@ -53,6 +53,7 @@ src/tuttitrip/
     llm/               Pydantic AI model catalog (services/model_catalog.py)
     pagination/        list contract: PageParams, Page[T], BulkSelection (paginate()/selected() are in db/pagination.py)
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
+  accounts/            own Auth0 account: PATCH /api/v1/me/account (name, e-mail+password accounts only)
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
   voting/              vote links for people without an account, host's vote summary
@@ -201,6 +202,10 @@ How:
   through the 422 model of `POST`/`PATCH /trips`. Clients map errors by `type`,
   never by `msg`. New rule = new enum member plus a test. `POST /trips` takes
   the same fields as `PATCH` and validates them with `check_trip(complete=True)`.
+- A domain error other than 422 that a client must tell apart carries
+  `detail.code` from a per-domain `StrEnum` in `schemas.py` (e.g.
+  `AccountErrorCode` in `accounts/schemas.py`, `account.provider_managed`),
+  with a response model in OpenAPI; `detail.message` is for developers.
 
 ## Settings and secrets
 
@@ -672,6 +677,43 @@ Wydania:
   `Cuisine`, `Amenity`), mirrored by CHECK constraints; add a value in both
   the enum and a migration.
 - Money is `Decimal` in the code and a string in the API (`"35.00"`).
+
+### Sheet import (demo cities)
+
+- Source: the public Google Sheet (`TUTTITRIP_CITIES__SHEET_ID`), downloaded by
+  `deploy/fetch-cities.sh` into the volume `tuttitrip-cities-data` after every
+  deploy; `python -m tuttitrip.places.services.import_command` imports
+  `miasta.xlsx` (the deploy runs it after `alembic upgrade head`). It is not a
+  migration: a corrected cell reaches every environment without code.
+- Contract: sheet names and column headers (`places/logic/sheet_rows.py`,
+  `REQUIRED_COLUMNS`). Drift, a row without `url_zrodla` or `data_sprawdzenia`,
+  or a category/tag outside `CATEGORY_MAP`/`TAG_MAP` rejects the whole workbook
+  with every bad row listed; nothing is written (one transaction). Extending the
+  sheet's dictionary means extending those maps (and the enums, if needed).
+- Unknown stays unknown: an empty price is no `place_prices` row, empty or seasonal
+  hours are `opening_hours` NULL, empty `kryte` is `indoor` NULL, `*_zweryfikowane`
+  is the only source of `verified`. Lodging amenities are only the "tak" ones.
+- Idempotent upsert on (`source`, `source_key`). Rows the sheet drops are **kept**
+  (not hidden: ratings, vetoes and plans may reference them) and only counted in the
+  import report; delete them by hand if a place really disappeared. Prices and fares
+  are replaced to match the sheet.
+- Text in a numeric column (`niezweryfikowane`, a typo) is unknown plus a warning
+  naming the row and column; only structural drift (sheet or column names, empty
+  `miasta`, missing source or date, unmapped category or tag) rejects the workbook.
+- `cena_ulgowa` becomes `TicketCategory.REDUCED` ("reduced", for whom unknown).
+  `planning/logic/cost.py` never applies it, so a place with only a reduced price
+  counts as unpriced (the plan needs approval).
+- **Stairs caveat:** `places.stairs` is NOT NULL with default 0, so an empty `schody`
+  is stored as 0.0, which reads as "no stairs", not "unknown". The sheet leaves it
+  empty almost everywhere, so the accessibility linter and the wheelchair/E0 stairs
+  rules cannot tell unknown from step-free. Do not treat `stairs == 0` as verified
+  until the column can be NULL (tracked in a follow-up issue).
+- The sheet wins over OSM: a `source = 'osm'` row for the same `osm_type`/`osm_id`
+  is taken over (becomes `sheet`). The migration `sheet_catalog_rules` adds triggers
+  that skip writes of role `tuttitrip_worker` (the OSM import) to `source = 'sheet'`
+  places and their prices, so the worker needs no special code.
+- Transit fares: `ticket_type` is `<code>:<zone>` (`single:1+2`, `24h:I`, `family:AB`),
+  `person_category` is `adult` or `reduced`.
 
 ## Ratings and vetoes (profiles/feedback)
 
