@@ -7,6 +7,7 @@ from ``deps``; which question comes next is decided by
 ``logic.next_question``, the model only words it.
 """
 
+import hashlib
 from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
@@ -25,11 +26,13 @@ from tuttitrip.interview.schemas import (
     QuestionField,
     QuestionKey,
 )
-from tuttitrip.interview.services import session_service
+from tuttitrip.interview.services import question_service, session_service
 from tuttitrip.interview.services.card_tools import card_toolset
 from tuttitrip.interview.services.interview_deps import InterviewDeps
+from tuttitrip.interview.services.member_tools import member_toolset
+from tuttitrip.interview.services.plan_tools import plan_toolset
 from tuttitrip.interview.services.preference_tools import preference_toolset
-from tuttitrip.interview.services.tool_support import Ctx
+from tuttitrip.interview.services.tool_support import Ctx, for_host, for_member
 from tuttitrip.interview.services.trip_tools import trip_toolset
 from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.llm.services.model_catalog import ModelKey, catalog, model_id
@@ -55,7 +58,32 @@ the card. The organizer's answer to a card arrives as their next message.
 - If a tool says NOT SAVED, the organizer set that value themselves: ask them \
 in your reply and stop. Only after they agree in a later message call the tool \
 again with overwrite_host_values=true; never set it in the same turn.
+- When the organizer asks to see the plan at any point ("Zbuduj plan", "pokaż \
+plan"), call build_plan_now. It needs only the city; it lists the assumptions \
+it made (say them in one sentence) and the interview goes on. If it says NOT \
+BUILT, ask for the city.
 - When there is no next question, say what you know and offer: "Zbuduj plan".
+"""
+
+
+MEMBER_INSTRUCTIONS = """\
+You are the TuttiTrip assistant. You talk with a member of a group trip, not \
+with the organizer, about THEIR OWN interests, so the trip fits them better. \
+Answer in the language of the member (Polish by default), briefly and warmly.
+
+Rules:
+- Everything the member says about their own interests, diet, access limits or \
+what matters to them must be saved with a tool in the same turn. Never write \
+that you saved something unless the tool returned a result.
+- Call tools one at a time. The tools write only to the member's own profile; \
+none of them takes a person.
+- You cannot change the trip's budget, dates, the list of people or anybody \
+else's preferences, and you have no tool for it. If the member asks, say that \
+the organizer does that, and do not pretend to save it.
+- Ask one question at a time with show_card, using the card kind, field and \
+options of "Next question" below, and write at most one short sentence besides \
+the card. The member's answer to a card arrives as their next message.
+- When there is no next question, say what you know about them and thank them.
 """
 
 
@@ -81,11 +109,29 @@ def _trip_scope(ctx: RunContext[InterviewDeps]) -> str:
     return str(ctx.deps.membership.trip_id)
 
 
+def base_instructions(ctx: RunContext[InterviewDeps]) -> str:
+    """The standing rules: the organizer's interview, or a member's own.
+
+    Args:
+        ctx: The run context.
+
+    Returns:
+        The instructions for the role of the caller.
+    """
+    return MEMBER_INSTRUCTIONS if ctx.deps.is_member else INSTRUCTIONS
+
+
 interview_agent: Agent[InterviewDeps, str] = Agent(
     model_id(ModelKey.AGENT),
     deps_type=InterviewDeps,
-    instructions=INSTRUCTIONS,
-    toolsets=[trip_toolset, preference_toolset, card_toolset],
+    instructions=base_instructions,
+    toolsets=[
+        trip_toolset.filtered(for_host),
+        preference_toolset.filtered(for_host),
+        plan_toolset.filtered(for_host),
+        member_toolset.filtered(for_member),
+        card_toolset,
+    ],
     model_settings={"parallel_tool_calls": False},
     capabilities=[
         catalog.capability(),
@@ -150,19 +196,39 @@ async def current_context(ctx: Ctx) -> str:
     Returns:
         Text appended to the instructions on every request.
     """
+    asked = asked_questions(ctx.messages)
     async with ctx.deps.sessions() as session:
         known = await session_service.get_knowledge(session, ctx.deps.membership)
+        # The model asks for its instructions on every request of a turn; the
+        # solver measures once per state of the panel.
+        key = hashlib.sha256(
+            f"{known.model_dump_json()}{sorted(map(str, asked))}".encode()
+        ).hexdigest()
+        if key not in ctx.deps.chosen:
+            ctx.deps.chosen[key] = (
+                next_question.member_question(known, asked)
+                if ctx.deps.is_member
+                else await question_service.choose(
+                    session, ctx.deps.membership, known, asked
+                )
+            )
+        question = ctx.deps.chosen[key]
     ctx.deps.state.knowledge = known
-    question = next_question.next_question(known, asked_questions(ctx.messages))
-    trip = known.trip.model_dump(mode="json", include=set(constants.TRIP_FACT_FIELDS))
+    facts = (
+        constants.MEMBER_TRIP_FACTS
+        if ctx.deps.is_member
+        else constants.TRIP_FACT_FIELDS
+    )
+    trip = known.trip.model_dump(mode="json", include=set(facts))
     people = [
         {"person_id": str(p.id), "name": p.display_name, "age": p.age}
         for p in known.people
     ]
     missing = [m.field.value for m in known.missing]
-    next_text = (
-        question.model_dump_json() if question else "none: offer to build the plan"
+    nothing = (
+        "none: thank them" if ctx.deps.is_member else "none: offer to build the plan"
     )
+    next_text = question.model_dump_json() if question else nothing
     calendar_text = "; ".join(calendar.upcoming_days(date.today()))  # ruff: ignore[call-date-today] the server's own calendar day
     return (
         f"Calendar: {calendar_text}.\n"

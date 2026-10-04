@@ -61,6 +61,13 @@ class NextQuestion(QuestionKey):
 
     card_kind: CardKind
     options: list[str] = Field(default_factory=list)
+    impact: float | None = Field(
+        default=None,
+        description=(
+            "How much the answer changes the plan (see `informativeness`); null "
+            "when it was not measured and the fixed order decided."
+        ),
+    )
 
 
 class ShownCard(BaseModel):
@@ -207,6 +214,36 @@ class KnowledgeRead(BaseModel):
     )
 
 
+class AssumptionCode(StrEnum):
+    """What a preliminary plan had to assume; the UI may write its own text."""
+
+    DATES = "dates"
+    PEOPLE = "people"
+    BUDGET = "budget"
+    PREFERENCES = "preferences"
+
+
+class Assumption(BaseModel):
+    """One thing the preliminary plan assumed instead of data the host did not give."""
+
+    code: AssumptionCode
+    params: dict[str, str | int] = Field(
+        default_factory=dict, description="Values for the UI's own wording."
+    )
+    text: str = Field(description="The assumption in Polish.")
+
+
+class DraftPlanRead(BaseModel):
+    """The preliminary plan built during the interview."""
+
+    plan_id: UUID = Field(description="Read it with `GET /trips/{id}/plans/{plan_id}`.")
+    version: int = Field(ge=1)
+    plan_hash: str = Field(description="Same data and assumptions give the same hash.")
+    assumptions: list[Assumption] = Field(
+        description="What was assumed, so the host can correct it."
+    )
+
+
 class InterviewState(BaseModel):
     """The AG-UI shared state, sent as ``STATE_SNAPSHOT`` after the tools.
 
@@ -218,6 +255,10 @@ class InterviewState(BaseModel):
         default=None, description='The "What we already know" panel.'
     )
     card: ShownCard | None = Field(default=None, description="The card to render.")
+    draft_plan: DraftPlanRead | None = Field(
+        default=None,
+        description="The preliminary plan built this turn by `build_plan_now`.",
+    )
 
 
 class VoiceOffer(BaseModel):

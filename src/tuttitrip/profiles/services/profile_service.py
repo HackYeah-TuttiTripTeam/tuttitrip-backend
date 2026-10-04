@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,6 +40,9 @@ UNIQUE_ACCOUNT = "uq_profiles_trip_id"
 # adult that they edit themselves.
 HOST_NAME = "Organizator"
 HOST_AGE = 35
+ASSUMED_NAME = "Osoba"
+"""Name prefix of a person a draft plan assumes (``Osoba 2``); never stored."""
+_ASSUMED_NAMESPACE = UUID("7d0c1f3a-52a4-4b8e-9a61-3f7e2c5d8b10")
 
 
 class ProfileNotFoundError(Exception):
@@ -244,6 +247,36 @@ async def create_account_profile(
         ),
     )
     return profile.id
+
+
+def assumed_adults(trip_id: UUID, first_number: int, count: int) -> list[ProfileRead]:
+    """Adults a draft plan assumes when the group is smaller than it needs.
+
+    They exist only in memory, with adult defaults and stable ids (the same trip
+    always gets the same ids), so the same data gives the same plan.
+
+    Args:
+        trip_id: The trip.
+        first_number: Number of the first assumed person in the group (``Osoba 2``).
+        count: How many to make.
+
+    Returns:
+        The profiles, never stored.
+    """
+    group = age_group_for(HOST_AGE)
+    return [
+        ProfileRead(
+            id=uuid5(_ASSUMED_NAMESPACE, f"{trip_id}:{number}"),
+            trip_id=trip_id,
+            display_name=f"{ASSUMED_NAME} {number}",
+            age=HOST_AGE,
+            age_group=group,
+            user_sub=None,
+            weight=1.0,
+            **asdict(DEFAULTS[group]),
+        )
+        for number in range(first_number, first_number + count)
+    ]
 
 
 async def find_account_profile(

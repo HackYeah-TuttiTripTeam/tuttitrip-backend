@@ -10,7 +10,9 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
+from tuttitrip.interview import constants
 from tuttitrip.interview.schemas import (
+    DraftPlanRead,
     InterviewSessionRead,
     InterviewState,
     KnowledgeRead,
@@ -21,18 +23,20 @@ from tuttitrip.interview.schemas import (
 )
 from tuttitrip.interview.services import (
     agui_service,
+    draft_plan_service,
     run_guard,
     session_service,
     voice_service,
 )
 from tuttitrip.interview.services.session_service import (
     HistoryIncompatibleError,
+    NoProfileError,
     SessionNotFoundError,
 )
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
-from tuttitrip.trips.api import TRIP_NOT_FOUND, TripCoHost
+from tuttitrip.trips.api import TRIP_NOT_FOUND, TripCoHost, TripMember
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
 
@@ -45,6 +49,7 @@ class EventStreamResponse(StreamingResponse):
 router = APIRouter(prefix="/trips/{trip_id}/interview", tags=["interview"])
 
 NO_SESSION = "The trip has no open interview session"
+NO_PROFILE = "You have no profile on this trip"
 BUSY = "Another turn of this interview is still running"
 VOICE_BUDGET = "The voice time of this trip's interview is used up"
 VOICE_UNAVAILABLE = "The voice assistant is not available"
@@ -58,22 +63,29 @@ NO_CALL = "No such call on this trip"
     dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
 )
 async def start_session(
-    membership: TripCoHost, session: SessionDep, response: Response
+    membership: TripMember, session: SessionDep, response: Response
 ) -> SessionRead:
     """Start the trip's interview, or resume the open one.
 
+    The role picks whose interview it is. A co-host or host gets the trip's
+    interview. A member gets their own, about their interests, with a session
+    that only they can read; the assistant has tools for their own profile only.
     The session id is the AG-UI `threadId`. A second call returns the same
-    session with 200; the first creates it with 201.
+    session with 200; the first creates it with 201. 404 for a member without a
+    profile on the trip.
 
     Args:
-        membership: The caller's membership (co-host or above).
+        membership: The caller's membership (any role).
         session: Database session.
         response: To set 200 when the session already existed.
 
     Returns:
         The open session.
     """
-    read, created = await session_service.open_session(session, membership)
+    try:
+        read, created = await session_service.open_session(session, membership)
+    except NoProfileError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_PROFILE) from exc
     if not created:
         response.status_code = status.HTTP_200_OK
     return read
@@ -83,7 +95,7 @@ async def start_session(
     "/sessions/current", dependencies=[requires(Feature.INTERVIEW, Access.READ)]
 )
 async def get_current_session(
-    membership: TripCoHost,
+    membership: TripMember,
     session: SessionDep,
     query: Annotated[MessagesQuery, Query()],
 ) -> InterviewSessionRead:
@@ -91,10 +103,10 @@ async def get_current_session(
 
     Only the questions and answers are listed; tool calls stay in the history.
     Use `dir=desc` to get the newest messages first (chat UI). 409 when the
-    stored history cannot be read any more.
+    stored history cannot be read any more. A member reads only their own session.
 
     Args:
-        membership: The caller's membership (co-host or above).
+        membership: The caller's membership (any role).
         session: Database session.
         query: Page, size, direction and speaker filter of the messages.
 
@@ -105,20 +117,23 @@ async def get_current_session(
         return await session_service.get_current(session, membership, query)
     except SessionNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SESSION) from exc
+    except NoProfileError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_PROFILE) from exc
     except HistoryIncompatibleError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.get("/knowledge", dependencies=[requires(Feature.INTERVIEW, Access.READ)])
-async def get_knowledge(membership: TripCoHost, session: SessionDep) -> KnowledgeRead:
+async def get_knowledge(membership: TripMember, session: SessionDep) -> KnowledgeRead:
     """Read the "What we already know" panel: trip, people, budget, preferences.
 
     Read from the trips and profiles services, so a value the host fixed
     through their endpoints shows here at once. `sources` says whether the
     assistant or the host set each value; `missing` is what is left to ask.
+    A member sees only themselves: no budget and nobody else's data.
 
     Args:
-        membership: The caller's membership (co-host or above).
+        membership: The caller's membership (any role).
         session: Database session.
 
     Returns:
@@ -128,6 +143,8 @@ async def get_knowledge(membership: TripCoHost, session: SessionDep) -> Knowledg
         return await session_service.get_knowledge(session, membership)
     except TripNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, TRIP_NOT_FOUND) from exc
+    except NoProfileError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_PROFILE) from exc
 
 
 @router.post(
@@ -152,7 +169,7 @@ async def get_knowledge(membership: TripCoHost, session: SessionDep) -> Knowledg
     dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
 )
 async def run_turn(
-    request: Request, membership: TripCoHost, session: SessionDep
+    request: Request, membership: TripMember, session: SessionDep
 ) -> EventStreamResponse:
     """Run one turn of the text interview and stream it as AG-UI events (SSE).
 
@@ -164,11 +181,13 @@ async def run_turn(
     `TOOL_CALL_*`, `STATE_SNAPSHOT` (`InterviewState`) after every tool that
     changes the panel or the card, and `RUN_FINISHED` or `RUN_ERROR` (Polish
     `message`, `code`: `spend_limit`, `timeout`, `unavailable`, `error`). One
-    turn per session at a time.
+    turn per session at a time. The role picks the tools: a co-host or host
+    interviews about the trip; a member talks about their own interests, with
+    tools that write only to their own profile and a session of their own.
 
     Args:
         request: The AG-UI request.
-        membership: The caller's membership (co-host or above).
+        membership: The caller's membership (any role).
         session: Database session (history is read before the stream starts).
 
     Returns:
@@ -183,6 +202,8 @@ async def run_turn(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except SessionNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SESSION) from exc
+    except NoProfileError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_PROFILE) from exc
     except HistoryIncompatibleError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except run_guard.SessionBusyError as exc:
@@ -255,3 +276,42 @@ async def voice_hangup(call_id: str, membership: TripCoHost) -> None:
         await voice_service.hang_up(membership, call_id)
     except voice_service.CallNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_CALL) from exc
+
+
+@router.post(
+    "/draft-plan",
+    status_code=status.HTTP_201_CREATED,
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "No city yet (`Podaj miasto`), or an unplannable trip."
+        }
+    },
+    dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
+)
+async def build_draft_plan(
+    membership: TripCoHost, session: SessionDep
+) -> DraftPlanRead:
+    """Build a preliminary plan now ("Zbuduj plan teraz") at any point.
+
+    Needs only the city. What the trip lacks is assumed in memory (two adults,
+    one day, no budget limit, default preferences) and listed in `assumptions`;
+    nothing is stored on the trip. The plan is a new version marked `draft` in
+    its `params`; read it with `GET /trips/{id}/plans/{plan_id}`. The same data
+    gives the same `plan_hash`. The agent's `build_plan_now` tool calls the same
+    code.
+
+    Args:
+        membership: The caller's membership (co-host or above).
+        session: Database session.
+
+    Returns:
+        The plan version and the assumptions made.
+    """
+    try:
+        return await draft_plan_service.build(session, membership)
+    except draft_plan_service.MissingCityError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, constants.MISSING_CITY_PL
+        ) from exc
+    except draft_plan_service.PlanInputError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc

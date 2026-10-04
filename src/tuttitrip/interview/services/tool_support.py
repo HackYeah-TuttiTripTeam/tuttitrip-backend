@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from ag_ui.core import EventType, StateSnapshotEvent
 from pydantic_ai import ModelRetry, RunContext, ToolReturn
 from pydantic_ai.messages import ModelMessage, ToolReturnPart, UserPromptPart
+from pydantic_ai.tools import ToolDefinition
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.interview.logic import knowledge
@@ -26,6 +27,32 @@ NOT_SAVED = (
     "again with overwrite_host_values=true. Refs: {refs}"
 )
 UNKNOWN_PERSON = "There is no such person on this trip; use a person_id from the tools."
+
+
+def for_host(ctx: Ctx, _tool: ToolDefinition) -> bool:
+    """Tool filter: the tool belongs to the trip's interview (host and co-hosts).
+
+    Args:
+        ctx: The run context.
+        _tool: The tool being offered.
+
+    Returns:
+        False in a member's interview.
+    """
+    return not ctx.deps.is_member
+
+
+def for_member(ctx: Ctx, _tool: ToolDefinition) -> bool:
+    """Tool filter: the tool belongs to a member's own interview.
+
+    Args:
+        ctx: The run context.
+        _tool: The tool being offered.
+
+    Returns:
+        True only in a member's interview.
+    """
+    return ctx.deps.is_member
 
 
 @asynccontextmanager
@@ -107,6 +134,8 @@ async def host_conflict(
     Returns:
         The message to return to the model, or None when the write is free.
     """
+    if ctx.deps.is_member:  # a member's own data: there is no host value to protect
+        return None
     current = await session_service.get_knowledge(session, ctx.deps.membership)
     clash = knowledge.host_set(current.sources, refs)
     if not clash:
@@ -132,7 +161,10 @@ async def saved(
     Returns:
         The result with a ``STATE_SNAPSHOT`` of the "What we already know" panel.
     """
-    await session_service.mark_assistant_values(session, ctx.deps.membership, refs)
+    if not ctx.deps.is_member:
+        # A member's values stay unmarked on purpose: they read as "set by a
+        # person", so the host's assistant asks before it changes them.
+        await session_service.mark_assistant_values(session, ctx.deps.membership, refs)
     return await snapshot(ctx, session, value)
 
 

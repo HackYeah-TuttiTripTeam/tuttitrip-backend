@@ -108,18 +108,27 @@ def read_request(body: bytes) -> RunRequest:
     return RunRequest(run_input=run_input, thread_id=thread_id, text=text)
 
 
-def new_deps(membership: TripMembership, session_id: UUID) -> InterviewDeps:
+def new_deps(
+    membership: TripMembership,
+    session_id: UUID,
+    own_profile_id: UUID | None = None,
+) -> InterviewDeps:
     """Dependencies of one turn: the checked caller and a way to the database.
 
     Args:
         membership: The caller's checked membership.
         session_id: The interview session (``threadId``).
+        own_profile_id: A member's own profile (their interview); None for the
+            trip's interview.
 
     Returns:
         Fresh deps with an empty state.
     """
     return InterviewDeps(
-        membership=membership, session_id=session_id, sessions=get_sessionmaker()
+        membership=membership,
+        session_id=session_id,
+        sessions=get_sessionmaker(),
+        own_profile_id=own_profile_id,
     )
 
 
@@ -294,11 +303,15 @@ async def begin(
         The encoded SSE stream.
 
     Raises:
-        SessionNotFoundError: No such session on this trip.
+        SessionNotFoundError: No such session of the caller on this trip.
+        NoProfileError: A member without a profile on this trip.
         HistoryIncompatibleError: The stored history cannot be read.
         SessionBusyError: Another run holds the session.
     """
-    deps = new_deps(membership, request.thread_id)
+    # Whose session it is is checked before the claim: a member cannot hold, or
+    # read, the host's session by naming its id.
+    owner = await session_service.check_owned(session, membership, request.thread_id)
+    deps = new_deps(membership, request.thread_id, owner)
     claim = await run_guard.acquire(
         deps.sessions,
         membership,

@@ -85,6 +85,8 @@ class World:
         self.running: dict[uuid.UUID, tuple[datetime, float]] = {}
         self.voice_used: dict[uuid.UUID, int] = {}
         self.known_sessions: set[uuid.UUID] | None = None
+        # The profile a member's session belongs to; None: the trip's own.
+        self.session_owner: uuid.UUID | None = None
         self._claims = 0
         self.session = MagicMock()
         self.session.commit = AsyncMock()
@@ -112,8 +114,11 @@ class World:
         monkeypatch.setattr(interview_db, "end_run", self._end_run)
         monkeypatch.setattr(interview_db, "select_session", self._select_session)
 
-    def deps(self) -> InterviewDeps:
+    def deps(self, own_profile_id: uuid.UUID | None = None) -> InterviewDeps:
         """Deps whose sessions are the fake one.
+
+        Args:
+            own_profile_id: A member's own profile, for a member's interview.
 
         Returns:
             Fresh dependencies for one turn.
@@ -127,6 +132,7 @@ class World:
             membership=self.membership,
             session_id=uuid.uuid4(),
             sessions=sessions,  # ty: ignore[invalid-argument-type]
+            own_profile_id=own_profile_id,
         )
 
     async def add_host(self) -> Profile:
@@ -268,7 +274,10 @@ class World:
     ) -> SimpleNamespace | None:
         if trip_id != self.trip_id or not self._exists(session_id):
             return None
-        return SimpleNamespace(voice_seconds=self.voice_used.get(session_id, 0))
+        return SimpleNamespace(
+            voice_seconds=self.voice_used.get(session_id, 0),
+            profile_id=self.session_owner,
+        )
 
     def _exists(self, session_id: uuid.UUID) -> bool:
         return self.known_sessions is None or session_id in self.known_sessions
