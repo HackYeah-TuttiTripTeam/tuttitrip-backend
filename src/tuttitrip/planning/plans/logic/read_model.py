@@ -103,12 +103,15 @@ def _weakest(domains: Sequence[PlanDomainScore]) -> PlanDomainCode | None:
 
 
 def _stops(
-    data: PlanningInput, plan: PlanResult, places: Mapping[UUID, PlaceRead]
+    data: PlanningInput,
+    plan: PlanResult,
+    places: Mapping[UUID, PlaceRead],
+    first_day: int = 1,
 ) -> list[PlanDay]:
     people = data.people
     currency = data.trip.currency
     days: list[PlanDay] = []
-    for index, planned in enumerate(plan.days, start=1):
+    for index, planned in enumerate(plan.days, start=first_day):
         items: list[PlanStop] = []
         for number, visit in enumerate(planned.schedule.visits):
             place = places[visit.place_id]
@@ -338,6 +341,7 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
     verdicts: Sequence[PlanVerdict] | None = None,
     upgrades: Sequence[Upgrade] = (),
     elapsed_ms: int | None = None,
+    first_day: int = 1,
 ) -> dict[str, object]:
     """The part of ``PlanRead`` that the solver determines.
 
@@ -357,6 +361,8 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
         upgrades: Upgrades below ``B_od`` (backend#101), best first.
         elapsed_ms: Wall time of the whole computation; default the sum of the
             group and solo runs.
+        first_day: Number of the first day of ``data`` in the whole trip; above 1
+            for a plan of the rest of the trip (the budget proposal, backend#89).
 
     Returns:
         JSON-ready content (``mode="json"`` dump).
@@ -383,12 +389,15 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
     )
     telemetry = PlanTelemetry(
         solver=plan.telemetry.solver,
+        status=plan.telemetry.status,
         steps=plan.telemetry.steps,
         solo_runs=group.solo_runs,
         elapsed_ms=elapsed,
     )
     return {
-        "days": [d.model_dump(mode="json") for d in _stops(data, plan, places)],
+        "days": [
+            d.model_dump(mode="json") for d in _stops(data, plan, places, first_day)
+        ],
         "lodging": None,
         "fairness": _fairness(data, group, names, places).model_dump(mode="json"),
         "floors_missed": [

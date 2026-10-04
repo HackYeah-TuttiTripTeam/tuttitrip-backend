@@ -1,6 +1,7 @@
 """Expense queries on PostgreSQL."""
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import Select, delete, exists, func, select
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.expenses.models import Expense, ExpenseEvidence, ExpenseShare
 from tuttitrip.expenses.schemas import (
+    ExpenseDayTotal,
     ExpenseFilters,
     ExpenseQuery,
     ExpenseSort,
@@ -303,3 +305,32 @@ async def delete_expired_evidence(session: AsyncSession, now: datetime) -> None:
         delete(ExpenseEvidence).where(ExpenseEvidence.delete_after < now)
     )
     await session.flush()
+
+
+async def select_day_totals(
+    session: AsyncSession, trip_id: UUID
+) -> list[ExpenseDayTotal]:
+    """Sum the trip's confirmed expenses per day and category.
+
+    Drafts do not count. Every expense counts in full on its day, in the trip
+    currency (``trip_amount``): the budget of a day is about what the group
+    paid, not about each person's share.
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+
+    Returns:
+        One row per day and category, oldest day first.
+    """
+    stmt = (
+        select(Expense.spent_on, Expense.category, func.sum(Expense.trip_amount))
+        .where(Expense.trip_id == trip_id, Expense.status == ExpenseStatus.CONFIRMED)
+        .group_by(Expense.spent_on, Expense.category)
+        .order_by(Expense.spent_on, Expense.category)
+    )
+    rows = (await session.execute(stmt)).all()
+    return [
+        ExpenseDayTotal(spent_on=d, category=c, amount=a or Decimal(0))
+        for d, c, a in rows
+    ]

@@ -46,6 +46,7 @@ from tuttitrip.planning.plans.schemas import (
 )
 from tuttitrip.planning.proposals.services import proposal_service
 from tuttitrip.planning.schemas import PlanningInput, WhatIfTarget
+from tuttitrip.planning.services.solver_service import configured_solver
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.preferences.schemas import PreferencesRead
 from tuttitrip.profiles.preferences.services import preference_service
@@ -222,7 +223,9 @@ def _compute(
     # Runs in a worker thread: N solo runs, the group plan and, when the plan goes
     # over B_do, P_strict and the cheaper alternative (E6).
     started = time.perf_counter()
-    decision = plan_with_consent(planning, params, alpha=alpha)
+    decision = plan_with_consent(
+        planning, params, alpha=alpha, solver=configured_solver().solver
+    )
     chosen = decision.chosen
     verdicts = build_verdicts(planning, chosen.plan.place_ids)
     upgrades = find_upgrades(planning, chosen, params, alpha=alpha)
@@ -295,7 +298,14 @@ async def generate_plan(
     alpha = trip_alpha if data is None or data.alpha is None else data.alpha
     preset = (data or PlanCreate()).weight_preset
     version, params = await parameters_service.current(session)
-    digest = input_hash(planning, alpha, preset.value, params, version)
+    digest = input_hash(
+        planning,
+        alpha,
+        preset.value,
+        params,
+        configured_solver().tag,
+        parameters_version=version,
+    )
 
     latest = await db.select_latest(session, membership.trip_id)
     if latest is not None and _is_current(latest, digest, draft=draft):
@@ -429,7 +439,10 @@ async def measure_impacts(
     planning, _names, alpha = await gather_input(session, membership, assumptions)
     version, params = await parameters_service.current(session)
     await session.rollback()  # do not hold a transaction while computing
-    key = (input_hash(planning, alpha, "impact", params, version), targets)
+    key = (
+        input_hash(planning, alpha, "impact", params, parameters_version=version),
+        targets,
+    )
     if (cached := impact_cache.get(key)) is not None:
         return cached
     scores = await anyio.to_thread.run_sync(

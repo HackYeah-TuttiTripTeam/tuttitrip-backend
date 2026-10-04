@@ -1,7 +1,7 @@
 """Planning parameter versions.
 
 Revision ID: f1a22ac0293a
-Revises: e5f1a7c93b28
+Revises: c4d71e9b0a52
 Create Date: 2026-10-04 04:40:13.341646
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "f1a22ac0293a"
-down_revision: str | None = "e5f1a7c93b28"
+down_revision: str | None = "c4d71e9b0a52"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

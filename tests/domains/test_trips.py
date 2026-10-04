@@ -106,6 +106,7 @@ def _trip(**overrides: object) -> Trip:
         "budget_day_max": None,
         "budget_flex_pct": 0,
         "fairness_alpha": 1.0,
+        "propose_cheaper_alternatives": True,
     }
     return Trip(**(values | overrides))
 
@@ -188,6 +189,21 @@ def test_budget_range_and_flex_are_stored(
     session.commit.assert_awaited_once()
 
 
+def test_cheaper_alternatives_are_on_by_default_and_can_be_switched_off(
+    detail_client: TestClient, monkeypatch: pytest.MonkeyPatch, session: AsyncMock
+) -> None:
+    trip = _as(monkeypatch, TripRole.CO_HOST)
+    assert detail_client.get(path("get_trip", trip_id=TRIP)).json()[
+        "propose_cheaper_alternatives"
+    ]
+    body = {"propose_cheaper_alternatives": False}
+    response = detail_client.patch(path("update_trip", trip_id=TRIP), json=body)
+    assert response.status_code == 200
+    assert response.json()["propose_cheaper_alternatives"] is False
+    assert trip.propose_cheaper_alternatives is False
+    session.commit.assert_awaited_once()
+
+
 @pytest.mark.parametrize(
     ("body", "field"),
     [
@@ -204,6 +220,7 @@ def test_budget_range_and_flex_are_stored(
         ({"budget_total_min": "5"}, "budget_total_max"),  # a lone half of a range
         ({"budget_day_max": "5"}, "budget_day_min"),
         ({"day_start": None}, "day_start"),
+        ({"propose_cheaper_alternatives": None}, "propose_cheaper_alternatives"),
     ],
 )
 def test_invalid_patch_is_422_naming_the_field(

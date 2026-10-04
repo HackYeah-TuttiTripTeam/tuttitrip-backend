@@ -119,7 +119,9 @@ def test_get_without_a_stored_version_is_version_zero(
 
 def test_a_new_theta_changes_the_plan_hash() -> None:
     data = planning_input(reference(), lodging=False)
-    base = input_hash(data, 1.0, "default", DEFAULT_PARAMS, 0)
+    base = input_hash(data, 1.0, "default", DEFAULT_PARAMS)
     changed = AlgorithmParams(strong_preference=0.5)
-    assert base != input_hash(data, 1.0, "default", changed, 1)
-    assert base != input_hash(data, 1.0, "default", DEFAULT_PARAMS, 1)
+    assert base != input_hash(data, 1.0, "default", changed, parameters_version=1)
+    assert base != input_hash(
+        data, 1.0, "default", DEFAULT_PARAMS, parameters_version=1
+    )

@@ -17,7 +17,7 @@ from collections.abc import Sequence
 
 from tuttitrip.planning.logic.domains import RequirementOutcome
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
-from tuttitrip.planning.logic.solver import PlanResult, solve
+from tuttitrip.planning.logic.solver import PlanResult, Solver, solve
 from tuttitrip.planning.schemas import (
     LodgingStay,
     PlanningInput,
@@ -75,6 +75,7 @@ def solo_utility(  # ruff: ignore[too-many-arguments] the whole input of a solo 
     lodging: LodgingStay | None = None,
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
     max_evaluations: int | None = None,
+    solver: Solver = solve,
 ) -> PlanResult:
     """The best plan of one person alone, ``u*_i`` is ``scores[0].welfare``.
 
@@ -86,11 +87,12 @@ def solo_utility(  # ruff: ignore[too-many-arguments] the whole input of a solo 
         lodging: The group's lodging base, or None.
         lodging_outcomes: Requirements checked against it.
         max_evaluations: Work limit of the run; default scales with the instance.
+        solver: The solver to run (default: the local search).
 
     Returns:
         The solo plan.
     """
-    return solve(
+    return solver(
         solo_input(data, person),
         params,
         alpha=alpha,

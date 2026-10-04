@@ -35,6 +35,7 @@ from tuttitrip.planning.parameters.services import parameters_service
 from tuttitrip.planning.plans.schemas import ConflictCode, PlanConflict
 from tuttitrip.planning.plans.services import plan_service
 from tuttitrip.planning.schemas import PlanningInput
+from tuttitrip.planning.services.solver_service import configured_solver
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips.schemas import TripMembership
 
@@ -99,9 +100,12 @@ def _compute(
     alpha: float,
     params: AlgorithmParams,
 ) -> DecisionEffects:
-    base = plan_group(planning, params, alpha=alpha)
+    solver = configured_solver().solver
+    base = plan_group(planning, params, alpha=alpha, solver=solver)
     reference = {r.person_id: r.u_star for r in base.people}
-    with_decision = plan_group(changed, params, alpha=alpha, u_star=reference)
+    with_decision = plan_group(
+        changed, params, alpha=alpha, u_star=reference, solver=solver
+    )
     return _effects(base, with_decision)
 
 

@@ -180,6 +180,7 @@ def input_hash(
     alpha: float,
     weight_preset: str,
     params: AlgorithmParams,
+    solver: str | None = None,
     parameters_version: int = 0,
 ) -> str:
     """SHA-256 of everything that decides the plan.
@@ -189,6 +190,7 @@ def input_hash(
         alpha: The fairness slider.
         weight_preset: The weight preset recorded with the plan.
         params: The algorithm parameters.
+        solver: Tag of a non-default solver; None keeps the hash of the default.
         parameters_version: Version of the stored parameters (0: built-in).
 
     Returns:
@@ -202,5 +204,7 @@ def input_hash(
         "parameters_version": parameters_version,
         "input": data.model_dump(mode="python"),
     }
+    if solver is not None:
+        content["solver"] = solver
     canonical = json.dumps(_canonical(content), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()

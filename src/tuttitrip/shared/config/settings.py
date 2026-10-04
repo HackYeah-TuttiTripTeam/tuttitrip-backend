@@ -9,7 +9,7 @@ import re
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
@@ -299,6 +299,30 @@ class DemoSettings(BaseModel):
         return self
 
 
+class PlanningSettings(BaseModel):
+    """Which solver computes the plans (docs/algorytm.md, section 9)."""
+
+    solver: Literal["local_search", "cp_sat"] = Field(
+        default="local_search",
+        description=(
+            "The deterministic local search is the default; cp_sat swaps in the "
+            "OR-Tools CP-SAT solver behind the same interface."
+        ),
+    )
+    cpsat_max_deterministic_time: float = Field(
+        default=10.0,
+        gt=0,
+        le=600,
+        description=(
+            "Deterministic seconds (not wall time) CP-SAT may use per plan, all "
+            "rounds together; the local search takes over when it runs out."
+        ),
+    )
+    cpsat_random_seed: int = Field(
+        default=1, description="Fixed seed of CP-SAT, so equal data give equal plans."
+    )
+
+
 class CitiesSettings(BaseModel):
     """Where the demo cities' sheet comes from and lands.
 
@@ -364,6 +388,7 @@ class Settings(BaseSettings):
     mcp: McpSettings = Field(default_factory=McpSettings)
     photos: PhotoSettings = Field(default_factory=PhotoSettings)
     locations: LocationSettings = Field(default_factory=LocationSettings)
+    planning: PlanningSettings = Field(default_factory=PlanningSettings)
 
     cities: CitiesSettings = Field(default_factory=CitiesSettings)
     geocoder: GeocoderSettings = Field(default_factory=GeocoderSettings)

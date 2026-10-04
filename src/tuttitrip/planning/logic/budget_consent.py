@@ -25,6 +25,7 @@ from tuttitrip.planning.fairness.logic.welfare import welfare
 from tuttitrip.planning.logic.domains import RequirementOutcome
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.plan_group import GroupPlan, plan_group
+from tuttitrip.planning.logic.solver import Solver, solve
 from tuttitrip.planning.schemas import LodgingStay, PlanningInput, PlanningPerson
 from tuttitrip.profiles.preferences.schemas import POOL_TOTAL
 
@@ -157,6 +158,7 @@ def plan_with_consent(  # ruff: ignore[too-many-arguments] the whole input of E6
     lodging: LodgingStay | None = None,
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
     max_evaluations: int | None = None,
+    solver: Solver = solve,
 ) -> BudgetDecision:
     """Compute the group plan and decide whether it needs the host's consent.
 
@@ -167,6 +169,7 @@ def plan_with_consent(  # ruff: ignore[too-many-arguments] the whole input of E6
         lodging: The lodging base, given exactly when the trip has nights.
         lodging_outcomes: The trip's lodging requirements checked against it.
         max_evaluations: Work limit of every run.
+        solver: The solver of every run (default: the local search).
 
     Returns:
         The decision; with a cost within ``B_do`` there is one run and no consent.
@@ -184,6 +187,7 @@ def plan_with_consent(  # ruff: ignore[too-many-arguments] the whole input of E6
             max_evaluations=max_evaluations,
             cost_cap=cost_cap,
             u_star=u_star,
+            solver=solver,
         )
 
     flex = run()
