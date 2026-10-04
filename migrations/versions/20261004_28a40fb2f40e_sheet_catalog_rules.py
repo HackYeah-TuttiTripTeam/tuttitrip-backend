@@ -1,7 +1,7 @@
 """Sheet catalog rules: reduced ticket category, sheet rows closed to the worker.
 
 Revision ID: 28a40fb2f40e
-Revises: a7bad57ce3b3, 9c1f5a7d3b20
+Revises: 9c1f5a7d3b20
 Create Date: 2026-10-04 02:13:30.781618
 """
 
@@ -10,8 +10,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "28a40fb2f40e"
-# develop has two heads until the MCP grant migration is repointed; this merges them.
-down_revision: str | Sequence[str] | None = ("a7bad57ce3b3", "9c1f5a7d3b20")
+down_revision: str | None = "9c1f5a7d3b20"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
