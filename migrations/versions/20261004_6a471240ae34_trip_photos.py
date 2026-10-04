@@ -1,7 +1,7 @@
 """Trip photos.
 
 Revision ID: 6a471240ae34
-Revises: a7bad57ce3b3
+Revises: d7a3f2c81b64
 Create Date: 2026-10-04 02:32:04.547246
 """
 
