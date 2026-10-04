@@ -36,7 +36,9 @@ _PROVIDER_NAMES = {AccountSource.GOOGLE: "Google", AccountSource.DISCORD: "Disco
             "model": ProviderManagedError,
             "description": (
                 "The account signs in with Google, Discord or another provider, "
-                "which owns its data. Nothing changed."
+                "which owns its data. Nothing changed. Clients map by "
+                "`detail.code` and `detail.source`; `detail.message` is for "
+                "developers."
             ),
         },
         502: {"description": "Auth0 did not answer correctly."},

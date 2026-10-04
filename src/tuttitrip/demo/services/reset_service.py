@@ -5,14 +5,22 @@ worker's daily schedule calls, so the reset logic exists once.
 """
 
 import asyncio
+import logging
 from collections.abc import Callable
 
 import httpx
 
+from tuttitrip.demo.logic.dataset import DEMO_ACCOUNT_NAME
 from tuttitrip.demo.services import auth0_login, demo_service
+from tuttitrip.shared.admin_users.services.management_client import (
+    ManagementClient,
+    ManagementError,
+)
 from tuttitrip.shared.auth.services.token_verifier import TokenVerifier
 from tuttitrip.shared.config.settings import Settings
 from tuttitrip.shared.db.session import get_engine
+
+log = logging.getLogger(__name__)
 
 
 async def demo_sub(
@@ -42,7 +50,7 @@ async def reset_demo(
     settings: Settings,
     new_client: Callable[[], httpx.AsyncClient] = auth0_login.build_client,
 ) -> int | None:
-    """Reset the demo account's data (atomic, idempotent).
+    """Reset the demo account's data (atomic, idempotent) and its Auth0 name.
 
     Args:
         settings: Auth0 and demo settings.
@@ -58,4 +66,24 @@ async def reset_demo(
     if not settings.demo.token_sha256:
         return None
     sub = await demo_sub(settings, new_client)
-    return await demo_service.run_reset(get_engine(), sub)
+    trips = await demo_service.run_reset(get_engine(), sub)
+    async with new_client() as http:
+        await restore_account_name(ManagementClient(settings.auth0, http), sub)
+    return trips
+
+
+async def restore_account_name(management: ManagementClient, sub: str) -> None:
+    """Put back the demo account's name; a failure never breaks the reset.
+
+    Skipped without Management API credentials. Only the reason code is logged.
+
+    Args:
+        management: Management API client.
+        sub: The demo account's Auth0 subject.
+    """
+    if not management.configured:
+        return
+    try:
+        await management.update_user(sub, {"name": DEMO_ACCOUNT_NAME})
+    except ManagementError as exc:
+        log.warning("Demo account name not restored: reason=%s", exc.reason)

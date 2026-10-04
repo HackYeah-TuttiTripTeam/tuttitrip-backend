@@ -6,7 +6,15 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, StringConstraints
 
 MAX_NAME_CHARS = 100
-PROVIDER_MANAGED = "account.provider_managed"
+# C0 controls, DEL, zero-width marks (U+200B-U+200F), bidi embeddings and
+# overrides (U+202A-U+202E) and bidi isolates (U+2066-U+2069).
+_FORBIDDEN_CHARS = r"\x00-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069"
+
+
+class AccountErrorCode(StrEnum):
+    """Stable code of an account error, sent as ``detail.code`` (map by it)."""
+
+    PROVIDER_MANAGED = "account.provider_managed"
 
 
 class AccountSource(StrEnum):
@@ -24,7 +32,7 @@ AccountName = Annotated[
         strip_whitespace=True,
         min_length=1,
         max_length=MAX_NAME_CHARS,
-        pattern=r"^[^\x00-\x1f\x7f]+$",
+        pattern=f"^[^{_FORBIDDEN_CHARS}]+$",
     ),
 ]
 
@@ -32,7 +40,12 @@ AccountName = Annotated[
 class AccountUpdate(BaseModel):
     """New data of the caller's account; any other field (e.g. ``sub``) is ignored."""
 
-    name: AccountName = Field(description="Display name, 1 to 100 characters.")
+    name: AccountName = Field(
+        description=(
+            "Display name, 1 to 100 characters, without control, zero-width "
+            "or bidi control characters."
+        )
+    )
 
 
 class AccountRead(BaseModel):
@@ -45,11 +58,15 @@ class AccountRead(BaseModel):
 
 
 class ProviderManagedDetail(BaseModel):
-    """Why the account cannot be changed in TuttiTrip."""
+    """Why the account cannot be changed in TuttiTrip.
 
-    code: Literal["account.provider_managed"] = PROVIDER_MANAGED
+    Clients map by ``code`` and ``source``; ``message`` is English text for
+    developers, never shown to people as is.
+    """
+
+    code: Literal[AccountErrorCode.PROVIDER_MANAGED] = AccountErrorCode.PROVIDER_MANAGED
     source: AccountSource = Field(description="Provider that owns the data.")
-    message: str
+    message: str = Field(description="For developers; clients map by code/source.")
 
 
 class ProviderManagedError(BaseModel):

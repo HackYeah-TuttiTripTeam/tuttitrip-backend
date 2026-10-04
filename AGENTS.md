@@ -202,6 +202,10 @@ How:
   through the 422 model of `POST`/`PATCH /trips`. Clients map errors by `type`,
   never by `msg`. New rule = new enum member plus a test. `POST /trips` takes
   the same fields as `PATCH` and validates them with `check_trip(complete=True)`.
+- A domain error other than 422 that a client must tell apart carries
+  `detail.code` from a per-domain `StrEnum` in `schemas.py` (e.g.
+  `AccountErrorCode` in `accounts/schemas.py`, `account.provider_managed`),
+  with a response model in OpenAPI; `detail.message` is for developers.
 
 ## Settings and secrets
 

@@ -12,7 +12,7 @@ from httpx2 import Response as Reply
 from tests.shared.paths import path
 from tests.shared.tokens import bearer, make_verifier
 from tuttitrip.accounts.logic.sources import account_source, is_editable
-from tuttitrip.accounts.schemas import AccountSource
+from tuttitrip.accounts.schemas import AccountErrorCode, AccountSource
 from tuttitrip.main import create_app
 from tuttitrip.shared.admin_users.api import get_management_client
 from tuttitrip.shared.admin_users.services.management_client import ManagementClient
@@ -142,7 +142,7 @@ def test_provider_account_gets_409_without_calling_auth0(
     assert response.status_code == 409
     assert response.json() == {
         "detail": {
-            "code": "account.provider_managed",
+            "code": AccountErrorCode.PROVIDER_MANAGED.value,
             "source": source,
             "message": f"Account data comes from {provider}; change it there.",
         }
@@ -150,7 +150,21 @@ def test_provider_account_gets_409_without_calling_auth0(
     assert stub.updates == []
 
 
-@pytest.mark.parametrize("name", ["", "   ", "x" * 101, "Ala\nNowak"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        "   ",
+        "x" * 101,
+        "Ala\nNowak",
+        "Ala\x7f",
+        "Ala\u200bNowak",  # zero-width space
+        "Ala\u200fNowak",  # right-to-left mark
+        "Ala\u202eNowak",  # right-to-left override
+        "Ala\u2066Nowak",  # left-to-right isolate
+        "Ala\u2069Nowak",  # pop directional isolate
+    ],
+)
 def test_invalid_name_is_422_without_echo(
     http: TestClient, stub: Auth0Stub, name: str
 ) -> None:
@@ -208,3 +222,9 @@ def test_auth0_failure_is_502_without_leaking_details(app: FastAPI) -> None:
 def test_account_source_from_sub(sub: str, source: AccountSource) -> None:
     assert account_source(sub) is source
     assert is_editable(source) is (source is AccountSource.EMAIL)
+
+
+def test_names_with_diacritics_are_accepted(http: TestClient, stub: Auth0Stub) -> None:
+    response = _patch(http, {"name": "Zoë Łęcka-Nowak"})
+    assert response.status_code == 200
+    assert json.loads(stub.updates[0].content) == {"name": "Zoë Łęcka-Nowak"}
