@@ -6,9 +6,13 @@ the report.
 """
 
 from tuttitrip.planning.linter.logic import (
+    accessibility,
     budget,
     closed_day,
+    distance,
     opening_hours,
+    pace,
+    rest_window,
     transfer,
     unknown_place,
 )
@@ -28,6 +32,10 @@ RULES: tuple[Rule, ...] = (
     transfer.RULE,
     budget.RULE,
     unknown_place.RULE,
+    distance.RULE,
+    pace.RULE,
+    rest_window.RULE,
+    accessibility.RULE,
 )
 
 
