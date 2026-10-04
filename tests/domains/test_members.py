@@ -24,8 +24,13 @@ from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.trips import db as trips_db
-from tuttitrip.trips.logic.member_rules import can_remove, can_set_role
-from tuttitrip.trips.schemas import TripMembership, TripRole
+from tuttitrip.trips.logic.member_rules import (
+    can_leave,
+    can_remove,
+    can_set_role,
+    can_transfer_host,
+)
+from tuttitrip.trips.schemas import MemberStatus, TripMembership, TripRole
 from tuttitrip.trips.services import member_service, trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError
 
@@ -64,9 +69,16 @@ class Trip:
     """In-memory state behind the mocked database layers."""
 
     roles: dict[str, TripRole] = field(default_factory=dict)
+    statuses: dict[str, MemberStatus] = field(default_factory=dict)
     profiles: dict[uuid.UUID, Profile] = field(default_factory=dict)
 
-    def add(self, name: str, role: TripRole | None, sub: str | None = None) -> Profile:
+    def add(
+        self,
+        name: str,
+        role: TripRole | None,
+        sub: str | None = None,
+        status: MemberStatus = MemberStatus.CONFIRMED,
+    ) -> Profile:
         group = DEFAULTS[age_group_for(30)]
         profile = Profile(
             id=uuid.uuid4(),
@@ -80,6 +92,7 @@ class Trip:
         self.profiles[profile.id] = profile
         if role is not None and sub is not None:
             self.roles[sub] = role
+            self.statuses[sub] = status
         return profile
 
 
@@ -98,10 +111,27 @@ def state(monkeypatch: pytest.MonkeyPatch) -> Trip:
             raise TripNotFoundError(str(trip_id))
         if not role.satisfies(min_role):
             raise trip_service.TripRoleError(str(min_role))
-        return TripMembership(trip_id=trip_id, sub=sub, role=role)
+        return TripMembership(
+            trip_id=trip_id, sub=sub, role=role, status=trip.statuses[sub]
+        )
 
     def delete_member(_s: object, _t: uuid.UUID, sub: str) -> None:
         del trip.roles[sub]
+        del trip.statuses[sub]
+
+    def update_status(
+        _s: object, _t: uuid.UUID, sub: str, status: MemberStatus
+    ) -> None:
+        trip.statuses[sub] = status
+
+    def membership_of(
+        _s: object, _t: uuid.UUID, sub: str
+    ) -> tuple[TripRole, MemberStatus] | None:
+        role = trip.roles.get(sub)
+        return None if role is None else (role, trip.statuses[sub])
+
+    def account_profile(_s: object, _t: uuid.UUID, sub: str) -> uuid.UUID | None:
+        return next((p.id for p in trip.profiles.values() if p.user_sub == sub), None)
 
     def update_role(_s: object, _t: uuid.UUID, sub: str, role: TripRole) -> None:
         trip.roles[sub] = role
@@ -115,12 +145,24 @@ def state(monkeypatch: pytest.MonkeyPatch) -> Trip:
         trip_service, "get_membership", AsyncMock(side_effect=membership)
     )
     monkeypatch.setattr(
-        trips_db, "select_member_roles", AsyncMock(side_effect=lambda *_: trip.roles)
+        trips_db,
+        "select_members",
+        AsyncMock(
+            side_effect=lambda *_: {
+                sub: (role, trip.statuses[sub]) for sub, role in trip.roles.items()
+            }
+        ),
     )
     monkeypatch.setattr(
-        trips_db,
-        "select_member_role",
-        AsyncMock(side_effect=lambda _s, _t, sub: trip.roles.get(sub)),
+        trips_db, "select_membership", AsyncMock(side_effect=membership_of)
+    )
+    monkeypatch.setattr(
+        trips_db, "update_member_status", AsyncMock(side_effect=update_status)
+    )
+    monkeypatch.setattr(
+        profile_service.db,
+        "select_account_profile_id",
+        AsyncMock(side_effect=account_profile),
     )
     monkeypatch.setattr(trips_db, "delete_member", AsyncMock(side_effect=delete_member))
     monkeypatch.setattr(
@@ -374,7 +416,7 @@ def test_member_queries_are_scoped_to_the_trip() -> None:
     sub, role = "auth0|x", TripRole.MEMBER
 
     async def run() -> None:
-        await trips_db.select_member_roles(session, TRIP)
+        await trips_db.select_members(session, TRIP)
         await trips_db.delete_member(session, TRIP, sub)
         await trips_db.update_member_role(session, TRIP, sub, role)
 
@@ -401,7 +443,8 @@ def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
 ) -> None:
     session = AsyncMock()
     profile = Profile(id=uuid.uuid4(), trip_id=TRIP, user_sub="auth0|kuba", age=30)
-    session.scalar.side_effect = [profile, TripRole.MEMBER, profile]
+    member = SimpleNamespace(role=TripRole.MEMBER, status=MemberStatus.CONFIRMED)
+    session.scalar.side_effect = [profile, member, profile]
     monkeypatch.setattr(
         profile_service.ProfileRead,
         "model_validate",
@@ -424,3 +467,114 @@ def test_remove_member_deletes_the_row_then_clears_user_sub_then_commits(
         "DELETE FROM trip_members"
     )
     assert profile.user_sub is None
+
+
+def test_leave_and_transfer_matrices() -> None:
+    assert [can_leave(r) for r in TripRole] == [True, True, False]
+    for actor, target in product(TripRole, TripRole):
+        assert can_transfer_host(actor, target) is (
+            actor is HOST and target is not HOST
+        )
+
+
+def test_list_shows_the_status_of_each_member(client: TestClient, state: Trip) -> None:
+    _as(state, HOST)
+    state.add("Kuba", MEMBER, "auth0|kuba", MemberStatus.PENDING)
+    body = client.get(path("list_members", trip_id=TRIP)).json()
+    assert [(m["display_name"], m["status"]) for m in body] == [
+        ("Ja", "confirmed"),
+        ("Kuba", "pending"),
+    ]
+
+
+@pytest.mark.parametrize("role", list(TripRole))
+def test_any_member_confirms_and_the_host_sees_it(
+    app: FastAPI, client: TestClient, state: Trip, session: AsyncMock, role: TripRole
+) -> None:
+    state.add("Ola", HOST, "auth0|ola")
+    state.add("Ja", role, ME.sub, MemberStatus.PENDING)
+    for _ in range(2):  # idempotent
+        response = client.post(path("confirm_membership", trip_id=TRIP))
+        assert response.status_code == 200
+        assert response.json()["status"] == "confirmed"
+        assert response.json()["is_me"] is True
+    assert state.statuses[ME.sub] is MemberStatus.CONFIRMED
+    assert session.commit.await_count == 2
+    authorize(app, AuthenticatedUser(sub="auth0|ola"))
+    seen = client.get(path("list_members", trip_id=TRIP)).json()
+    assert {m["display_name"]: m["status"] for m in seen} == {
+        "Ola": "confirmed",
+        "Ja": "confirmed",
+    }
+
+
+def test_confirm_and_leave_are_404_for_an_outsider(
+    client: TestClient, state: Trip
+) -> None:
+    state.add("Ola", HOST, "auth0|ola")
+    assert client.post(path("confirm_membership", trip_id=TRIP)).status_code == 404
+    assert client.post(path("leave_trip", trip_id=TRIP)).status_code == 404
+
+
+@pytest.mark.parametrize("role", [MEMBER, CO_HOST])
+def test_leaving_removes_access_but_keeps_a_claimable_profile(
+    app: FastAPI, client: TestClient, state: Trip, session: AsyncMock, role: TripRole
+) -> None:
+    state.add("Ola", HOST, "auth0|ola")
+    mine = state.add("Ja", role, ME.sub)
+    assert client.post(path("leave_trip", trip_id=TRIP)).status_code == 204
+    session.commit.assert_awaited_once()
+    assert ME.sub not in state.roles
+    # The person stays as a profile without an account, so it can be claimed.
+    assert state.profiles[mine.id].user_sub is None
+    assert state.profiles[mine.id].display_name == "Ja"
+    assert client.get(path("get_trip", trip_id=TRIP)).status_code == 404
+    authorize(app, AuthenticatedUser(sub="auth0|ola"))
+    assert [
+        m["display_name"] for m in client.get(path("list_members", trip_id=TRIP)).json()
+    ] == ["Ola"]
+    assert [p.id for p in state.profiles.values() if p.user_sub is None] == [mine.id]
+
+
+def test_host_cannot_leave_and_nothing_changes(
+    client: TestClient, state: Trip, session: AsyncMock
+) -> None:
+    mine = state.add("Ja", HOST, ME.sub)
+    response = client.post(path("leave_trip", trip_id=TRIP))
+    assert response.status_code == 409
+    assert "hand the host role" in response.json()["detail"]
+    assert state.roles[ME.sub] is HOST
+    assert state.profiles[mine.id].user_sub == ME.sub
+    session.commit.assert_not_awaited()
+
+
+def test_host_hands_over_the_role_then_leaves(client: TestClient, state: Trip) -> None:
+    state.add("Ja", HOST, ME.sub)
+    kuba = state.add("Kuba", MEMBER, "auth0|kuba", MemberStatus.PENDING)
+    response = client.post(_member_path("transfer_host", kuba))
+    assert response.status_code == 200
+    assert response.json()["role"] == "host"
+    assert state.roles["auth0|kuba"] is HOST
+    assert state.roles[ME.sub] is CO_HOST
+    assert client.post(path("leave_trip", trip_id=TRIP)).status_code == 204
+    assert ME.sub not in state.roles
+
+
+@pytest.mark.parametrize("caller", [CO_HOST, MEMBER])
+def test_only_the_host_hands_over_the_role(
+    client: TestClient, state: Trip, session: AsyncMock, caller: TripRole
+) -> None:
+    state.add("Ja", caller, ME.sub)
+    kuba = state.add("Kuba", MEMBER, "auth0|kuba")
+    assert client.post(_member_path("transfer_host", kuba)).status_code == 403
+    assert state.roles["auth0|kuba"] is MEMBER
+    session.commit.assert_not_awaited()
+
+
+def test_handover_to_self_or_an_accountless_profile_fails(
+    client: TestClient, state: Trip
+) -> None:
+    mine = state.add("Ja", HOST, ME.sub)
+    zosia = state.add("Zosia", None)
+    assert client.post(_member_path("transfer_host", mine)).status_code == 403
+    assert client.post(_member_path("transfer_host", zosia)).status_code == 404

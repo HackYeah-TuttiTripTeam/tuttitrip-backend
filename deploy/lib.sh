@@ -54,3 +54,15 @@ tt_database() {
 }
 
 tt_log() { printf '[tuttitrip-deploy] %s\n' "$*" >&2; }
+
+# MCP server settings of an environment (lines for the app env file). The server
+# is on only where the Auth0 tenant has an API for it: main and develop. A
+# preview branch would need an API per branch (the identifier is the URL), so
+# there /api/v1/mcp answers 404.
+tt_mcp_env() {
+  if tt_is_persistent "$1"; then
+    printf 'TUTTITRIP_MCP__ENABLED=true\nTUTTITRIP_MCP__RESOURCE_URL=https://%s/api/v1/mcp\n' "$(tt_hostname "$1")"
+  else
+    printf 'TUTTITRIP_MCP__ENABLED=false\n'
+  fi
+}

@@ -52,6 +52,19 @@ class TripRole(StrEnum):
         return self.rank >= required.rank
 
 
+@unique
+class MemberStatus(StrEnum):
+    """Whether a member confirmed they are going.
+
+    The host and the creator are ``confirmed``; someone who joined from an
+    invitation is ``pending`` until they confirm. Leaving the trip removes the
+    membership, so there is no third value.
+    """
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+
+
 SLUG = r"^[a-z0-9-]+$"  # same rule as city slugs: lowercase, no diacritics, "-"
 FLEX = (
     "Flex of E6 in percent (0-50), the solver divides it by 100: "
@@ -251,6 +264,9 @@ class TripRead(TripDetails):
     """A trip as returned by the API."""
 
     my_role: TripRole = Field(description="The caller's role on this trip.")
+    my_status: MemberStatus = Field(
+        description="Whether the caller confirmed they are going (`confirmed`)."
+    )
 
 
 @unique
@@ -260,6 +276,14 @@ class TripSort(StrEnum):
     CREATED_AT = "created_at"
     START_DATE = "start_date"
     NAME = "name"
+
+
+@unique
+class TripWhen(StrEnum):
+    """Time filter of the trip list, the history of the groups a person is in."""
+
+    PAST = "past"
+    UPCOMING = "upcoming"
 
 
 class TripFilter(ListFilters):
@@ -291,6 +315,19 @@ class TripFilter(ListFilters):
         list[TripRole] | None,
         Field(description="The caller's role on the trip; repeat for several."),
     ] = None
+    when: Annotated[
+        TripWhen | None,
+        Field(
+            description=(
+                "`past`: the trip ended before today. `upcoming`: it ends today "
+                "or later, or has no dates yet. Omitted: all trips."
+            )
+        ),
+    ] = None
+    status: Annotated[
+        MemberStatus | None,
+        Field(description="The caller's participation status on the trip."),
+    ] = None
 
     @model_validator(mode="after")
     def _range_order(self) -> Self:
@@ -314,6 +351,7 @@ class TripMembership(BaseModel):
     trip_id: UUID
     sub: str
     role: TripRole
+    status: MemberStatus = MemberStatus.CONFIRMED
 
 
 class MemberRead(BaseModel):
@@ -322,6 +360,7 @@ class MemberRead(BaseModel):
     profile_id: UUID = Field(description="Use it in the member routes.")
     display_name: str
     role: TripRole
+    status: MemberStatus = Field(description="Whether the member confirmed.")
     is_me: bool = Field(description="Whether this member is the caller.")
 
 

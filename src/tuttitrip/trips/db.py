@@ -9,7 +9,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from tuttitrip.shared.db.pagination import Column, ordering, paginate
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips.models import Trip, TripMember
-from tuttitrip.trips.schemas import TripFilter, TripListQuery, TripRole, TripSort
+from tuttitrip.trips.schemas import (
+    MemberStatus,
+    TripFilter,
+    TripListQuery,
+    TripRole,
+    TripSort,
+    TripWhen,
+)
 
 
 async def insert_trip(
@@ -28,14 +35,25 @@ async def insert_trip(
     trip = Trip(owner_sub=owner_sub, **fields)
     session.add(trip)
     await session.flush()
-    session.add(TripMember(trip_id=trip.id, user_sub=owner_sub, role=TripRole.HOST))
+    session.add(
+        TripMember(
+            trip_id=trip.id,
+            user_sub=owner_sub,
+            role=TripRole.HOST,
+            status=MemberStatus.CONFIRMED,
+        )
+    )
     await session.flush()
     await session.refresh(trip)
     return trip
 
 
 async def insert_member(
-    session: AsyncSession, trip_id: UUID, sub: str, role: TripRole
+    session: AsyncSession,
+    trip_id: UUID,
+    sub: str,
+    role: TripRole,
+    status: MemberStatus = MemberStatus.PENDING,
 ) -> None:
     """Add a user to a trip with a role and flush.
 
@@ -44,8 +62,9 @@ async def insert_member(
         trip_id: Trip id.
         sub: Auth0 subject.
         role: The role to give.
+        status: Participation status; a newcomer has to confirm.
     """
-    session.add(TripMember(trip_id=trip_id, user_sub=sub, role=role))
+    session.add(TripMember(trip_id=trip_id, user_sub=sub, role=role, status=status))
     await session.flush()
 
 
@@ -105,13 +124,21 @@ def apply_filters(stmt: TripSelect, filters: TripFilter) -> TripSelect:
         stmt = stmt.where(Trip.start_date <= filters.start_to)
     if filters.role:
         stmt = stmt.where(TripMember.role.in_(filters.role))
+    if filters.when is TripWhen.PAST:
+        stmt = stmt.where(Trip.end_date < func.current_date())
+    elif filters.when is TripWhen.UPCOMING:
+        stmt = stmt.where(
+            or_(Trip.end_date.is_(None), Trip.end_date >= func.current_date())
+        )
+    if filters.status:
+        stmt = stmt.where(TripMember.status == filters.status)
     return stmt
 
 
 async def select_trips_page(
     session: AsyncSession, sub: str, query: TripListQuery
-) -> tuple[Page[Trip], dict[UUID, TripRole]]:
-    """One page of the user's trips, with the user's role on each.
+) -> tuple[Page[Trip], dict[UUID, tuple[TripRole, MemberStatus]]]:
+    """One page of the user's trips, with the user's role and status on each.
 
     Args:
         session: Open session.
@@ -119,7 +146,7 @@ async def select_trips_page(
         query: Paging, sort and filters.
 
     Returns:
-        The page of trips and the user's role by trip id.
+        The page of trips and the user's ``(role, status)`` by trip id.
     """
     page = await paginate(
         session,
@@ -130,12 +157,33 @@ async def select_trips_page(
     if not page.items:
         return page, {}
     rows = await session.execute(
-        select(TripMember.trip_id, TripMember.role).where(
+        select(TripMember.trip_id, TripMember.role, TripMember.status).where(
             TripMember.user_sub == sub,
             TripMember.trip_id.in_([trip.id for trip in page.items]),
         )
     )
-    return page, dict(rows.all())
+    return page, {trip_id: (role, status) for trip_id, role, status in rows}
+
+
+async def select_membership(
+    session: AsyncSession, trip_id: UUID, sub: str
+) -> tuple[TripRole, MemberStatus] | None:
+    """The user's role and status on a trip.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        sub: Auth0 subject.
+
+    Returns:
+        ``(role, status)``, or None if the user is not on the trip.
+    """
+    member = await session.scalar(
+        select(TripMember)
+        .where(TripMember.trip_id == trip_id, TripMember.user_sub == sub)
+        .execution_options(populate_existing=True)
+    )
+    return None if member is None else (member.role, member.status)
 
 
 async def select_member_role(
@@ -181,24 +229,24 @@ async def delete_trip(session: AsyncSession, trip_id: UUID) -> None:
     await session.execute(delete(Trip).where(Trip.id == trip_id))
 
 
-async def select_member_roles(
+async def select_members(
     session: AsyncSession, trip_id: UUID
-) -> dict[str, TripRole]:
-    """Roles of all members of a trip.
+) -> dict[str, tuple[TripRole, MemberStatus]]:
+    """Role and status of all members of a trip.
 
     Args:
         session: Open session.
         trip_id: Trip id.
 
     Returns:
-        Role by Auth0 subject.
+        ``(role, status)`` by Auth0 subject.
     """
     result = await session.execute(
-        select(TripMember.user_sub, TripMember.role).where(
+        select(TripMember.user_sub, TripMember.role, TripMember.status).where(
             TripMember.trip_id == trip_id
         )
     )
-    return {row.user_sub: row.role for row in result.all()}
+    return {row.user_sub: (row.role, row.status) for row in result.all()}
 
 
 async def delete_member(session: AsyncSession, trip_id: UUID, sub: str) -> None:
@@ -231,6 +279,24 @@ async def update_member_role(
         update(TripMember)
         .where(TripMember.trip_id == trip_id, TripMember.user_sub == sub)
         .values(role=role)
+    )
+
+
+async def update_member_status(
+    session: AsyncSession, trip_id: UUID, sub: str, status: MemberStatus
+) -> None:
+    """Set a member's participation status.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: Trip id.
+        sub: Auth0 subject.
+        status: The new status.
+    """
+    await session.execute(
+        update(TripMember)
+        .where(TripMember.trip_id == trip_id, TripMember.user_sub == sub)
+        .values(status=status)
     )
 
 
@@ -268,20 +334,27 @@ async def select_hosted_trip_ids(session: AsyncSession, sub: str) -> list[UUID]:
     return list(result.all())
 
 
-async def select_first_co_host(session: AsyncSession, trip_id: UUID) -> str | None:
-    """The co-host who joined the trip first.
+async def select_successor(
+    session: AsyncSession, trip_id: UUID, leaving: str
+) -> str | None:
+    """Who takes over a trip: the longest-standing co-host, else member.
 
     Args:
         session: Open session.
         trip_id: Trip id.
+        leaving: Auth0 subject of the host who leaves (never chosen).
 
     Returns:
-        Auth0 subject, or None when the trip has no co-host.
+        Auth0 subject, or None when the host is alone on the trip.
     """
     return await session.scalar(
         select(TripMember.user_sub)
-        .where(TripMember.trip_id == trip_id, TripMember.role == TripRole.CO_HOST)
-        .order_by(TripMember.added_at, TripMember.user_sub)
+        .where(TripMember.trip_id == trip_id, TripMember.user_sub != leaving)
+        .order_by(
+            (TripMember.role == TripRole.CO_HOST).desc(),
+            TripMember.added_at,
+            TripMember.user_sub,
+        )
         .limit(1)
     )
 
