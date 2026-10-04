@@ -17,15 +17,21 @@ from fastapi.testclient import TestClient
 from httpx2 import Response as Reply
 from sqlalchemy.dialects import postgresql
 
+from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.demo import api as demo_api
 from tuttitrip.demo.api import get_client_factory, get_rate_limiter
 from tuttitrip.demo.logic.dataset import DEMO_ACCOUNT_NAME, DEMO_TRIPS
-from tuttitrip.demo.logic.rate_limit import RateLimiter
 from tuttitrip.demo.logic.token import secret_matches, token_matches
 from tuttitrip.demo.services import demo_service, reset_service, seed_command
 from tuttitrip.main import create_app
+from tuttitrip.places.schemas import Amenity
+from tuttitrip.planning.plans.services.plan_service import PlanInputError
+from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.config.settings import Auth0Settings, DemoSettings, Settings
+from tuttitrip.shared.permissions.logic.resolution import Grant
+from tuttitrip.shared.permissions.registry import Access, Feature
+from tuttitrip.shared.rate_limit.limiter import RateLimiter
 from tuttitrip.trips import db as trips_db
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -269,6 +275,7 @@ def test_the_sample_set_has_four_cities_and_the_family_trip() -> None:
     slugs = {t.city_slug for t in DEMO_TRIPS}
     assert slugs == {"warszawa", "gdansk", "krakow", "berlin"}
     warszawa = DEMO_TRIPS[-1]  # created last, so it is the newest
+    assert warszawa.name == "Warszawa z rodziną"
     assert warszawa.city_slug == "warszawa"
     assert [p.age for p in warszawa.people] == [38, 6, 13, 72]
     assert warszawa.hard_amenities
@@ -299,12 +306,20 @@ def _trip_services(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         preferences=SimpleNamespace(replace_preferences=AsyncMock()),
         requirements=SimpleNamespace(replace_requirements=AsyncMock()),
         places=SimpleNamespace(list_places=AsyncMock(return_value=[])),
+        documents=SimpleNamespace(create_document=AsyncMock()),
+        plans=SimpleNamespace(
+            generate_plan=AsyncMock(
+                return_value=(SimpleNamespace(plan_hash="a1b2c3d4e5f6"), True)
+            )
+        ),
     )
     monkeypatch.setattr(demo_service, "trip_service", fakes.trips)
     monkeypatch.setattr(demo_service, "profile_service", fakes.profiles)
     monkeypatch.setattr(demo_service, "preference_service", fakes.preferences)
     monkeypatch.setattr(demo_service, "requirements_service", fakes.requirements)
     monkeypatch.setattr(demo_service, "place_service", fakes.places)
+    monkeypatch.setattr(demo_service, "document_service", fakes.documents)
+    monkeypatch.setattr(demo_service, "plan_service", fakes.plans)
     return fakes
 
 
@@ -389,8 +404,11 @@ def test_the_reset_runs_in_one_locked_transaction(
 ) -> None:
     connection = FakeConnection()
     _plain_session(monkeypatch)
-    monkeypatch.setattr(demo_service, "reset_demo_account", AsyncMock(return_value=4))
-    assert asyncio.run(demo_service.run_reset(_engine(connection), "auth0|demo")) == 4
+    monkeypatch.setattr(
+        demo_service, "reset_demo_account", AsyncMock(return_value=len(DEMO_TRIPS))
+    )
+    reset = asyncio.run(demo_service.run_reset(_engine(connection), "auth0|demo"))
+    assert reset == len(DEMO_TRIPS)
     assert connection.events[0] == "begin"
     assert "pg_advisory_xact_lock" in connection.events[1]
     assert connection.events[-1] == "commit"
@@ -659,3 +677,73 @@ def test_without_management_credentials_the_name_is_left_alone(
     trips = asyncio.run(reset_service.reset_demo(Settings(demo=_demo()), auth0.factory))
     assert trips == len(DEMO_TRIPS)
     assert auth0.updates == []
+
+
+def test_the_family_trip_has_the_scene_data() -> None:
+    family = DEMO_TRIPS[-1]
+    assert family.plan
+    assert Amenity.POOL in family.hard_amenities  # "a pool in every lodging"
+    assert family.chatbot_days
+    assert family.offer_text is not None
+    assert family.budget_total == (1300, 1700)
+    assert family.flex_pct == 10
+
+
+def test_the_tight_budget_variant_is_the_same_family_at_900_to_1100() -> None:
+    family, tight = DEMO_TRIPS[-1], DEMO_TRIPS[-2]
+    assert tight.budget_total == (900, 1100)
+    assert tight.people == family.people
+    assert tight.hard_amenities == family.hard_amenities
+    assert tight.plan
+    assert tight.flex_pct == family.flex_pct
+    assert tight.chatbot_days == ()  # the chatbot plan belongs to the main trip only
+
+
+def test_the_reset_stores_the_pasted_plan_and_offer_and_computes_the_plans(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fakes = _trip_services(monkeypatch)
+    asyncio.run(
+        demo_service.reset_demo_account(MagicMock(), "auth0|demo", date(2026, 10, 4))
+    )
+    documents = fakes.documents.create_document.await_args_list
+    assert sorted(call.args[2].kind.value for call in documents) == ["offer", "plan"]
+    assert fakes.plans.generate_plan.await_count == sum(1 for t in DEMO_TRIPS if t.plan)
+    assert fakes.plans.generate_plan.await_count == 2
+
+
+def test_a_trip_without_a_catalog_is_still_seeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fakes = _trip_services(monkeypatch)
+    fakes.plans.generate_plan.side_effect = PlanInputError("no city")
+    created = asyncio.run(
+        demo_service.reset_demo_account(MagicMock(), "auth0|demo", date(2026, 10, 4))
+    )
+    assert created == len(DEMO_TRIPS)
+    assert fakes.documents.create_document.await_count == 2
+
+
+def test_the_admin_reset_needs_admin_demo_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ResetSpy(monkeypatch)
+    user_grants = [Grant(Feature.TRIPS_CORE, Access.WRITE)]
+    admin = create_app()
+    authorize(admin, AuthenticatedUser(sub="auth0|user"), user_grants)
+    assert TestClient(admin).post(path("admin_reset_demo")).status_code == 403
+
+
+def test_a_superadmin_resets_the_demo_by_hand(
+    stub: Auth0Stub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(demo=_demo())
+    monkeypatch.setattr(demo_api, "get_settings", lambda: settings)
+    spy = ResetSpy(monkeypatch)
+    app = create_app()
+    authorize(app, AuthenticatedUser(sub="auth0|root"))
+    app.dependency_overrides[get_client_factory] = stub.factory
+    response = TestClient(app).post(path("admin_reset_demo"))
+    assert response.status_code == 200
+    assert response.json() == {"status": "reset", "trips": len(DEMO_TRIPS)}
+    assert spy.subs == ["auth0|demo"]

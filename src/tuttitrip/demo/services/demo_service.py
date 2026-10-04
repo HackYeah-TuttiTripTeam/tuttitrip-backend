@@ -16,6 +16,10 @@ from tuttitrip.accommodation.schemas import RequirementItem, RequirementsWrite
 from tuttitrip.accommodation.services import requirements_service
 from tuttitrip.demo.logic.dataset import DEMO_TRIPS, PersonSeed, TripSeed
 from tuttitrip.places.services import place_service
+from tuttitrip.planning.linter.schemas import DocumentCreate, DocumentKind
+from tuttitrip.planning.linter.services import document_service
+from tuttitrip.planning.plans.services import plan_service
+from tuttitrip.planning.plans.services.plan_service import PlanInputError
 from tuttitrip.profiles.feedback.schemas import RatingUpdate, RatingValue, ReasonCode
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.preferences.services import preference_service
@@ -77,9 +81,47 @@ async def _rate_places(
     return rated
 
 
+async def _plan_and_documents(
+    session: AsyncSession, membership: TripMembership, seed: TripSeed, today: date
+) -> str | None:
+    """Compute the plan and store the pasted chatbot plan and lodging offer.
+
+    The pasted texts are stored even when the plan cannot be computed (a
+    database without the city's catalog), so the linter scenes still work.
+
+    Args:
+        session: Open session.
+        membership: The host's membership of the trip.
+        seed: The trip's sample data.
+        today: The day of the reset.
+
+    Returns:
+        The 12-character ``plan_hash`` of the stored plan, or None without a plan.
+    """
+    text = seed.chatbot_text(today)
+    if text is not None:
+        await document_service.create_document(
+            session, membership, DocumentCreate(kind=DocumentKind.PLAN, text=text)
+        )
+    if seed.offer_text is not None:
+        await document_service.create_document(
+            session,
+            membership,
+            DocumentCreate(kind=DocumentKind.OFFER, text=seed.offer_text),
+        )
+    if not seed.plan:
+        return None
+    try:
+        plan, _ = await plan_service.generate_plan(session, membership, None)
+    except PlanInputError as exc:
+        log.warning("Demo plan of '%s' not computed: %s", seed.name, exc)
+        return None
+    return plan.plan_hash
+
+
 async def _create_trip(
     session: AsyncSession, sub: str, seed: TripSeed, today: date
-) -> None:
+) -> str | None:
     trip = await trip_service.create_trip(session, sub, seed.create_payload(today))
     membership = await trip_service.get_membership(session, trip.id, sub, TripRole.HOST)
     host_profile, *_ = await profile_service.list_profiles(session, membership)
@@ -124,6 +166,7 @@ async def _create_trip(
                 preset=seed.weights, focus_profile_id=profiles[seed.focus].id
             ),
         )
+    return await _plan_and_documents(session, membership, seed, today)
 
 
 async def reset_demo_account(
@@ -146,7 +189,9 @@ async def reset_demo_account(
     today = today or date.today()  # ruff: ignore[call-date-today]  # a calendar day, not an instant
     removed = await trip_service.delete_trips_owned_by(session, sub)
     for seed in DEMO_TRIPS:
-        await _create_trip(session, sub, seed, today)
+        plan_hash = await _create_trip(session, sub, seed, today)
+        if plan_hash is not None:
+            log.info("Demo trip '%s': plan_hash %s", seed.name, plan_hash)
     log.info(
         "Demo account reset: %d trips removed, %d created", removed, len(DEMO_TRIPS)
     )
