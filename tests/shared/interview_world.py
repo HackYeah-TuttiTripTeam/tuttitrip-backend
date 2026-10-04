@@ -39,6 +39,7 @@ from tuttitrip.profiles.preferences.schemas import (
 from tuttitrip.profiles.preferences.services import preference_service
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.trips.schemas import (
+    MemberStatus,
     TripMembership,
     TripRead,
     TripRole,
@@ -77,6 +78,7 @@ class World:
             budget_flex_pct=10,
             fairness_alpha=1.0,
             my_role=role,
+            my_status=MemberStatus.CONFIRMED,
         )
         self.profiles: dict[uuid.UUID, Profile] = {}
         self.saved: dict[uuid.UUID, PreferencesWrite] = {}
