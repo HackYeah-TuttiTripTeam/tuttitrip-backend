@@ -30,6 +30,7 @@ from tuttitrip.profiles.preferences.api import router as preferences_router
 from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.admin_users.api import router as admin_users_router
 from tuttitrip.shared.config.settings import Settings, get_settings
+from tuttitrip.shared.constants import WWW_AUTHENTICATE_HEADER
 from tuttitrip.shared.db.session import dispose_engine
 from tuttitrip.shared.errors.api import register_error_handlers
 from tuttitrip.shared.health.api import router as health_router
@@ -118,7 +119,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
         # MCP clients read the OAuth challenge.
-        expose_headers=["WWW-Authenticate"],
+        expose_headers=[WWW_AUTHENTICATE_HEADER],
     )
     api = APIRouter(prefix=API_PREFIX)
     register_error_handlers(app)

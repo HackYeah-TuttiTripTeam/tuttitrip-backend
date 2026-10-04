@@ -35,8 +35,12 @@ def check(request: LintRequest) -> LintReport:
     "/trips/{trip_id}/documents",
     status_code=status.HTTP_201_CREATED,
     responses={
-        404: {"description": "Trip not found, or the caller is not on it."},
-        422: {"description": "Empty text or longer than 20 000 characters."},
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Trip not found, or the caller is not on it."
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "Empty text or longer than 20 000 characters."
+        },
     },
     dependencies=[requires(Feature.PLANNING_LINTER, Access.WRITE)],
 )

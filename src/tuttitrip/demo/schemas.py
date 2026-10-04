@@ -4,13 +4,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from tuttitrip.shared.constants import BEARER_SCHEME
+
 
 class DemoSession(BaseModel):
     """Auth0 tokens of the demo account."""
 
     access_token: str
     expires_in: int = Field(description="Seconds until the access token expires.")
-    token_type: str = "Bearer"  # ruff: ignore[hardcoded-password-string]  # the OAuth token type
+    token_type: str = BEARER_SCHEME
     refresh_token: str | None = Field(
         default=None,
         description="Only when the deployment allows `offline_access`.",

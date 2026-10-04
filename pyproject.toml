@@ -90,6 +90,11 @@ ignore = [
     "hardcoded-password-string",  # MASTER_PASSWORD_HOOK is a script path, not a password
 ]
 
+[tool.ruff.lint.pylint]
+# PLR2004 (magic-value-comparison, already selected via ALL) also flags string
+# literals in comparisons; the default exempts them. See "Magic values" in AGENTS.md.
+allow-magic-value-types = ["bytes"]
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.profiles import db
+from tuttitrip.profiles.constants import AGE_FIELD, NAP_START_FIELD, USER_SUB_FIELD
 from tuttitrip.profiles.logic.age_defaults import (
     DEFAULTS,
     ComfortDefaults,
@@ -34,7 +35,7 @@ from tuttitrip.profiles.schemas import (
 from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import trip_service
 
-NULLABLE_FIELDS = frozenset({"nap_start", "user_sub"})
+NULLABLE_FIELDS = frozenset({NAP_START_FIELD, USER_SUB_FIELD})
 UNIQUE_ACCOUNT = "uq_profiles_trip_id"
 # The token has no name or age, so the host's own profile starts as a generic
 # adult that they edit themselves.
@@ -118,10 +119,10 @@ def _consistent_nap(given: dict[str, Any]) -> dict[str, Any]:
         way round, so a lone "no nap" overrides the age default completely.
     """
     out = dict(given)
-    if "nap_start" in out and out["nap_start"] is None:
+    if NAP_START_FIELD in out and out[NAP_START_FIELD] is None:
         out.setdefault("nap_minutes", 0)
     if out.get("nap_minutes") == 0:
-        out.setdefault("nap_start", None)
+        out.setdefault(NAP_START_FIELD, None)
     return out
 
 
@@ -137,7 +138,7 @@ def _check_comfort(values: dict[str, Any]) -> None:
     problem = comfort_problem(
         values["segment_km"],
         values["daily_km"],
-        values["nap_start"],
+        values[NAP_START_FIELD],
         values["nap_minutes"],
     )
     if problem is not None:
@@ -182,7 +183,7 @@ async def create_profile(
         {
             k: v
             for k, v in given.items()
-            if k in comfort and (v is not None or k == "nap_start")
+            if k in comfort and (v is not None or k == NAP_START_FIELD)
         }
     )
     _check_comfort(comfort)
@@ -435,17 +436,18 @@ async def update_profile(
         for k, v in data.model_dump(exclude_unset=True).items()
         if v is not None or k in NULLABLE_FIELDS
     }
-    if "user_sub" in changes:
+    if USER_SUB_FIELD in changes:
         if not is_staff:
             msg = "Only a co-host can link an account"
             raise ProfileForbiddenError(msg)
-        if profile.user_sub is not None and changes["user_sub"] != profile.user_sub:
+        new_sub = changes[USER_SUB_FIELD]
+        if profile.user_sub is not None and new_sub != profile.user_sub:
             raise ProfileAccountError(MEMBERSHIP_VIA_MEMBERS)
-        if changes["user_sub"] is not None and changes["user_sub"] != profile.user_sub:
-            await _check_account(session, membership.trip_id, changes["user_sub"])
+        if new_sub is not None and new_sub != profile.user_sub:
+            await _check_account(session, membership.trip_id, new_sub)
     changes = _consistent_nap(changes)
-    if "age" in changes:
-        changes = _follow_new_group(profile, changes["age"]) | changes
+    if AGE_FIELD in changes:
+        changes = _follow_new_group(profile, changes[AGE_FIELD]) | changes
     current = asdict(_comfort(profile))
     _check_comfort(current | changes)
     for key, value in changes.items():

@@ -20,6 +20,14 @@ from tuttitrip.demo.schemas import DemoResetResult, DemoSession
 from tuttitrip.demo.services import auth0_login, reset_service
 from tuttitrip.demo.services.auth0_login import DemoLoginError
 from tuttitrip.shared.config.settings import get_settings
+from tuttitrip.shared.constants import (
+    AUTHORIZATION_HEADER,
+    BEARER_SCHEME,
+    CACHE_CONTROL_HEADER,
+    NO_STORE,
+    NO_STORE_HEADERS,
+    RETRY_AFTER_HEADER,
+)
 from tuttitrip.shared.permissions.api import public
 
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[public()])
@@ -30,7 +38,7 @@ internal_router = APIRouter(
 )
 log = logging.getLogger(__name__)
 
-NO_STORE = {"Cache-Control": "no-store"}
+THROTTLE_RETRY_AFTER_SECONDS = "60"
 MAX_BODY_BYTES = 2048
 MAX_TOKEN_CHARS = 512
 BODY_SCHEMA = {
@@ -98,16 +106,22 @@ async def _read_token(request: Request) -> str | None:
 
 
 def _not_found() -> HTTPException:
-    return HTTPException(status.HTTP_404_NOT_FOUND, "Not found", headers=NO_STORE)
+    return HTTPException(
+        status.HTTP_404_NOT_FOUND, "Not found", headers=NO_STORE_HEADERS
+    )
 
 
 @router.post(
     "/demo",
     openapi_extra={"requestBody": BODY_SCHEMA},
     responses={
-        404: {"description": "Demo login is off, or the request/token is wrong."},
-        429: {"description": "Too many requests from this address."},
-        502: {"description": "Auth0 did not give a token."},
+        status.HTTP_404_NOT_FOUND: {
+            "description": "Demo login is off, or the request/token is wrong."
+        },
+        status.HTTP_429_TOO_MANY_REQUESTS: {
+            "description": "Too many requests from this address."
+        },
+        status.HTTP_502_BAD_GATEWAY: {"description": "Auth0 did not give a token."},
     },
 )
 async def demo_login(
@@ -136,12 +150,15 @@ async def demo_login(
         HTTPException: 429 over the limit, 404 for a bad request or token or a
             disabled demo, 502 when Auth0 fails.
     """
-    response.headers["Cache-Control"] = NO_STORE["Cache-Control"]
+    response.headers[CACHE_CONTROL_HEADER] = NO_STORE
     if not limiter.allow(_client_ip(request)):
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             "Too many requests",
-            headers={**NO_STORE, "Retry-After": "60"},
+            headers={
+                **NO_STORE_HEADERS,
+                RETRY_AFTER_HEADER: THROTTLE_RETRY_AFTER_SECONDS,
+            },
         )
     settings = get_settings()
     token = await _read_token(request)
@@ -153,13 +170,15 @@ async def demo_login(
     except DemoLoginError as exc:
         log.warning("Demo login failed: reason=%s", exc.reason)
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, "Demo login unavailable", headers=NO_STORE
+            status.HTTP_502_BAD_GATEWAY,
+            "Demo login unavailable",
+            headers=NO_STORE_HEADERS,
         ) from None
 
 
 def _bearer(request: Request) -> str:
-    scheme, _, value = request.headers.get("authorization", "").partition(" ")
-    return value if scheme.lower() == "bearer" else ""
+    scheme, _, value = request.headers.get(AUTHORIZATION_HEADER, "").partition(" ")
+    return value if scheme.lower() == BEARER_SCHEME.lower() else ""
 
 
 @internal_router.post(
@@ -188,7 +207,7 @@ async def reset_demo(
         HTTPException: 404 for a wrong, missing or unconfigured secret, 502 when
             Auth0 fails.
     """
-    response.headers["Cache-Control"] = NO_STORE["Cache-Control"]
+    response.headers[CACHE_CONTROL_HEADER] = NO_STORE
     settings = get_settings()
     if not secret_matches(
         _bearer(request), settings.demo.reset_secret.get_secret_value()
@@ -199,7 +218,9 @@ async def reset_demo(
     except DemoLoginError as exc:
         log.warning("Demo reset failed: reason=%s", exc.reason)
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, "Demo login unavailable", headers=NO_STORE
+            status.HTTP_502_BAD_GATEWAY,
+            "Demo login unavailable",
+            headers=NO_STORE_HEADERS,
         ) from None
     if trips is None:
         return DemoResetResult(status="disabled")

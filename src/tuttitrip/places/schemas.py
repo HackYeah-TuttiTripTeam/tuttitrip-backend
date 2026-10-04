@@ -10,7 +10,7 @@ import re
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Final, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -170,6 +170,8 @@ class Weekday(StrEnum):
     SUN = "sun"
 
 
+END_OF_DAY_CLOCK: Final = "24:00"
+"""Closing time ``24:00``: the next midnight (the regex below allows it)."""
 _CLOCK = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$|^24:00$")
 
 

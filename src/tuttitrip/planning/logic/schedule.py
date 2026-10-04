@@ -20,7 +20,12 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
-from tuttitrip.places.schemas import OpeningHours, PlaceRead, Weekday
+from tuttitrip.places.schemas import (
+    END_OF_DAY_CLOCK,
+    OpeningHours,
+    PlaceRead,
+    Weekday,
+)
 
 DAILY_KM_FACTOR = 1.5
 """E0: the day may be at most this many times a person's ``D_i`` long."""
@@ -122,7 +127,7 @@ class _Span:
 def _instant(day: date, clock: str | time, zone: tzinfo) -> datetime:
     # Local wall-clock time as a UTC instant (``24:00`` is the next midnight).
     if isinstance(clock, str):
-        if clock == "24:00":
+        if clock == END_OF_DAY_CLOCK:
             day, clock = day + timedelta(days=1), time.min
         else:
             clock = time.fromisoformat(clock)

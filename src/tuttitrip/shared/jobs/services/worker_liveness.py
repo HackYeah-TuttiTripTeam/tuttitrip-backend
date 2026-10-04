@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.jobs import db
+from tuttitrip.shared.jobs.constants import WORKER_MISSING, WORKER_OK, WORKER_STALE
 from tuttitrip.shared.jobs.contracts import CONTRACT_VERSION
 from tuttitrip.shared.jobs.schemas import WorkerLiveness
 
@@ -42,15 +43,15 @@ async def get_worker_liveness(session: AsyncSession) -> WorkerLiveness:
         raise
     if beat is None:
         return WorkerLiveness(
-            status="missing", backend_contract_version=CONTRACT_VERSION
+            status=WORKER_MISSING, backend_contract_version=CONTRACT_VERSION
         )
     age = (datetime.now(UTC) - beat.last_seen).total_seconds()
     if age <= settings.jobs.worker_stale_after_seconds:
-        status = "ok"
+        status = WORKER_OK
     elif age <= settings.jobs.worker_missing_after_seconds:
-        status = "stale"
+        status = WORKER_STALE
     else:
-        status = "missing"
+        status = WORKER_MISSING
     low, high = beat.min_contract_version, beat.contract_version
     return WorkerLiveness(
         status=status,
@@ -74,7 +75,7 @@ async def ensure_worker_available(session: AsyncSession) -> None:
     except SQLAlchemyError as error:
         msg = "The worker heartbeat could not be read; try again later."
         raise WorkerUnavailableError(msg) from error
-    if liveness.status == "missing":
+    if liveness.status == WORKER_MISSING:
         msg = (
             "No tuttitrip-worker has reported a heartbeat in this environment "
             f"for over {get_settings().jobs.worker_missing_after_seconds} s; "

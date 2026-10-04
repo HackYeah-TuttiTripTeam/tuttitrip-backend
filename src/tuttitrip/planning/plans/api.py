@@ -21,7 +21,11 @@ STUB_NOTE = (
     "price and a free stop; `solo` (two days) has neither; all variants have a "
     "stop without an hours source and transfers with and without a cost."
 )
-NOT_FOUND = {404: {"description": "Trip not found, or the caller is not on it."}}
+NOT_FOUND = {
+    status.HTTP_404_NOT_FOUND: {
+        "description": "Trip not found, or the caller is not on it."
+    }
+}
 
 
 @router.post(
@@ -36,8 +40,11 @@ NOT_FOUND = {404: {"description": "Trip not found, or the caller is not on it."}
     ),
     responses={
         **NOT_FOUND,
-        200: {"model": PlanRead, "description": "Existing version for the same input."},
-        201: {
+        status.HTTP_200_OK: {
+            "model": PlanRead,
+            "description": "Existing version for the same input.",
+        },
+        status.HTTP_201_CREATED: {
             "content": {
                 "application/json": {"examples": plan_service.openapi_examples()}
             }
@@ -70,7 +77,9 @@ async def create_plan(
         "returns it."
     ),
     responses={
-        404: {"description": "No plan yet, trip not found or caller not on it."}
+        status.HTTP_404_NOT_FOUND: {
+            "description": "No plan yet, trip not found or caller not on it."
+        }
     },
     openapi_extra=STUB,
     dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],

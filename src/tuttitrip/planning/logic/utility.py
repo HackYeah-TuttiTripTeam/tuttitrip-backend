@@ -17,6 +17,11 @@ profile, the profile part is the neutral 0.5. Pure, standard library only.
 import math
 
 from tuttitrip.places.schemas import PlaceCategory, PlaceRead
+from tuttitrip.planning.constants import (
+    BURDEN_DISTANCE_SHARE,
+    BURDEN_QUEUE_SHARE,
+    BURDEN_STAIRS_SHARE,
+)
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.schemas import PlaceExplain, PlanningPerson
 from tuttitrip.profiles.preferences.schemas import ImportanceDomain
@@ -104,7 +109,11 @@ def effort(
         queue = min(1.0, place.queue_min / person.queue_patience_min)
     else:
         queue = 1.0 if place.queue_min > 0 else 0.0
-    return 0.6 * distance + 0.2 * stairs + 0.2 * queue
+    return (
+        BURDEN_DISTANCE_SHARE * distance
+        + BURDEN_STAIRS_SHARE * stairs
+        + BURDEN_QUEUE_SHARE * queue
+    )
 
 
 def exponents(

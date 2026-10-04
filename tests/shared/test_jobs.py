@@ -31,8 +31,8 @@ from tuttitrip.shared.jobs.contracts import (
 from tuttitrip.shared.jobs.models import WorkerHeartbeat
 from tuttitrip.shared.jobs.services import worker_liveness
 from tuttitrip.shared.jobs.services.job_queue import (
-    TIMEOUT_SECONDS,
     job_state,
+    timeout_seconds,
     workflow_id_for,
 )
 from tuttitrip.shared.jobs.services.worker_liveness import (
@@ -244,7 +244,7 @@ def test_local_provider_goes_to_the_local_llm_queue(
 
 
 def test_every_workflow_has_a_timeout() -> None:
-    assert set(TIMEOUT_SECONDS) == set(Workflow)
+    assert all(timeout_seconds(workflow) > 0 for workflow in Workflow)
 
 
 # --- mirrored workflows ----------------------------------------------------

@@ -41,6 +41,11 @@ class Auth0Settings(BaseModel):
     # admin user list answers 503. Set in host env files / CI secrets only.
     management_client_id: str = ""
     management_client_secret: SecretStr = SecretStr("")
+    http_timeout_seconds: float = Field(
+        default=10.0,
+        gt=0,
+        description="Timeout of every call to Auth0 (token endpoint, Management API).",
+    )
 
 
 class McpSettings(BaseModel):
@@ -105,6 +110,23 @@ class JobsSettings(BaseModel):
 
     worker_stale_after_seconds: int = Field(default=90, ge=1)
     worker_missing_after_seconds: int = Field(default=600, ge=1)
+    plan_timeout_seconds: float = Field(
+        default=900.0,
+        gt=0,
+        description="Start-to-close limit of plan generation and place fetching.",
+    )
+    llm_timeout_seconds: float = Field(
+        default=600.0,
+        gt=0,
+        description="Start-to-close limit of pasted-plan parsing, offer evidence "
+        "and justifications.",
+    )
+    embedding_timeout_seconds: float = Field(
+        default=300.0, gt=0, description="Start-to-close limit of embedding jobs."
+    )
+    ping_timeout_seconds: float = Field(
+        default=60.0, gt=0, description="Start-to-close limit of the smoke-test ping."
+    )
 
 
 class DemoSettings(BaseModel):

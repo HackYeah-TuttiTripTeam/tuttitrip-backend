@@ -16,7 +16,7 @@ from tuttitrip.accommodation.schemas import (
     RequirementsRead,
     RequirementsWrite,
 )
-from tuttitrip.trips.schemas import TripMembership
+from tuttitrip.trips.schemas import OUTING, TripMembership
 from tuttitrip.trips.services import trip_service
 
 
@@ -79,7 +79,7 @@ async def replace_requirements(
         RequirementsInvalidError: The trip is an outing (no overnight stays).
     """
     trip = await trip_service.get_trip(session, membership)
-    if trip.kind == "outing" and data.requirements:
+    if trip.kind == OUTING and data.requirements:
         msg = "An outing has no overnight stays, so it takes no lodging requirements"
         raise RequirementsInvalidError(msg)
     current = await get_requirements(session, membership.trip_id)
