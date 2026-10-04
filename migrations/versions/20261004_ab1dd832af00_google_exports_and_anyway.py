@@ -5,7 +5,7 @@ Google), ``anyway_states`` (host rejections, the model's text) and
 ``places.unique_experience``.
 
 Revision ID: ab1dd832af00
-Revises: 093e32d28baf
+Revises: 45f1174e4fc6
 Create Date: 2026-10-04 06:13:10.773881
 """
 
