@@ -1,14 +1,15 @@
 """Trip queries on PostgreSQL."""
 
-from collections.abc import Sequence
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import Select, delete, func, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.shared.db.pagination import Column, ordering, paginate
+from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips.models import Trip, TripMember
-from tuttitrip.trips.schemas import TripRole
+from tuttitrip.trips.schemas import TripFilter, TripListQuery, TripRole, TripSort
 
 
 async def insert_trip(
@@ -48,25 +49,93 @@ async def insert_member(
     await session.flush()
 
 
-async def select_trips_of_member(
-    session: AsyncSession, sub: str
-) -> Sequence[tuple[Trip, TripRole]]:
-    """Trips the user belongs to, newest first, with the user's role.
+type TripSelect = Select[Trip]
+
+SORT_COLUMNS: dict[TripSort, Column] = {
+    TripSort.CREATED_AT: Trip.created_at,
+    TripSort.START_DATE: Trip.start_date,
+    TripSort.NAME: func.lower(Trip.name),
+}
+"""Sort keys of the trip list; the client never names a column."""
+
+
+def scoped(sub: str) -> TripSelect:
+    """The trips the user belongs to (the scope of every trip list and bulk).
+
+    Args:
+        sub: Auth0 subject.
+
+    Returns:
+        A select of trips, unfiltered and unordered.
+    """
+    return (
+        select(Trip)
+        .join(TripMember, TripMember.trip_id == Trip.id)
+        .where(TripMember.user_sub == sub)
+    )
+
+
+def apply_filters(stmt: TripSelect, filters: TripFilter) -> TripSelect:
+    """Add the list filters to a select scoped by ``scoped``.
+
+    Args:
+        stmt: The scoped select.
+        filters: Validated filters.
+
+    Returns:
+        The narrowed select.
+    """
+    if filters.q:
+        stmt = stmt.where(
+            or_(
+                Trip.name.icontains(filters.q, autoescape=True),
+                Trip.destination.icontains(filters.q, autoescape=True),
+            )
+        )
+    if filters.city:
+        stmt = stmt.where(Trip.city_slug == filters.city)
+    if filters.kind:
+        outing = Trip.start_date == Trip.end_date  # NULL for undated trips
+        stmt = stmt.where(
+            outing if filters.kind == "outing" else func.coalesce(~outing, true())
+        )
+    if filters.start_from:
+        stmt = stmt.where(Trip.start_date >= filters.start_from)
+    if filters.start_to:
+        stmt = stmt.where(Trip.start_date <= filters.start_to)
+    if filters.role:
+        stmt = stmt.where(TripMember.role.in_(filters.role))
+    return stmt
+
+
+async def select_trips_page(
+    session: AsyncSession, sub: str, query: TripListQuery
+) -> tuple[Page[Trip], dict[UUID, TripRole]]:
+    """One page of the user's trips, with the user's role on each.
 
     Args:
         session: Open session.
         sub: Auth0 subject.
+        query: Paging, sort and filters.
 
     Returns:
-        ``(trip, role)`` pairs.
+        The page of trips and the user's role by trip id.
     """
-    result = await session.execute(
-        select(Trip, TripMember.role)
-        .join(TripMember, TripMember.trip_id == Trip.id)
-        .where(TripMember.user_sub == sub)
-        .order_by(Trip.created_at.desc())
+    page = await paginate(
+        session,
+        apply_filters(scoped(sub), query),
+        query,
+        ordering(SORT_COLUMNS, query.sort, Trip.id),
     )
-    return [(trip, role) for trip, role in result.tuples().all()]
+    if not page.items:
+        return page, {}
+    rows = await session.execute(
+        select(TripMember.trip_id, TripMember.role).where(
+            TripMember.user_sub == sub,
+            TripMember.trip_id.in_([trip.id for trip in page.items]),
+        )
+    )
+    return page, dict(rows.all())
 
 
 async def select_member_role(

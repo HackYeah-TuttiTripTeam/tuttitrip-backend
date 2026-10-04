@@ -10,16 +10,18 @@ from dataclasses import dataclass
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.db.api import SessionDep
+from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.schemas import (
     MemberRead,
     MemberRoleUpdate,
     TripCreate,
+    TripListQuery,
     TripMembership,
     TripRead,
     TripRole,
@@ -87,17 +89,25 @@ INVALID_TRIP: dict[int | str, dict[str, Any]] = {
 
 
 @router.get("", dependencies=[requires(Feature.TRIPS_CORE, Access.READ)])
-async def list_trips(user: CurrentUser, session: SessionDep) -> list[TripRead]:
-    """List the trips the caller belongs to, with their role on each.
+async def list_trips(
+    query: Annotated[TripListQuery, Query()], user: CurrentUser, session: SessionDep
+) -> Page[TripRead]:
+    """List a page of the caller's trips, with their role on each.
+
+    Paged, filtered and sorted on the server: `page`, `size`, `sort`
+    (`created_at` by default, `start_date`, `name`), `dir` (`desc` by default),
+    and the filters `q`, `city`, `kind`, `start_from`, `start_to` and `role`
+    (repeatable). Trips without `start_date` sort last in both directions.
 
     Args:
+        query: Paging, sort and filters.
         user: The authenticated caller.
         session: Database session.
 
     Returns:
-        Trips, newest first.
+        The page of trips.
     """
-    return await trip_service.list_trips(session, user.sub)
+    return await trip_service.list_trips(session, user.sub, query)
 
 
 @router.post(
