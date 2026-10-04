@@ -503,11 +503,7 @@ def _result(
             (day, [(v.place_id, v.start, v.end) for v in s.visits])
             for day, s in zip(trip.days, best.schedules, strict=True)
         ],
-        best.scores,
-        cost.total,
-        None
-        if stay is None
-        else {"nights": stay.nights, "price_per_night": str(stay.price_per_night)},
+        0 if stay is None else stay.nights,
     )
     return PlanResult(
         days=tuple(map(PlannedDay, trip.days, best.schedules, strict=True)),

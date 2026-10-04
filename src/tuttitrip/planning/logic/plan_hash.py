@@ -1,19 +1,23 @@
-"""Reproducible plan hash (docs/algorytm.md, E5 and section 8).
+"""Reproducible plan hash (docs/algorytm.md, E5, sections 4, 8 and 10).
 
-The hash is the first 12 hex characters of the SHA-256 of a canonical JSON:
-sorted keys, people sorted by id, visits in time order (then id), times rounded
-to 5 minutes, money as ``Decimal`` text and scores rounded to four places. The
-same plan gives the same hash in every process, whatever the order of the input
-(Python randomises string hashing per process, so nothing here iterates a set).
+The spec calls the hash a label of the *plan* ("Etykieta powtarzalności planu")
+and requires a group of ``n`` identical clones to get "exactly the same plan
+(the same hash)" as one person (section 4, test 5). So the hash covers the plan
+itself and nothing that depends on who or how many take part: the days, the
+visits in time order (then id) with their times rounded to 5 minutes, and the
+number of nights. It does not cover people, scores or amounts (the cost of ``n``
+clones is ``n`` times that of one, and their rows are ``n`` times as many).
+
+The hash is the first 12 hex characters of the SHA-256 of a canonical JSON with
+sorted keys. Nothing here iterates a set, so it is the same in every process
+(Python randomises string hashing per process).
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import date, datetime
-from decimal import Decimal
 from uuid import UUID
 
 from tuttitrip.planning.plans.logic.hashing import compute_plan_hash
-from tuttitrip.planning.schemas import DomainScores
 
 TIME_STEP_MIN = 5
 _MINUTES_PER_HOUR = 60
@@ -27,17 +31,13 @@ def _minutes(moment: datetime) -> int:
 
 def canonical_plan(
     days: Sequence[tuple[date, Sequence[tuple[UUID, datetime, datetime]]]],
-    scores: Sequence[DomainScores],
-    cost: Decimal,
-    lodging: Mapping[str, object] | None = None,
+    nights: int = 0,
 ) -> dict[str, object]:
     """The plan as JSON-ready data in canonical order.
 
     Args:
         days: Per day its date and the visits as ``(place id, start, end)``.
-        scores: ``DomainScores`` of every person.
-        cost: ``c(P)``.
-        lodging: The lodging base as JSON-ready data, or None.
+        nights: Number of nights of the lodging base (0 without one).
 
     Returns:
         Content that depends only on the plan itself.
@@ -55,40 +55,21 @@ def canonical_plan(
             }
             for day, visits in days
         ],
-        "people": [
-            {
-                "id": str(s.person_id),
-                "u": s.welfare,
-                "q": {
-                    "lodging": s.lodging,
-                    "food": s.food,
-                    "attractions": s.attractions,
-                    "pace": s.pace,
-                    "cost": s.cost,
-                },
-            }
-            for s in sorted(scores, key=lambda s: str(s.person_id))
-        ],
-        "cost": str(cost),
-        "lodging": None if lodging is None else dict(lodging),
+        "nights": nights,
     }
 
 
 def plan_hash(
     days: Sequence[tuple[date, Sequence[tuple[UUID, datetime, datetime]]]],
-    scores: Sequence[DomainScores],
-    cost: Decimal,
-    lodging: Mapping[str, object] | None = None,
+    nights: int = 0,
 ) -> str:
     """12-character hash of a plan.
 
     Args:
         days: Per day its date and the visits as ``(place id, start, end)``.
-        scores: ``DomainScores`` of every person.
-        cost: ``c(P)``.
-        lodging: The lodging base as JSON-ready data, or None.
+        nights: Number of nights of the lodging base (0 without one).
 
     Returns:
         The first 12 hex characters of the SHA-256 of the canonical JSON.
     """
-    return compute_plan_hash(canonical_plan(days, scores, cost, lodging))
+    return compute_plan_hash(canonical_plan(days, nights))
