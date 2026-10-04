@@ -56,3 +56,31 @@ async def select_by_id(
         PlanVersion.trip_id == trip_id, PlanVersion.id == plan_id
     )
     return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def select_proposal(
+    session: AsyncSession, trip_id: UUID, plan_id: UUID, digest: str | None = None
+) -> PlanVersion | None:
+    """The newest budget proposal that is an alternative of a plan version.
+
+    A proposal is a stored alternative whose ``params`` carry a ``proposal``
+    entry; the E6 ``P_strict`` alternatives do not.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+        plan_id: The plan version the proposal is an alternative of.
+        digest: Input hash to match, or None for any (the newest).
+
+    Returns:
+        The proposal, or None.
+    """
+    stmt = select(PlanVersion).where(
+        PlanVersion.trip_id == trip_id,
+        PlanVersion.alternative_of == plan_id,
+        PlanVersion.params.has_key("proposal"),
+    )
+    if digest is not None:
+        stmt = stmt.where(PlanVersion.input_hash == digest)
+    stmt = stmt.order_by(PlanVersion.created_at.desc(), PlanVersion.id).limit(1)
+    return (await session.execute(stmt)).scalar_one_or_none()

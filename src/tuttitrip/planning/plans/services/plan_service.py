@@ -45,6 +45,7 @@ from tuttitrip.planning.plans.schemas import (
 )
 from tuttitrip.planning.proposals.services import proposal_service
 from tuttitrip.planning.schemas import PlanningInput, WhatIfTarget
+from tuttitrip.planning.services.solver_service import configured_solver
 from tuttitrip.profiles.feedback.services import feedback_service
 from tuttitrip.profiles.preferences.schemas import PreferencesRead
 from tuttitrip.profiles.preferences.services import preference_service
@@ -220,7 +221,9 @@ def _compute(
     # Runs in a worker thread: N solo runs, the group plan and, when the plan goes
     # over B_do, P_strict and the cheaper alternative (E6).
     started = time.perf_counter()
-    decision = plan_with_consent(planning, DEFAULT_PARAMS, alpha=alpha)
+    decision = plan_with_consent(
+        planning, DEFAULT_PARAMS, alpha=alpha, solver=configured_solver().solver
+    )
     chosen = decision.chosen
     verdicts = build_verdicts(planning, chosen.plan.place_ids)
     upgrades = find_upgrades(planning, chosen, DEFAULT_PARAMS, alpha=alpha)
@@ -292,7 +295,9 @@ async def generate_plan(
     planning, names, trip_alpha = await gather_input(session, membership, assumptions)
     alpha = trip_alpha if data is None or data.alpha is None else data.alpha
     preset = (data or PlanCreate()).weight_preset
-    digest = input_hash(planning, alpha, preset.value, DEFAULT_PARAMS)
+    digest = input_hash(
+        planning, alpha, preset.value, DEFAULT_PARAMS, configured_solver().tag
+    )
 
     latest = await db.select_latest(session, membership.trip_id)
     if latest is not None and _is_current(latest, digest, draft=draft):

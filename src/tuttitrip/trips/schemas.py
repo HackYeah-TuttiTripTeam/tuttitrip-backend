@@ -71,6 +71,9 @@ FLEX = (
     "B_max = B_do * (1 + flex_pct / 100)."
 )
 ALPHA = "Group goal alpha of E5 (0-3); 1 balances fairness and total utility."
+CHEAPER = (
+    "Propose cheaper days when a day goes over its budget (backend#89); on by default."
+)
 Money = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)]
 
 
@@ -109,6 +112,7 @@ _REQUIRED_WHEN_SENT = (
     "day_end",
     "budget_flex_pct",
     "fairness_alpha",
+    "propose_cheaper_alternatives",
 )
 # (lower, upper, order error code) pairs: both set or both empty (E6: B_od <= B_do).
 _PAIRS = (
@@ -200,6 +204,7 @@ class TripUpdate(BaseModel):
     budget_day_max: Money | None = None
     budget_flex_pct: int | None = Field(default=None, ge=0, le=50, description=FLEX)
     fairness_alpha: float | None = Field(default=None, ge=0, le=3, description=ALPHA)
+    propose_cheaper_alternatives: bool | None = Field(default=None, description=CHEAPER)
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -216,6 +221,7 @@ class TripCreate(TripUpdate):
     """
 
     name: str = Field(min_length=1, max_length=200)
+    propose_cheaper_alternatives: bool | None = Field(default=True, description=CHEAPER)
 
     # Overrides the inherited ``_check`` (same name replaces the validator):
     # a create body is a whole trip, so pairs are required (complete=True).
@@ -247,6 +253,7 @@ class TripDetails(BaseModel):
     budget_day_max: Decimal | None
     budget_flex_pct: int = Field(description=FLEX)
     fairness_alpha: float = Field(description=ALPHA)
+    propose_cheaper_alternatives: bool = Field(default=True, description=CHEAPER)
 
     @computed_field
     @property

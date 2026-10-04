@@ -481,6 +481,13 @@ class PlanTelemetry(BaseModel):
     """How the plan was computed."""
 
     solver: str = Field(description="Solver name and version.")
+    status: str | None = Field(
+        default=None,
+        description=(
+            "Status of the solver that has one (CP-SAT: OPTIMAL, FEASIBLE, or "
+            "UNKNOWN when the local search took over); null for the local search."
+        ),
+    )
     steps: int = Field(ge=0)
     solo_runs: int = Field(ge=0)
     elapsed_ms: int = Field(ge=0)

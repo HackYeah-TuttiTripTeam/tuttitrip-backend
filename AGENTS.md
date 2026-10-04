@@ -60,6 +60,8 @@ src/tuttitrip/
   interview/           AI interview: AG-UI endpoint, tools, question order, voice
   planning/            planner agent; subdomains fairness/ and linter/
                        algorithm spec (canonical for planning/**/logic): docs/algorytm.md
+                       solvers: logic/solver.py (local search, default) and logic/cpsat.py
+                       (OR-Tools CP-SAT, `TUTTITRIP_PLANNING__SOLVER=cp_sat`), one `Solver` interface
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)

@@ -34,6 +34,7 @@ from tuttitrip.planning.overrides.schemas import (
 from tuttitrip.planning.plans.schemas import ConflictCode, PlanConflict
 from tuttitrip.planning.plans.services import plan_service
 from tuttitrip.planning.schemas import PlanningInput
+from tuttitrip.planning.services.solver_service import configured_solver
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.trips.schemas import TripMembership
 
@@ -95,9 +96,12 @@ def _minutes(group: GroupPlan) -> int:
 def _compute(
     planning: PlanningInput, changed: PlanningInput, alpha: float
 ) -> DecisionEffects:
-    base = plan_group(planning, DEFAULT_PARAMS, alpha=alpha)
+    solver = configured_solver().solver
+    base = plan_group(planning, DEFAULT_PARAMS, alpha=alpha, solver=solver)
     reference = {r.person_id: r.u_star for r in base.people}
-    with_decision = plan_group(changed, DEFAULT_PARAMS, alpha=alpha, u_star=reference)
+    with_decision = plan_group(
+        changed, DEFAULT_PARAMS, alpha=alpha, u_star=reference, solver=solver
+    )
     return _effects(base, with_decision)
 
 
