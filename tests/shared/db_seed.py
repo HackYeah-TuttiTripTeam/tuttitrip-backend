@@ -4,12 +4,14 @@ For the integration tests (`pytest -m integration`): the city and places are
 written once and removed at the end; the people go in through the public API.
 """
 
-import httpx
-from sqlalchemy import delete
+from decimal import Decimal
 
-from tests.fixtures.city import CITY_SLUG, city, place_id, places
+import httpx
+from sqlalchemy import delete, select
+
+from tests.fixtures.city import CHECKED_AT, CITY_SLUG, city, place_id, places
 from tests.fixtures.personas import Persona
-from tuttitrip.places.models import City, Place, PlacePrice
+from tuttitrip.places.models import City, Place, PlacePrice, TransitFare
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.shared.db.session import get_sessionmaker
 
@@ -71,6 +73,29 @@ async def seed_city() -> None:
                 )
                 for price in place.prices
             )
+        if not (
+            await session.execute(
+                select(TransitFare).where(TransitFare.city_slug == CITY_SLUG)
+            )
+        ).first():
+            session.add_all(
+                TransitFare(
+                    city_slug=CITY_SLUG,
+                    ticket_type=ticket,
+                    person_category=category,
+                    amount=Decimal(amount),
+                    currency="PLN",
+                    source_url="https://example.test/taryfa",
+                    verified=True,
+                    checked_at=CHECKED_AT,
+                )
+                for ticket, category, amount in (
+                    ("single", "adult", "4"),
+                    ("24h", "adult", "15"),
+                    ("single", "child", "2"),
+                    ("24h", "child", "8"),
+                )
+            )
         await session.commit()
 
 
@@ -78,6 +103,9 @@ async def unseed_city() -> None:
     async with get_sessionmaker()() as session:
         # Prices and ratings go with the places (ON DELETE CASCADE).
         await session.execute(delete(Place).where(Place.city_slug == CITY_SLUG))
+        await session.execute(
+            delete(TransitFare).where(TransitFare.city_slug == CITY_SLUG)
+        )
         await session.execute(delete(City).where(City.slug == CITY_SLUG))
         await session.commit()
 

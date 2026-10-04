@@ -10,8 +10,11 @@ person. A person pays the cheapest ticket that applies to their age: ``adult``
 always, ``child`` and ``senior`` inside the row's age bounds (defaults: child up
 to 17, senior from 65). A ``group`` row covers the whole group for any size; a
 place with both kinds charges the cheaper of the group ticket and the sum of the
-person tickets. ``family`` and ``student`` rows are not used (no input for them),
-and rows in another currency or charged per night are ignored. Ties between
+person tickets. A ``family`` ticket (``family_size`` people, default 4) is used
+when it is cheaper for the group than the person tickets: ``ceil(n / size)`` of
+them, and the cost per person is that total divided equally (a product decision).
+``student`` rows are not used (no student flag in the input), and rows in another
+currency or charged per night are ignored. Ties between
 tickets are broken by ``(charged amount, listed amount)``. Amounts are
 ``Decimal`` rounded half up to cents; the markup applies only here, the UI shows
 ``base`` and ``total`` side by side.
@@ -27,6 +30,7 @@ unpriced places by treating them as free.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from operator import itemgetter
 from uuid import UUID
 
 from tuttitrip.places.schemas import (
@@ -45,9 +49,21 @@ from tuttitrip.planning.schemas import (
 
 DEFAULT_CHILD_MAX_AGE = 17
 DEFAULT_SENIOR_MIN_AGE = 65
+DEFAULT_FAMILY_SIZE = 4
+"""Family ticket without ``family_size``: 2 adults and 2 children."""
 NO_UPPER_AGE = 200
 """Upper age bound of a senior row without ``age_max``."""
 _CENT = Decimal("0.01")
+
+
+@dataclass(frozen=True, slots=True)
+class PersonPrice:
+    """What one person pays at a place, after the unverified-price markup."""
+
+    person_id: UUID
+    price: Decimal
+    discount: str
+    """``none``, ``child``, ``senior``, ``student``, ``free`` or ``family``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +76,10 @@ class PlaceCost:
     """The same with the prices as given."""
     complete: bool
     """False when somebody (or everybody) could not be priced."""
+    lines: tuple[PersonPrice, ...] = ()
+    """The price of each person who could be priced."""
+    family_singles_total: Decimal | None = None
+    """When a family ticket was chosen: what the group pays with single tickets."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,25 +142,89 @@ def place_cost(
     """
     delta = Decimal(str(params.unverified_markup))
     rows = [r for r in place.prices if r.currency == currency]
-    group_rows = [r for r in rows if r.unit is PriceUnit.GROUP]
+    family_rows = [
+        r
+        for r in rows
+        if r.ticket_category is TicketCategory.FAMILY and r.unit is not PriceUnit.NIGHT
+    ]
+    group_rows = [
+        r
+        for r in rows
+        if r.unit is PriceUnit.GROUP and r.ticket_category is not TicketCategory.FAMILY
+    ]
     person_rows = [r for r in rows if r.unit is PriceUnit.PERSON]
 
+    total, base, complete, lines = _by_person(person_rows, people, delta)
+    # Other ways to pay for everybody at once: a group ticket, family tickets.
+    alternatives: list[tuple[Decimal, Decimal, str]] = []
+    if group_rows:
+        group = _cheapest(group_rows, delta)
+        alternatives.append((_charged(group, delta), group.amount, "none"))
+    if family_rows:
+        best = min(
+            ((_family_total(r, len(people), delta), r) for r in family_rows),
+            key=lambda pair: (pair[0], pair[1].amount),
+        )
+        alternatives.append(
+            (best[0], best[1].amount * _family_count(best[1], len(people)), "family")
+        )
+    if alternatives:
+        cheapest = min(alternatives, key=itemgetter(0, 1))
+        if not complete or cheapest[0] < total:
+            share = cheapest[0] / len(people)
+            return PlaceCost(
+                cheapest[0],
+                cheapest[1],
+                complete=True,
+                lines=tuple(PersonPrice(p.id, share, cheapest[2]) for p in people),
+                family_singles_total=total
+                if cheapest[2] == "family" and complete
+                else None,
+            )
+    return PlaceCost(total, base, complete=complete, lines=tuple(lines))
+
+
+def _by_person(
+    person_rows: Sequence[PlacePriceRead],
+    people: Sequence[PlanningPerson],
+    delta: Decimal,
+) -> tuple[Decimal, Decimal, bool, list[PersonPrice]]:
+    # Each person pays the cheapest ticket of their age; (total, base, complete, lines).
     total = base = Decimal(0)
-    complete = True
+    lines: list[PersonPrice] = []
     for person in people:
         fitting = [r for r in person_rows if _applies(r, person.age)]
         if not fitting:
-            complete = False
             continue
         row = _cheapest(fitting, delta)
         total += _charged(row, delta)
         base += row.amount
-    if group_rows:
-        group = _cheapest(group_rows, delta)
-        group_total = _charged(group, delta)
-        if not complete or group_total < total:
-            return PlaceCost(group_total, group.amount, complete=True)
-    return PlaceCost(total, base, complete=complete)
+        lines.append(PersonPrice(person.id, _charged(row, delta), _discount(row)))
+    return total, base, len(lines) == len(people), lines
+
+
+def _discount(row: PlacePriceRead) -> str:
+    if row.amount == 0:
+        return "free"
+    match row.ticket_category:
+        case TicketCategory.CHILD:
+            return "child"
+        case TicketCategory.SENIOR:
+            return "senior"
+        case TicketCategory.STUDENT:
+            return "student"
+        case _:
+            return "none"
+
+
+def _family_count(row: PlacePriceRead, people: int) -> int:
+    # Family tickets needed to cover everybody (2+2 = 4 people unless the row says).
+    size = row.family_size or DEFAULT_FAMILY_SIZE
+    return -(-people // size)
+
+
+def _family_total(row: PlacePriceRead, people: int, delta: Decimal) -> Decimal:
+    return _charged(row, delta) * _family_count(row, people)
 
 
 def plan_cost(  # ruff: ignore[too-many-arguments] the whole input of E6
@@ -149,7 +233,7 @@ def plan_cost(  # ruff: ignore[too-many-arguments] the whole input of E6
     people: Sequence[PlanningPerson],
     *,
     trip: PlanningTrip,
-    lodging: LodgingStay | None,
+    lodging: LodgingStay | Decimal | None,
     params: AlgorithmParams = DEFAULT_PARAMS,
 ) -> PlanCost:
     """Cost of a plan for the whole group.
@@ -159,7 +243,8 @@ def plan_cost(  # ruff: ignore[too-many-arguments] the whole input of E6
         places: Places by id.
         people: Everybody on the trip (all pay for every place).
         trip: Gives the currency and whether the trip has nights.
-        lodging: The lodging base; given exactly when ``trip.has_lodging``.
+        lodging: The lodging base, or its whole cost over all nights; given
+            exactly when ``trip.has_lodging``.
         params: Algorithm parameters (``unverified_markup``, delta).
 
     Returns:
@@ -182,7 +267,11 @@ def plan_cost(  # ruff: ignore[too-many-arguments] the whole input of E6
             if not cost.complete:
                 unknown.append(pid)
     if lodging is not None:
-        stay = lodging.price_per_night * lodging.nights
+        stay = (
+            lodging
+            if isinstance(lodging, Decimal)
+            else lodging.price_per_night * lodging.nights
+        )
         total += stay
         base += stay
     return PlanCost(

@@ -9,7 +9,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from tuttitrip.places.schemas import PlaceRead, PlaceTag
+from tuttitrip.accommodation.schemas import RequirementStatus
+from tuttitrip.places.schemas import PlaceRead, PlaceTag, TransitFareRead
 from tuttitrip.profiles.feedback.schemas import ReasonCode
 from tuttitrip.profiles.preferences.schemas import ImportancePool, MinTag
 from tuttitrip.shared.jobs.contracts import ProviderName
@@ -121,6 +122,14 @@ class PlanningInput(_Frozen):
     people: tuple[PlanningPerson, ...] = Field(min_length=1)
     places: tuple[PlaceRead, ...]
     must: frozenset[UUID] = frozenset()
+    lodgings: tuple[LodgingOption, ...] = Field(
+        default=(),
+        description="Options for the lodging base; the solver picks one (section 9).",
+    )
+    fares: tuple[TransitFareRead, ...] = Field(
+        default=(),
+        description="The city's public transport tariff (shown, never in c(P)).",
+    )
     blocked: frozenset[UUID] = Field(
         default=frozenset(), description="Places the host blocked (E0, like a veto)."
     )
@@ -159,15 +168,42 @@ class DayPlan(_Frozen):
     active_min: int = Field(default=0, ge=0)
 
 
+class LodgingOutcome(_Frozen):
+    """One requirement of the trip checked against a lodging (3-state contract)."""
+
+    feature: str
+    hard: bool
+    status: RequirementStatus
+
+
+class LodgingOption(_Frozen):
+    """A place to sleep: its night price and how it meets the requirements (E2).
+
+    ``outcomes`` are the trip's requirements checked against this option; hard
+    ones multiply into ``S_h``, soft ones average (met 1, unconfirmed 0.4,
+    unmet 0). The night price is taken as given: E6 has no markup for lodging.
+    """
+
+    place_id: UUID
+    name: str
+    lat: float
+    lon: float
+    price_per_night: Decimal = Field(ge=0)
+    verified: bool = False
+    outcomes: tuple[LodgingOutcome, ...] = ()
+
+
 class LodgingStay(_Frozen):
-    """The one lodging base of the trip (docs/algorytm.md, section 9).
+    """The lodging base of the trip as a single price (docs/algorytm.md, section 9).
 
     The night price is taken as given: E6 has no markup for lodging, so an
-    unverified night price is not raised by ``delta``.
+    unverified night price is not raised by ``delta``. ``place_id`` is set when
+    the base is a catalog place.
     """
 
     nights: int = Field(gt=0)
     price_per_night: Decimal = Field(ge=0)
+    place_id: UUID | None = None
 
 
 class DomainScores(_Frozen):

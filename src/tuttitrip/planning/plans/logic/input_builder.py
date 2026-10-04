@@ -13,7 +13,7 @@ database. Choices where the data has gaps:
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
@@ -21,9 +21,22 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from tuttitrip.places.schemas import CityRead, PlaceRead
+from tuttitrip.accommodation.schemas import (
+    OfferFeatures,
+    RequirementItem,
+    RequirementStatus,
+)
+from tuttitrip.places.schemas import (
+    CityRead,
+    PlaceCategory,
+    PlaceRead,
+    PriceUnit,
+    TransitFareRead,
+)
 from tuttitrip.planning.logic.params import AlgorithmParams
 from tuttitrip.planning.schemas import (
+    LodgingOption,
+    LodgingOutcome,
     PlanningInput,
     PlanningPerson,
     PlanningTrip,
@@ -50,6 +63,83 @@ class PlanInputError(Exception):
     """The trip lacks something a plan needs (dates or a city)."""
 
 
+def offer_status(feature: str, offer: OfferFeatures) -> RequirementStatus:
+    """The 3-state contract: present is met, absent unmet, otherwise unconfirmed.
+
+    Args:
+        feature: Requirement key (an amenity).
+        offer: What is known about the offer.
+
+    Returns:
+        The status of the requirement for this offer.
+    """
+    if feature in offer.present:
+        return RequirementStatus.MET
+    if feature in offer.absent:
+        return RequirementStatus.UNMET
+    return RequirementStatus.UNCONFIRMED
+
+
+def lodging_options(
+    places: Sequence[PlaceRead],
+    requirements: Sequence[RequirementItem],
+    currency: str,
+    features: Mapping[UUID, OfferFeatures] | None = None,
+) -> tuple[LodgingOption, ...]:
+    """The catalog's lodging places as options with the trip's requirements checked.
+
+    The night price is the cheapest ``night`` row in the trip currency; a place
+    without one is not an option. What is known about the amenities comes from
+    ``features`` (confirmed present and absent, e.g. from a checked offer) or,
+    without it, from the place's amenity list: the listed ones are present and
+    the rest stay unconfirmed. Only amenity requirements apply to a catalog place.
+
+    Args:
+        places: The city's places (lodging ones are used).
+        requirements: The trip's requirements.
+        currency: Trip currency.
+        features: Known present and absent features by place id, or None.
+
+    Returns:
+        The options in place id order.
+    """
+    wanted = [r for r in requirements if r.kind.value == "amenity"]
+    options: list[LodgingOption] = []
+    for place in sorted(places, key=lambda p: str(p.id)):
+        if place.category is not PlaceCategory.LODGING:
+            continue
+        rows = [
+            r
+            for r in place.prices
+            if r.unit is PriceUnit.NIGHT and r.currency == currency
+        ]
+        if not rows:
+            continue
+        cheapest = min(rows, key=lambda r: (r.amount, str(r.ticket_category)))
+        offer = (features or {}).get(place.id) or OfferFeatures(
+            present={a.value for a in place.amenities}
+        )
+        options.append(
+            LodgingOption(
+                place_id=place.id,
+                name=place.name,
+                lat=place.lat,
+                lon=place.lon,
+                price_per_night=cheapest.amount,
+                verified=cheapest.verified,
+                outcomes=tuple(
+                    LodgingOutcome(
+                        feature=r.key,
+                        hard=r.hard,
+                        status=offer_status(r.key, offer),
+                    )
+                    for r in wanted
+                ),
+            )
+        )
+    return tuple(options)
+
+
 def trip_days(start: date, end: date) -> tuple[date, ...]:
     """Every date of the trip.
 
@@ -73,6 +163,8 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
     places: Sequence[PlaceRead],
     must: frozenset[UUID] = frozenset(),
     blocked: frozenset[UUID] = frozenset(),
+    lodgings: Sequence[LodgingOption] = (),
+    fares: Sequence[TransitFareRead] = (),
 ) -> PlanningInput:
     """Assemble ``PlanningInput`` from the trip, its people and the catalog.
 
@@ -85,6 +177,9 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
         places: The city's places.
         must: Places the host forces into the plan (E0).
         blocked: Places the host blocked (E0).
+        fares: The city's public transport tariff, for the information on tickets.
+        lodgings: Lodging options for the base (section 9); with none the lodging
+            domain does not apply.
 
     Returns:
         The input of the algorithm.
@@ -147,13 +242,15 @@ def build_input(  # ruff: ignore[too-many-arguments] the data of five domains
             budget_from=trip.budget_total_min or Decimal(0),
             budget_to=trip.budget_total_max if has_budget else NO_BUDGET,
             flex_pct=trip.budget_flex_pct,
-            has_lodging=False,  # ponytail: needs a chosen base, arrives with #70
+            has_lodging=bool(lodgings) and trip.end_date > trip.start_date,
             currency=trip.currency or city.currency,
         ),
         people=tuple(people),
         places=tuple(sorted(places, key=lambda p: str(p.id))),
         must=must,
         blocked=blocked,
+        lodgings=tuple(lodgings),
+        fares=tuple(fares),
     )
 
 

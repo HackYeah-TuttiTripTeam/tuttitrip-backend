@@ -68,6 +68,16 @@ class AlgorithmParams:
     """Extension, outside v1.0: ``V_p`` from which a place "fits" (backend#51)."""
     verdict_iconic: Annotated[float, Field(ge=-1, le=1)] = -0.3
     """Extension, outside v1.0: lowest ``V_p`` of "iconic, but not yours"."""
+    max_exceptional_nights: Annotated[int, Field(ge=0, le=30)] = 0
+    """Extension, outside v1.0 (backend#71): nights that may use another base."""
+    rain_outdoor_factor: Unit = 0.3
+    """Extension, outside v1.0 (backend#74): ``u_ip`` factor outdoors in rain."""
+    rain_indoor_weight: Unit = 0.7
+    """Extension: ``u_ip * (outdoor_factor + indoor_weight * [indoor])`` in rain."""
+    replan_change_penalty: Annotated[float, Field(ge=0, le=100)] = 0.2
+    """Extension: ``J_replan`` loses this much per place added or removed."""
+    replan_shift_penalty: Annotated[float, Field(ge=0, le=10)] = 0.001
+    """Extension: ``J_replan`` loses this much per minute a kept visit moves."""
     own_place_match: Unit = 0.6
     """``m_ip`` from which a place counts as the person's own (E5)."""
     stairs_limit: Annotated[float, Field(gt=0, le=1)] = 0.9

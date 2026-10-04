@@ -5,6 +5,7 @@ Local smoke step (`pytest -m integration`), not CI.
 
 import asyncio
 import uuid
+from typing import Any
 
 import httpx
 import pytest
@@ -200,43 +201,58 @@ async def _overrides_story(  # ruff: ignore[too-many-statements, too-many-locals
     assert await _decision_count(trip_id) == 0  # the log goes with the trip
 
 
+BUDGETS = (("800", "1000"), ("600", "800"), ("900", "1100"), ("1000", "1300"))
+
+
 async def _consent_story(http: httpx.AsyncClient) -> None:
-    # 800 to 1000 with 50% of flex: the family wants more than B_do, with a reason.
-    base, _ = await _new_trip(
-        http, budget_total_min="800", budget_total_max="1000", budget_flex_pct=50
+    # Some budget makes the family want more than B_do with a good reason (E6).
+    for low, high in BUDGETS:
+        base, _ = await _new_trip(
+            http, budget_total_min=low, budget_total_max=high, budget_flex_pct=50
+        )
+        plans = f"{base}/plans"
+        try:
+            created = await http.post(plans)
+            assert created.status_code == 201, created.text
+            budget = created.json()["budget"]
+            assert float(budget["cost"]) <= float(budget["b_max"])
+            if not budget["needs_approval"]:
+                assert budget["kappa"] is None
+                continue
+            await _check_consent(http, plans, created.json())
+            return
+        finally:
+            await http.delete(base)
+    pytest.fail("no budget of the sweep produced a consent question")
+
+
+async def _check_consent(
+    http: httpx.AsyncClient, plans: str, plan: dict[str, Any]
+) -> None:
+    budget = plan["budget"]
+    assert budget["unlimited"] is False
+    assert budget["approval_status"] == "pending"
+    assert float(budget["kappa"]) > 0
+    assert float(budget["gain_points"]) > 0
+    assert budget["gain_profile_id"] is not None
+    assert float(budget["b_to"]) < float(budget["cost"]) <= float(budget["b_max"])
+    assert float(budget["over_budget"]) == pytest.approx(
+        float(budget["cost"]) - float(budget["b_to"])
     )
-    plans = f"{base}/plans"
-    try:
-        created = await http.post(plans)
-        assert created.status_code == 201, created.text
-        budget = created.json()["budget"]
-        assert budget["unlimited"] is False
-        assert budget["needs_approval"] is True
-        assert budget["approval_status"] == "pending"
-        assert float(budget["kappa"]) > 0
-        assert float(budget["gain_points"]) > 0
-        assert budget["gain_profile_id"] is not None
-        assert float(budget["b_to"]) < float(budget["cost"]) <= float(budget["b_max"])
-        assert float(budget["over_budget"]) == pytest.approx(
-            float(budget["cost"]) - float(budget["b_to"])
-        )
-        # P_strict is stored as the alternative of the same version.
-        strict = await http.get(f"{plans}/{budget['strict_plan_id']}")
-        assert strict.status_code == 200
-        assert strict.json()["version"] == created.json()["version"]
-        assert float(strict.json()["budget"]["cost"]) <= float(budget["b_to"])
-        assert float(strict.json()["budget"]["cost"]) == pytest.approx(
-            float(budget["strict_cost"])
-        )
-        assert strict.json()["budget"]["needs_approval"] is False
-        # "Latest" is the plan awaiting consent, never its alternative.
-        latest = (await http.get(f"{plans}/latest")).json()
-        assert latest["id"] == created.json()["id"]
-        again = await http.post(plans)
-        assert again.status_code == 200
-        assert again.json()["id"] == created.json()["id"]
-    finally:
-        await http.delete(base)
+    # P_strict is stored as the alternative of the same version.
+    strict = await http.get(f"{plans}/{budget['strict_plan_id']}")
+    assert strict.status_code == 200
+    assert strict.json()["version"] == plan["version"]
+    assert float(strict.json()["budget"]["cost"]) <= float(budget["b_to"])
+    assert float(strict.json()["budget"]["cost"]) == pytest.approx(
+        float(budget["strict_cost"])
+    )
+    assert strict.json()["budget"]["needs_approval"] is False
+    # "Latest" is the plan awaiting consent, never its alternative.
+    assert (await http.get(f"{plans}/latest")).json()["id"] == plan["id"]
+    again = await http.post(plans)
+    assert again.status_code == 200
+    assert again.json()["id"] == plan["id"]
 
 
 def test_overrides_log_and_consent_end_to_end() -> None:

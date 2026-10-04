@@ -10,26 +10,34 @@ from collections.abc import Mapping, Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from uuid import UUID
 
+from tuttitrip.accommodation.schemas import RequirementStatus
 from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.planning.fairness.logic.violations import days_without_own_place
 from tuttitrip.planning.fairness.schemas import ConflictCode as FairnessConflict
 from tuttitrip.planning.logic.budget_consent import BudgetDecision
 from tuttitrip.planning.logic.cost import place_cost
+from tuttitrip.planning.logic.domains import RequirementOutcome, lodging_score
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 from tuttitrip.planning.logic.plan_group import GroupPlan, PersonReference
+from tuttitrip.planning.logic.pricing import day_tickets, transit_cost
+from tuttitrip.planning.logic.schedule import ScheduledVisit
 from tuttitrip.planning.logic.solver import PlannedDay, PlanResult, SolverConflict
 from tuttitrip.planning.logic.upgrades import Upgrade
 from tuttitrip.planning.logic.utility import explain, match, place_domain
 from tuttitrip.planning.plans.logic.input_builder import NO_BUDGET
+from tuttitrip.planning.plans.logic.search_area import search_area
 from tuttitrip.planning.plans.schemas import (
     ApprovalStatus,
     BudgetZone,
     ConflictCode,
     Currency,
+    ExceptionalNight,
     ExplainEntry,
+    FamilyTicket,
     FloorMiss,
     FloorMissKind,
     PersonFairness,
+    PersonPoints,
     PlaceKind,
     PlanBudget,
     PlanConflict,
@@ -37,12 +45,21 @@ from tuttitrip.planning.plans.schemas import (
     PlanDomainCode,
     PlanDomainScore,
     PlanFairness,
+    PlanLodging,
     PlanStop,
     PlanTelemetry,
+    PlanTransit,
     PlanUpgrade,
     PlanVerdict,
+    PriceDiscount,
+    PriceLine,
+    RequirementState,
+    SearchArea,
     StopTransfer,
     TransferMode,
+    TransitCategoryTicket,
+    TransitTicket,
+    TransitTicketKind,
 )
 from tuttitrip.planning.schemas import (
     DayPlan,
@@ -102,58 +119,96 @@ def _weakest(domains: Sequence[PlanDomainScore]) -> PlanDomainCode | None:
     return min(applicable, key=lambda d: d.q or 0.0).domain
 
 
+def day_stops(
+    data: PlanningInput,
+    visits: Sequence[ScheduledVisit],
+    places: Mapping[UUID, PlaceRead],
+) -> list[PlanStop]:
+    """The stops of one day with prices and their provenance.
+
+    Args:
+        data: The planning input (people, currency).
+        visits: The scheduled visits of the day.
+        places: Places by id.
+
+    Returns:
+        One ``PlanStop`` per visit, in order.
+    """
+    people = data.people
+    currency = data.trip.currency
+    items: list[PlanStop] = []
+    for number, visit in enumerate(visits):
+        place = places[visit.place_id]
+        cost = place_cost(place, people, currency)
+        rows = [r for r in place.prices if r.currency == currency]
+        priced = bool(rows) and cost.complete
+        share = Decimal(len(people))
+        items.append(
+            PlanStop(
+                place_id=place.id,
+                name=place.name,
+                kind=PlaceKind.FOOD
+                if place_domain(place) is ImportanceDomain.FOOD
+                else PlaceKind.ATTRACTION,
+                address=place.address,
+                lat=place.lat,
+                lon=place.lon,
+                start=visit.start.time(),
+                end=visit.end.time(),
+                transfer=None
+                if number == 0
+                else StopTransfer(
+                    minutes=visit.transfer_min, mode=TransferMode.WALK, cost=None
+                ),
+                cost_per_person=_money(cost.total / share) if priced else None,
+                price_base=_money(cost.base / share) if priced else None,
+                price_inflated=_money(cost.total / share) if priced else None,
+                price_verified=priced and all(r.verified for r in rows),
+                price_source_url=next(
+                    (r.source_url for r in rows if r.source_url), None
+                ),
+                price_verified_at=next(
+                    (r.checked_at for r in rows if r.checked_at), None
+                ),
+                hours_verified=place.hours.verified,
+                hours_source_url=place.hours.source_url,
+                hours_verified_at=place.hours.checked_at,
+                price_lines=[
+                    PriceLine(
+                        profile_id=line.person_id,
+                        price=_money(line.price),
+                        discount=PriceDiscount(line.discount),
+                    )
+                    for line in cost.lines
+                ]
+                if priced
+                else None,
+                family_ticket=FamilyTicket(
+                    total=_money(cost.total),
+                    singles_total=_money(cost.family_singles_total),
+                )
+                if priced and cost.family_singles_total is not None
+                else None,
+                google_place_id=place.google_place_id,
+            )
+        )
+    return items
+
+
 def _stops(
     data: PlanningInput,
     plan: PlanResult,
     places: Mapping[UUID, PlaceRead],
     first_day: int = 1,
 ) -> list[PlanDay]:
-    people = data.people
-    currency = data.trip.currency
-    days: list[PlanDay] = []
-    for index, planned in enumerate(plan.days, start=first_day):
-        items: list[PlanStop] = []
-        for number, visit in enumerate(planned.schedule.visits):
-            place = places[visit.place_id]
-            cost = place_cost(place, people, currency)
-            rows = [r for r in place.prices if r.currency == currency]
-            priced = bool(rows) and cost.complete
-            share = Decimal(len(people))
-            items.append(
-                PlanStop(
-                    place_id=place.id,
-                    name=place.name,
-                    kind=PlaceKind.FOOD
-                    if place_domain(place) is ImportanceDomain.FOOD
-                    else PlaceKind.ATTRACTION,
-                    address=place.address,
-                    lat=place.lat,
-                    lon=place.lon,
-                    start=visit.start.time(),
-                    end=visit.end.time(),
-                    transfer=None
-                    if number == 0
-                    else StopTransfer(
-                        minutes=visit.transfer_min, mode=TransferMode.WALK, cost=None
-                    ),
-                    cost_per_person=_money(cost.total / share) if priced else None,
-                    price_base=_money(cost.base / share) if priced else None,
-                    price_inflated=_money(cost.total / share) if priced else None,
-                    price_verified=priced and all(r.verified for r in rows),
-                    price_source_url=next(
-                        (r.source_url for r in rows if r.source_url), None
-                    ),
-                    price_verified_at=next(
-                        (r.checked_at for r in rows if r.checked_at), None
-                    ),
-                    hours_verified=place.hours.verified,
-                    hours_source_url=place.hours.source_url,
-                    hours_verified_at=place.hours.checked_at,
-                    google_place_id=place.google_place_id,
-                )
-            )
-        days.append(PlanDay(index=index, date=planned.day, items=items))
-    return days
+    return [
+        PlanDay(
+            index=index,
+            date=planned.day,
+            items=day_stops(data, planned.schedule.visits, places),
+        )
+        for index, planned in enumerate(plan.days, start=first_day)
+    ]
 
 
 def _fairness(
@@ -262,6 +317,15 @@ def _conflicts(
         PlanConflict(reason_code=ConflictCode.UNKNOWN_PRICE, place_id=pid)
         for pid in plan.cost.unknown_price_place_ids
     )
+    if plan.lodging and any(
+        o.hard and o.status is RequirementStatus.UNMET for o in plan.lodging[0].outcomes
+    ):
+        found.append(
+            PlanConflict(
+                reason_code=ConflictCode.LODGING_HARD_REQUIREMENT,
+                place_id=plan.lodging[0].place_id,
+            )
+        )
     found.extend(
         PlanConflict(
             reason_code=ConflictCode.FLOOR_UNREACHABLE,
@@ -272,6 +336,90 @@ def _conflicts(
         if row.floor_eff < row.floor
     )
     return found
+
+
+def _lodging(
+    data: PlanningInput, plan: PlanResult, places: Mapping[UUID, PlaceRead]
+) -> PlanLodging | None:
+    nights = plan.lodging
+    if not nights:
+        return None
+    base = nights[0]
+    outcomes = [RequirementOutcome(o.hard, o.status) for o in base.outcomes]
+    area = search_area([places[v.place_id] for v in plan.all_visits])
+    delta = plan.lodging_delta
+    by_id = {p.id: p for p in data.people}
+    return PlanLodging(
+        place_id=base.place_id if base.place_id.int else None,
+        search_area=None
+        if area is None
+        else SearchArea(lat=area[0], lon=area[1], radius_m=area[2]),
+        exceptional=[
+            ExceptionalNight(
+                night=n, place_id=nights[n - 1].place_id, name=nights[n - 1].name
+            )
+            for n in (delta.nights if delta else ())
+        ],
+        extra_cost=_money(delta.extra_cost) if delta else None,
+        extra_points=[
+            PersonPoints(profile_id=pid, points=points)
+            for pid, points in (delta.extra_points if delta else ())
+            if pid in by_id
+        ],
+        name=base.name,
+        lat=base.lat,
+        lon=base.lon,
+        nights=len(nights),
+        cost_total=_money(sum((o.price_per_night for o in nights), Decimal(0))),
+        s_h=lodging_score(outcomes) / 100,
+        requirements=[
+            RequirementState(feature=o.feature, hard=o.hard, status=o.status)
+            for o in base.outcomes
+        ],
+    )
+
+
+def _transit(data: PlanningInput, plan: PlanResult) -> PlanTransit:
+    cost = transit_cost(
+        [max(0, len(d.schedule.visits) - 1) for d in plan.days],
+        data.people,
+        data.fares,
+        data.trip.currency,
+    )
+    return PlanTransit(
+        total=None if cost.total is None else _money(cost.total),
+        verified=cost.verified,
+        source_url=cost.source_url,
+        rides_per_day=list(cost.rides_per_day),
+        by_category=[
+            TransitCategoryTicket(
+                category=t.category,
+                ticket_type=t.ticket_type,
+                count=t.count,
+                people=t.people,
+                cost=_money(t.cost),
+            )
+            for t in cost.tickets
+        ],
+    )
+
+
+def _transit_tickets(data: PlanningInput, plan: PlanResult) -> list[TransitTicket]:
+    return [
+        TransitTicket(
+            day=t.day,
+            ticket=TransitTicketKind(t.ticket),
+            cost=_money(t.cost),
+            verified=t.verified,
+            source_url=t.source_url,
+        )
+        for t in day_tickets(
+            [max(0, len(d.schedule.visits) - 1) for d in plan.days],
+            data.people,
+            data.fares,
+            data.trip.currency,
+        )
+    ]
 
 
 def _upgrade(upgrade: Upgrade, places: Mapping[UUID, PlaceRead]) -> PlanUpgrade:
@@ -398,7 +546,9 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
         "days": [
             d.model_dump(mode="json") for d in _stops(data, plan, places, first_day)
         ],
-        "lodging": None,
+        "lodging": None
+        if (lodging := _lodging(data, plan, places)) is None
+        else lodging.model_dump(mode="json"),
         "fairness": _fairness(data, group, names, places).model_dump(mode="json"),
         "floors_missed": [
             f.model_dump(mode="json") for f in _floors_missed(group, data, places)
@@ -410,6 +560,10 @@ def build_content(  # ruff: ignore[too-many-arguments] the parts of one plan
         if verdicts is None
         else [v.model_dump(mode="json") for v in verdicts],
         "budget": _budget(data, plan, decision, strict_plan_id).model_dump(mode="json"),
+        "transit": _transit(data, plan).model_dump(mode="json"),
+        "transit_tickets": [
+            t.model_dump(mode="json") for t in _transit_tickets(data, plan)
+        ],
         "upgrades": [_upgrade(u, places).model_dump(mode="json") for u in upgrades],
         "telemetry": telemetry.model_dump(mode="json"),
     }

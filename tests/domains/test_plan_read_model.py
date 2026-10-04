@@ -13,6 +13,7 @@ from tests.fixtures.scenarios import reference, solo
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
+from tuttitrip.places.schemas import PriceUnit, TicketCategory
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.plan_group import plan_group
 from tuttitrip.planning.plans.logic.input_builder import (
@@ -334,3 +335,57 @@ def test_a_rejected_must_names_who_vetoed_it() -> None:
     )
     assert conflict.place_id == vetoed
     assert conflict.profile_ids == [data.people[3].id]
+
+
+def test_price_lines_carry_the_discount_of_each_person() -> None:
+    data = planning_input(reference(), lodging=False)
+    group = plan_group(data)
+    plan = as_read(build_content(data, group, {}), group.plan.plan_hash)
+    museum = next(
+        (i for d in plan.days for i in d.items if i.name == "Muzeum Miejskie"), None
+    )
+    stops = [i for d in plan.days for i in d.items if i.price_lines]
+    assert stops
+    for stop in stops:
+        assert stop.price_lines is not None
+        ids = {line.profile_id for line in stop.price_lines}
+        assert ids <= {p.id for p in data.people}
+        total = sum(line.price for line in stop.price_lines)
+        assert total == pytest.approx(
+            float(stop.cost_per_person or 0) * len(data.people), abs=0.05
+        )
+    if museum is not None and museum.price_lines:
+        by_person = {line.profile_id: line for line in museum.price_lines}
+        kasia = data.people[1].id  # 6 years old
+        ty = data.people[0].id
+        assert by_person[kasia].discount.value == "child"
+        assert by_person[kasia].price < by_person[ty].price
+        assert by_person[ty].discount.value == "none"
+
+
+def test_a_family_ticket_shows_both_totals() -> None:
+
+    data = planning_input(reference(), lodging=False)
+    museum = next(p for p in data.places if p.name == "Muzeum Miejskie")
+    family = museum.prices[0].model_copy(
+        update={
+            "ticket_category": TicketCategory.FAMILY,
+            "unit": PriceUnit.GROUP,
+            "amount": Decimal(60),
+            "family_size": 4,
+        }
+    )
+    cheap = museum.model_copy(update={"prices": [*museum.prices, family]})
+    forced = data.model_copy(
+        update={
+            "places": tuple(cheap if p.id == museum.id else p for p in data.places),
+            "must": frozenset({museum.id}),
+        }
+    )
+    group = plan_group(forced)
+    plan = as_read(build_content(forced, group, {}), group.plan.plan_hash)
+    stop = next(i for d in plan.days for i in d.items if i.place_id == museum.id)
+    assert stop.family_ticket is not None
+    assert stop.family_ticket.total == Decimal("60.00")
+    assert stop.family_ticket.singles_total > stop.family_ticket.total
+    assert {line.discount.value for line in stop.price_lines or []} == {"family"}
