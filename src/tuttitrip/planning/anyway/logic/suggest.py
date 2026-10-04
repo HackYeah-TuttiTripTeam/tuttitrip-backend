@@ -99,26 +99,27 @@ def suggest(  # ruff: ignore[too-many-arguments] the plan, its input and the exc
     days = len(chosen.plan.days)
     reference = {r.person_id: r.u_star for r in chosen.people}
     in_plan = set(chosen.plan.place_ids)
-    budget_to = data.trip.budget_to
-    # A plan within B_do stays within it; a plan the host approved over it may not.
-    cap = budget_to if chosen.plan.cost.total <= budget_to else None
     names = {p.id: p.name for p in data.places}
     found: dict[int, AnywaySuggestion] = {}
-    pool = [v for v in _candidates(verdicts) if v.place_id not in in_plan]
+    # A place the host rejected on any day does not take a run of the solver.
+    refused = {place for _, place in rejected}
+    pool = [
+        v
+        for v in _candidates(verdicts)
+        if v.place_id not in in_plan and v.place_id not in refused
+    ]
     for verdict in pool[: days * CANDIDATES_PER_DAY]:
         if len(found) == days:
             break
         changed = data.model_copy(
             update={"must": data.must | {verdict.place_id}},
         )
-        with_place = plan_group(
-            changed, params, alpha=alpha, cost_cap=cap, u_star=reference
-        )
+        with_place = plan_group(changed, params, alpha=alpha, u_star=reference)
         day = _day_of(with_place, verdict.place_id)
         if day is None or day in found or (day, verdict.place_id) in rejected:
             continue
         effects = _effects(chosen, with_place)
-        v_p = verdict.v_p or 0.0
+        v_p = verdict.v_p if verdict.v_p is not None else 0.0
         found[day] = AnywaySuggestion(
             place_id=verdict.place_id,
             name=names[verdict.place_id],

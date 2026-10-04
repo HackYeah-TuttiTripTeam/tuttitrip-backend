@@ -173,9 +173,11 @@ async def _refresh(
         for j in output.justifications
         if j.profile_id is None and j.source == "model"
     }
+    found = False
     for item in suggestions:
         text = texts.get(str(item.place_id))
         if text is not None:
+            found = True
             await db.upsert_state(
                 session,
                 trip_id=trip_id,
@@ -184,7 +186,8 @@ async def _refresh(
                 place_id=item.place_id,
                 changes={"justification": text},
             )
-    await session.commit()
+    if found:
+        await session.commit()
 
 
 async def read(
@@ -211,8 +214,14 @@ async def read(
     if row is None:
         raise AnywayNotFoundError(str(plan_id))
     stored = _stored_suggestions(row.result)
-    if stored:
-        await _refresh(session, queue, membership.trip_id, plan_id, stored)
+    have = await db.select_justifications(session, plan_id)
+    missing = [s for s in stored if (s.day, s.place_id) not in have]
+    if missing:
+        # Idempotent (same job id): covers a worker that was down at generation.
+        await request_justifications(
+            session, queue, plan_id, missing, owner=membership.sub
+        )
+        await _refresh(session, queue, membership.trip_id, plan_id, missing)
     shown = await visible(session, membership.trip_id, plan_id, stored)
     return AnywayRead(
         plan_id=plan_id,

@@ -176,6 +176,7 @@ async def test_deleting_a_gone_event_is_fine() -> None:
             {"error": {"message": "Rate Limit Exceeded"}},
             GoogleErrorCode.UNAVAILABLE,
         ),
+        (403, {"error": {"message": "Forbidden"}}, GoogleErrorCode.UNAVAILABLE),
         (500, {"error": {}}, GoogleErrorCode.UNAVAILABLE),
     ],
 )

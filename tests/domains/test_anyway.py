@@ -128,11 +128,10 @@ def test_the_work_is_bounded_by_the_days(
         params: AlgorithmParams,
         *,
         alpha: float,
-        cost_cap: Decimal | None,
         u_star: Mapping[UUID, float] | None,
     ) -> GroupPlan:
         runs.append(1)
-        return real(data, params, alpha=alpha, cost_cap=cost_cap, u_star=u_star)
+        return real(data, params, alpha=alpha, u_star=u_star)
 
     monkeypatch.setattr(module, "plan_group", counting)
     candidates = [iconic(p) for p in outside(base)]

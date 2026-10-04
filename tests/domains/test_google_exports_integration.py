@@ -70,6 +70,7 @@ class GoogleStub:
         self.files: dict[str, str] = {}
         self.titles: dict[str, str] = {}
         self.requests: list[httpx.Request] = []
+        self.fail_events = False
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -89,6 +90,8 @@ class GoogleStub:
     def _events(
         self, request: httpx.Request, calendar_id: str, event_id: str | None
     ) -> httpx.Response:
+        if self.fail_events:
+            return httpx.Response(500, json={"error": {}})
         events = self.calendars.get(calendar_id)
         if events is None:
             return httpx.Response(404, json={"error": {}})
@@ -204,6 +207,18 @@ async def _exports_story(  # ruff: ignore[too-many-statements, too-many-locals] 
         authorize(app, MEMBER)
         assert (await http.post(calendar)).status_code == 200
         assert len(google.calendars) == 2
+        # Google fails halfway: the new calendar is still recorded, so the retry
+        # updates it instead of making a second one.
+        authorize(app, CO_HOST)
+        before = len(google.calendars)
+        google.fail_events = True
+        assert (await http.post(calendar)).status_code == 502
+        google.fail_events = False
+        assert len(google.calendars) == before + 1
+        retried = await http.post(calendar)
+        assert retried.status_code == 200
+        assert retried.json()["created"] is False
+        assert len(google.calendars) == before + 1
         authorize(app, OUTSIDER)
         assert (await http.post(calendar)).status_code == 404
         authorize(app, HOST)
