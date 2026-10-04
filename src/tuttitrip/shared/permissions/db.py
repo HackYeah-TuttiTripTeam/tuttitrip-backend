@@ -4,10 +4,12 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, union_all, update
+from sqlalchemy import ColumnElement, Select, delete, func, select, union_all, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.shared.db.pagination import ordering, paginate
+from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.models import (
     AccessToken,
     PermissionAudit,
@@ -17,6 +19,12 @@ from tuttitrip.shared.permissions.models import (
     UserRole,
 )
 from tuttitrip.shared.permissions.registry import Access
+from tuttitrip.shared.permissions.schemas import (
+    AccessTokenQuery,
+    AccessTokenSort,
+    AccessTokenState,
+    TokenScope,
+)
 
 
 async def select_effective_grants(
@@ -371,13 +379,14 @@ async def update_last_used(
 
 
 async def count_active_access_tokens(
-    session: AsyncSession, profile_id: UUID, now: datetime
+    session: AsyncSession, profile_id: UUID, scope: TokenScope, now: datetime
 ) -> int:
-    """Count a profile's tokens that are neither revoked nor expired.
+    """Count a profile's tokens of one scope that are neither revoked nor expired.
 
     Args:
         session: Open session.
         profile_id: Profile.
+        scope: Token scope (other scopes do not count against the cap).
         now: Current time.
 
     Returns:
@@ -389,6 +398,7 @@ async def count_active_access_tokens(
             .select_from(AccessToken)
             .where(
                 AccessToken.profile_id == profile_id,
+                AccessToken.scope == scope,
                 AccessToken.revoked_at.is_(None),
                 AccessToken.expires_at > now,
             )
@@ -415,3 +425,110 @@ async def select_access_tokens(
         .order_by(AccessToken.created_at.desc())
     )
     return result.all()
+
+
+_TOKEN_SORT = {
+    AccessTokenSort.CREATED_AT: AccessToken.created_at,
+    AccessTokenSort.EXPIRES_AT: AccessToken.expires_at,
+    AccessTokenSort.LAST_USED_AT: AccessToken.last_used_at,
+}
+
+
+def _state_clause(state: AccessTokenState, now: datetime) -> ColumnElement[bool]:
+    match state:
+        case AccessTokenState.ACTIVE:
+            return AccessToken.revoked_at.is_(None) & (AccessToken.expires_at > now)
+        case AccessTokenState.EXPIRED:
+            return AccessToken.revoked_at.is_(None) & (AccessToken.expires_at <= now)
+        case AccessTokenState.REVOKED:
+            return AccessToken.revoked_at.is_not(None)
+
+
+def _trip_tokens(
+    trip_id: UUID, scope: TokenScope, query: AccessTokenQuery, now: datetime
+) -> Select[AccessToken]:
+    stmt = select(AccessToken).where(
+        AccessToken.trip_id == trip_id, AccessToken.scope == scope
+    )
+    if query.profile_id is not None:
+        stmt = stmt.where(AccessToken.profile_id == query.profile_id)
+    if query.state is not None:
+        stmt = stmt.where(_state_clause(query.state, now))
+    return stmt
+
+
+async def select_trip_tokens_page(
+    session: AsyncSession,
+    trip_id: UUID,
+    scope: TokenScope,
+    query: AccessTokenQuery,
+    now: datetime,
+) -> Page[AccessToken]:
+    """One page of a trip's tokens of one scope.
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        scope: Token scope.
+        query: Page, sort, direction and filters.
+        now: Current time (decides expired from active).
+
+    Returns:
+        The page of rows.
+    """
+    order = ordering(_TOKEN_SORT, query.sort, AccessToken.id)
+    return await paginate(
+        session, _trip_tokens(trip_id, scope, query, now), query, order
+    )
+
+
+async def select_trip_token(
+    session: AsyncSession, token_id: UUID, trip_id: UUID, scope: TokenScope
+) -> AccessToken | None:
+    """Find a token of one scope on a trip by id.
+
+    Args:
+        session: Open session.
+        token_id: Token id.
+        trip_id: Trip the caller was checked for.
+        scope: Token scope.
+
+    Returns:
+        The row, or None (also for another trip or scope).
+    """
+    return await session.scalar(
+        select(AccessToken).where(
+            AccessToken.id == token_id,
+            AccessToken.trip_id == trip_id,
+            AccessToken.scope == scope,
+        )
+    )
+
+
+async def revoke_active_tokens(
+    session: AsyncSession, profile_id: UUID, scope: TokenScope, now: datetime
+) -> None:
+    """Revoke a profile's working tokens of one scope, serialised per profile.
+
+    The transaction-scoped advisory lock makes two parallel replacements run
+    one after the other, so only the later token stays active.
+
+    Args:
+        session: Open session (caller commits).
+        profile_id: Profile.
+        scope: Token scope.
+        now: Revocation time.
+    """
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(str(profile_id), 0)))
+    )
+    await session.execute(
+        update(AccessToken)
+        .where(
+            AccessToken.profile_id == profile_id,
+            AccessToken.scope == scope,
+            AccessToken.revoked_at.is_(None),
+            AccessToken.expires_at > now,
+        )
+        .values(revoked_at=now)
+    )

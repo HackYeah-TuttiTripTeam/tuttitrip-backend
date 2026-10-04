@@ -13,6 +13,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
+    "LINK_AUTHOR_PREFIX",
     "RatingRead",
     "RatingUpdate",
     "RatingValue",
@@ -20,7 +21,28 @@ __all__ = [
     "TripFeedback",
     "VetoCreate",
     "VetoRead",
+    "link_author",
 ]
+
+
+LINK_AUTHOR_PREFIX = "link:"
+"""Author marker of a rating or veto made through a voting link.
+
+The author columns (`updated_by_sub`, `created_by_sub`) hold `link:<token id>`
+instead of an Auth0 subject, so the vote summary can tell the source apart.
+"""
+
+
+def link_author(token_id: UUID) -> str:
+    """The author value of a vote cast through a voting link.
+
+    Args:
+        token_id: Id of the access token (never the token itself).
+
+    Returns:
+        `link:<token id>`.
+    """
+    return f"{LINK_AUTHOR_PREFIX}{token_id}"
 
 
 @unique

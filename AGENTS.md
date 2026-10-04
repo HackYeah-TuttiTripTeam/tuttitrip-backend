@@ -55,6 +55,7 @@ src/tuttitrip/
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
+  voting/              vote links for people without an account, host's vote summary
   interview/           AI interview agent (AG-UI endpoint goes here)
   planning/            planner agent; subdomains fairness/ and linter/
                        algorithm spec (canonical for planning/**/logic): docs/algorytm.md
@@ -377,6 +378,19 @@ from tuttitrip.shared.permissions.registry import Access, Feature
   żądania albo "Uczestnik"). Ponowne przyjęcie przez członka daje 200 (`already_member: true`) bez nowego
   profilu i bez zużycia limitu. Osoba usunięta wcześniej (profil zostaje bez konta, #121) dostaje nowy profil.
   TODO: okresowo usuwać wygasłe i odwołane tokeny (dziś zostają w tabeli).
+- Linki głosowe (domena `voting`, bez własnych tabel: to tokeny `access_tokens` o zakresie `vote`).
+  Host tworzy je dla profilu bez konta: `POST/GET /trips/{trip_id}/vote-links`, `DELETE .../{link_id}`
+  (`TripCoHost`, liść `trips.vote_links`). Jeden działający link na profil: nowy odwołuje poprzednie w tej
+  samej transakcji (advisory lock na profil, więc równoległe tworzenie zostawia jeden). `POST` zwraca
+  `token` i `url` = `/glos#t=<token>` (front dopisuje swój origin; token tylko we fragmencie), raz,
+  z `Cache-Control: no-store`; lista (`Page`, filtry `profile_id` i `state` active/expired/revoked)
+  nigdy go nie zwraca. Same trasy tokenowe (`token_access`) dopisuje #81. Odpowiedzi 401/404 tras
+  tokenowych też mają `Cache-Control: no-store`.
+- Wynik zbiorczy `GET /trips/{trip_id}/vote-summary` (`TripCoHost`, `trips.vote_links:READ`, `Page`):
+  per miejsce liczby tak, nie, obojętnie i weta oraz osoby z powodem i źródłem (`app`, `link`, `host`).
+  Liczy go czysta funkcja `voting/logic/summary.py` (bez wag `w_i`, te należą do werdyktu planu).
+  Źródło wynika z autora zapisu: `link:<id tokenu>` (`link_author()` z `profiles/feedback/schemas.py`,
+  kontrakt dla #81) to `link`; konto profilu to `app`; ktoś inny (ocena) lub `on_behalf` (weto) to `host`.
 - Gdy decyzja zależy od uprawnienia w środku logiki, `api.py` wstrzykuje
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
   `permissions.allows(Feature.X, Access.WRITE)`.
