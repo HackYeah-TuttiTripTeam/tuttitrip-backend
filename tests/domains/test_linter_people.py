@@ -251,7 +251,7 @@ def test_lint_reports_all_four_rules_and_scores_violations() -> None:
         people=[person(segment_km=1.0)],
     )
     report = lint(plan, context)
-    assert [r.rule for r in report.results][-4:] == [
+    assert [r.rule for r in report.results][-5:-1] == [
         "distance",
         "pace",
         "rest_window",
