@@ -10,15 +10,43 @@ from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.interview import constants
 from tuttitrip.interview.logic import plan_defaults
 from tuttitrip.interview.logic.plan_defaults import MissingCityError
 from tuttitrip.interview.schemas import DraftPlanRead
 from tuttitrip.interview.services import session_service
+from tuttitrip.planning.plans.schemas import (
+    MISSING_CARD,
+    MissingField,
+    MissingInput,
+    PlanMissingInputsDetail,
+)
 from tuttitrip.planning.plans.services import plan_service
-from tuttitrip.planning.plans.services.plan_service import PlanInputError
+from tuttitrip.planning.plans.services.plan_service import (
+    CatalogEmptyError,
+    MissingInputsError,
+    PlanInputError,
+)
 from tuttitrip.trips.schemas import TripMembership
 
-__all__ = ["MissingCityError", "PlanInputError", "build"]
+__all__ = [
+    "MISSING_CITY",
+    "CatalogEmptyError",
+    "MissingCityError",
+    "MissingInputsError",
+    "PlanInputError",
+    "build",
+]
+
+MISSING_CITY = PlanMissingInputsDetail(
+    message=constants.MISSING_CITY_PL,
+    missing=[
+        MissingInput(
+            field=MissingField.DESTINATION, kind=MISSING_CARD[MissingField.DESTINATION]
+        )
+    ],
+)
+"""The 422 body of a preliminary plan asked for before the trip has a city."""
 
 
 async def build(

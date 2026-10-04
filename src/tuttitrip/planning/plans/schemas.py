@@ -192,6 +192,8 @@ class PlanErrorCode(StrEnum):
     """Stable code of a plan error, sent as ``detail.code``."""
 
     NOT_APPROVED = "plan.not_approved"
+    MISSING_INPUTS = "plan.missing_inputs"
+    CATALOG_EMPTY = "plan.catalog_empty"
 
 
 class NotApprovedDetail(BaseModel):
@@ -205,6 +207,75 @@ class NotApprovedError(BaseModel):
     """409 body: no approved proposal for this plan version."""
 
     detail: NotApprovedDetail
+
+
+@unique
+class MissingField(StrEnum):
+    """What a trip lacks before a plan can be computed (``QuestionField`` values)."""
+
+    DESTINATION = "destination"
+    DATES = "dates"
+    PEOPLE = "people"
+
+
+@unique
+class MissingCard(StrEnum):
+    """The interview card that asks for a missing field (a subset of ``CardKind``)."""
+
+    CITY = "city"
+    DATE_RANGE = "date_range"
+    FAMILY_BUILDER = "family_builder"
+
+
+MISSING_CARD: dict[MissingField, MissingCard] = {
+    MissingField.DESTINATION: MissingCard.CITY,
+    MissingField.DATES: MissingCard.DATE_RANGE,
+    MissingField.PEOPLE: MissingCard.FAMILY_BUILDER,
+}
+"""The card each missing field is asked on."""
+
+
+class MissingInput(BaseModel):
+    """One thing the plan needs and the card to ask for it."""
+
+    field: MissingField
+    person_id: UUID | None = Field(
+        default=None, description="The person it is about; null for the whole group."
+    )
+    kind: MissingCard = Field(description="The card the client renders for it.")
+    options: list[str] = Field(
+        default_factory=list, description="Choices on the card, if it has any."
+    )
+
+
+class PlanMissingInputsDetail(BaseModel):
+    """Why the plan cannot be computed yet; clients map by ``code`` and ``missing``."""
+
+    code: Literal[PlanErrorCode.MISSING_INPUTS] = PlanErrorCode.MISSING_INPUTS
+    message: str = Field(description="For developers; clients map by code.")
+    missing: list[MissingInput] = Field(
+        min_length=1,
+        description="Everything missing at once, in the order of the interview.",
+    )
+
+
+class PlanMissingInputs(BaseModel):
+    """422 body: the trip lacks data a plan needs."""
+
+    detail: PlanMissingInputsDetail
+
+
+class PlanCatalogEmptyDetail(BaseModel):
+    """The trip's city has no places in the catalog yet; clients map by ``code``."""
+
+    code: Literal[PlanErrorCode.CATALOG_EMPTY] = PlanErrorCode.CATALOG_EMPTY
+    message: str = Field(description="For developers; clients map by code.")
+
+
+class PlanCatalogEmpty(BaseModel):
+    """409 body: there is nothing to plan from in this city yet."""
+
+    detail: PlanCatalogEmptyDetail
 
 
 class PlanCreate(BaseModel):

@@ -30,8 +30,11 @@ from tuttitrip.planning.plans import db
 from tuttitrip.planning.plans.logic.ics import build_ics
 from tuttitrip.planning.plans.logic.input_builder import (
     ALGORITHM_VERSION,
-    PlanInputError,
+    CatalogEmptyError,
+    MissingInputsError,
+    PlanInputError,  # ruff: ignore[unused-import] re-exported for the callers
     build_input,
+    find_missing,
     input_hash,
     lodging_options,
 )
@@ -170,40 +173,39 @@ async def gather_input(
         The algorithm input, display names by profile id and the trip's alpha.
 
     Raises:
-        PlanInputError: When the trip lacks dates, a city or people.
+        MissingInputsError: When the trip lacks dates, a city or people.
     """
     membership = caller.model_copy(update={"role": TripRole.HOST})
     trip = await trip_service.get_trip(session, membership)
-    slug = trip.city_slug
-    if slug is None:
-        msg = "The trip needs a city to plan"
-        raise PlanInputError(msg)
     cities = {c.slug: c for c in await place_service.list_cities(session)}
-    if slug not in cities:
-        msg = f"Unknown city '{slug}'"
-        raise PlanInputError(msg)
     profiles = await profile_service.list_profiles(session, membership)
     preferences = await preference_service.list_preferences(session, membership)
     if assumptions is not None:
         trip, profiles, preferences = _assume(trip, profiles, preferences, assumptions)
+    city = cities.get(trip.city_slug or "")
+    missing = find_missing(trip, city_known=city is not None, people=len(profiles))
+    if missing or city is None:  # no city is always in `missing`
+        unknown = city is None and trip.city_slug is not None
+        message = f"Unknown city '{trip.city_slug}'" if unknown else None
+        raise MissingInputsError(missing, message)
     feedback = await feedback_service.list_for_trip(session, membership.trip_id)
-    places = await _city_places(session, slug)
+    places = await _city_places(session, city.slug)
     active = await overrides_db.select_active(session, membership.trip_id)
     required = await requirements_service.get_requirements(session, membership.trip_id)
     planning = build_input(
         trip,
-        city=cities[slug],
+        city=city,
         profiles=profiles,
         preferences=preferences,
         feedback=feedback,
         places=places,
         must=frozenset(o.place_id for o in active if o.kind == "must"),
         blocked=frozenset(o.place_id for o in active if o.kind == "block"),
-        fares=await place_service.list_fares(session, slug),
+        fares=await place_service.list_fares(session, city.slug),
         lodgings=lodging_options(
             places,
             required.requirements,
-            trip.currency or cities[slug].currency,
+            trip.currency or city.currency,
         ),
     )
     names = {p.id: p.display_name for p in profiles}
@@ -299,10 +301,13 @@ async def generate_plan(
         The plan and whether a new version was stored.
 
     Raises:
-        PlanInputError: When the trip lacks dates, a city or people.
+        MissingInputsError: When the trip lacks dates, a city or people.
+        CatalogEmptyError: When the trip's city has no places yet.
     """
     draft = assumptions is not None
     planning, names, trip_alpha = await gather_input(session, membership, assumptions)
+    if not planning.places:
+        raise CatalogEmptyError
     alpha = trip_alpha if data is None or data.alpha is None else data.alpha
     knobs = data or PlanCreate()
     preset = knobs.weight_preset

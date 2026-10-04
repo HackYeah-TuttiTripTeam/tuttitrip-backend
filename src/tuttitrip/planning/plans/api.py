@@ -9,13 +9,18 @@ from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
 from tuttitrip.planning.plans.schemas import (
     NotApprovedDetail,
     NotApprovedError,
+    PlanCatalogEmpty,
+    PlanCatalogEmptyDetail,
     PlanCreate,
+    PlanMissingInputs,
     PlanRead,
     ReplanRead,
     ReplanRequest,
 )
 from tuttitrip.planning.plans.services import plan_service, replan_service
 from tuttitrip.planning.plans.services.plan_service import (
+    CatalogEmptyError,
+    MissingInputsError,
     PlanInputError,
     PlanNotApprovedError,
     PlanNotFoundError,
@@ -73,7 +78,21 @@ def plan_examples() -> dict[str, dict[str, object]]:
         200: {"model": PlanRead, "description": "Existing version for the same input."},
         201: {"content": {"application/json": {"examples": plan_examples()}}},
         403: {"description": "Missing the `planning.plans:WRITE` permission."},
-        422: {"description": "The trip lacks dates, a city or people."},
+        409: {
+            "model": PlanCatalogEmpty,
+            "description": (
+                "The city has no places in the catalog yet: `detail.code` is "
+                "`plan.catalog_empty`."
+            ),
+        },
+        422: {
+            "model": PlanMissingInputs,
+            "description": (
+                "The trip lacks a city, dates or people: `detail.code` is "
+                "`plan.missing_inputs` and `detail.missing` lists every missing "
+                "field with the interview card that asks for it."
+            ),
+        },
     },
     dependencies=[requires(Feature.PLANNING_PLANS, Access.WRITE)],
 )
@@ -95,10 +114,21 @@ async def create_plan(
         The stored version.
 
     Raises:
-        HTTPException: 422 when the trip cannot be planned yet.
+        HTTPException: 422 when the trip cannot be planned yet, 409 when its
+            city has no places.
     """
     try:
         plan, created = await plan_service.generate_plan(session, membership, data)
+    except MissingInputsError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            exc.detail.model_dump(mode="json"),
+        ) from exc
+    except CatalogEmptyError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            PlanCatalogEmptyDetail(message=str(exc)).model_dump(mode="json"),
+        ) from exc
     except PlanInputError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if not created:

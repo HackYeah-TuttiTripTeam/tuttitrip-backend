@@ -253,7 +253,12 @@ def test_the_endpoint_says_to_give_the_city(
     world.trip = world.trip.model_copy(update={"city_slug": None})
     response = client.post(path("build_draft_plan", trip_id=world.trip_id))
     assert response.status_code == 422
-    assert response.json()["detail"] == constants.MISSING_CITY_PL == "Podaj miasto"
+    detail = response.json()["detail"]
+    assert detail["code"] == "plan.missing_inputs"
+    assert detail["message"] == constants.MISSING_CITY_PL == "Podaj miasto"
+    assert detail["missing"] == [
+        {"field": "destination", "person_id": None, "kind": "city", "options": []}
+    ]
     generate.assert_not_awaited()
 
 
