@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.places import db
+from tuttitrip.places.cities.logic.resolve import city_slug_for
 from tuttitrip.places.schemas import CityRead, PlaceCategory, PlaceRead, TransitFareRead
 
 
@@ -27,6 +28,20 @@ async def list_cities(session: AsyncSession) -> list[CityRead]:
     """
     cities = await db.select_cities(session)
     return [CityRead.model_validate(city) for city in cities]
+
+
+async def find_city_slug(session: AsyncSession, destination: str) -> str | None:
+    """The city slug for a free-text destination.
+
+    Args:
+        session: Open session.
+        destination: E.g. ``"Kraków"``; case and diacritics do not matter.
+
+    Returns:
+        The catalog city's slug or ``slugify(destination)``; None for no letters.
+    """
+    cities = await db.select_cities(session)
+    return city_slug_for(destination, ((c.slug, c.name) for c in cities))
 
 
 async def list_places(
