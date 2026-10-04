@@ -51,6 +51,10 @@ class ErrorCode(StrEnum):
     UNSUPPORTED_CONTRACT_VERSION = "unsupported_contract_version"
     INVALID_PAYLOAD = "invalid_payload"
     NOT_IMPLEMENTED = "not_implemented"
+    DOCUMENT_NOT_FOUND = "document_not_found"
+    MODEL_OUTPUT_INVALID = "model_output_invalid"
+    CITY_NOT_FOUND = "city_not_found"
+    RATE_LIMITED = "rate_limited"
 
 
 class ContractPayload(BaseModel):
