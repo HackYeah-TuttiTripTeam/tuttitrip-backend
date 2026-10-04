@@ -137,6 +137,14 @@ class InterviewSettings(BaseModel):
         le=1,
         description="Below this confidence a decision model's pick is only asked back.",
     )
+    impact_budget_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        description=(
+            "Time the solver may spend measuring which question changes the plan "
+            "most (once per turn); past it the fixed question order is used."
+        ),
+    )
     voice_model: str = Field(
         default="openai:gpt-realtime-2.1-mini",
         description="Pydantic AI realtime model of the voice interview.",

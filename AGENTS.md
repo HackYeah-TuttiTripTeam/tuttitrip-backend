@@ -481,6 +481,26 @@ stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
 - The next question is `interview/logic/next_question.py` (pure, explicit
   table in `constants.py`); the model only words it and shows it with the
   `show_card` tool. The host's answer to a card is the text of their next message.
+- Which question comes first is measured, not tabled (`question_service`): the
+  solver (`planning/logic/what_if.py`, outside the event loop, work limit in
+  evaluated plans so it is deterministic) is re-run for two or three plausible
+  answers of each missing field, and the field that changes the plan most wins
+  (`logic/informativeness.py`, ties by field name). Past
+  `interview.impact_budget_seconds`, or without a city, the fixed table decides.
+  The card of a question is the fixed map in `constants.CARD_OF_FIELD`.
+- A preliminary plan needs only the city (`POST .../interview/draft-plan` and the
+  `build_plan_now` tool call the same `draft_plan_service`; one per turn).
+  `logic/plan_defaults.py` lists the assumptions (one day, two adults, no budget
+  limit, default preferences); they are applied in memory by `plan_service`
+  (`PlanAssumptions`, never stored on the trip), and the version is marked
+  `params.draft`.
+- The same agent and endpoints serve a trip member, chosen by the role (not by
+  anything in the conversation): a member gets their own session
+  (`interview_sessions.profile_id`, unreadable to others), a panel with only
+  themselves and no budget, and only the `*_my_*` tools of `member_tools.py`,
+  which take no person (`deps.own_profile_id`). Their values are left unmarked on
+  purpose, so they read as a person's and the host's assistant asks before
+  changing them. Voice and the draft plan stay with co-hosts.
 - `SpendLimits` keeps its counters in this process (`InMemorySpendStore`): a deploy
   resets the per-trip text budget. A shared store would need Redis; accepted for now.
   `overwrite_host_values` is honoured only after a NOT SAVED result of that tool for

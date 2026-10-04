@@ -428,11 +428,15 @@ ROUTES = [
     ("get", "get_knowledge"),
     ("post", "run_turn"),
     ("post", "voice_offer"),
+    ("post", "build_draft_plan"),
 ]
+# The trip's interview tools stay with co-hosts; a member has their own interview
+# (start, read, panel and turns) about themselves.
+MEMBER_ROUTES = {"start_session", "get_current_session", "get_knowledge", "run_turn"}
 
 
 @pytest.mark.parametrize(("method", "name"), ROUTES)
-def test_outsider_gets_404_and_member_403(
+def test_outsider_gets_404_and_member_403_unless_it_is_theirs(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
@@ -442,6 +446,8 @@ def test_outsider_gets_404_and_member_403(
     monkeypatch.setattr(trip_service, "get_membership", _membership(None))
     assert getattr(client, method)(url).status_code == 404
     monkeypatch.setattr(trip_service, "get_membership", _membership(TripRole.MEMBER))
+    if name in MEMBER_ROUTES:
+        return  # the member's own interview, see test_interview_member.py
     assert getattr(client, method)(url).status_code == 403
 
 

@@ -136,3 +136,56 @@ GUARD_MARGIN_SECONDS: Final = 30.0
 
 INTERRUPTED_NOTE: Final = "(Odpowiedź asystenta została przerwana.)"
 """Closes a stored turn that failed half-way, so the next run can continue."""
+
+
+DRAFT_DEFAULT_DAYS: Final = 1
+"""Length of a preliminary plan when the trip has no dates, in days."""
+
+DRAFT_WEEKDAY: Final = 5
+"""Weekday of the assumed day of a preliminary plan (Saturday; Monday is 0)."""
+
+DAYS_IN_WEEK: Final = 7
+"""Days between two equal weekdays."""
+
+MISSING_CITY_PL: Final = "Podaj miasto"
+"""Message when a plan is asked for before the trip has a city."""
+
+ASSUMPTION_DATES_PL: Final = "Założyłem jeden dzień: najbliższą sobotę ({date})."
+"""The trip has no dates; ``{date}`` is DD.MM.YYYY."""
+
+ASSUMPTION_PEOPLE_PL: Final = "Założyłem dwoje dorosłych."
+"""The group has fewer than two people."""
+
+ASSUMPTION_BUDGET_PL: Final = "Bez budżetu: plan nie ogranicza kosztów."
+"""The trip has no budget."""
+
+ASSUMPTION_PREFERENCES_PL: Final = (
+    "Nie znam jeszcze preferencji wszystkich osób: "
+    "użyłem ustawień domyślnych dla wieku."
+)
+"""Somebody's preferences are not filled in."""
+
+ASSUMED_DATE_FORMAT: Final = "%d.%m.%Y"
+"""How the assumed day is written in the Polish text."""
+
+
+TRIP_BUDGET_FIELDS: Final = (
+    "currency",
+    "budget_total_min",
+    "budget_total_max",
+    "budget_day_min",
+    "budget_day_max",
+)
+"""Trip fields a member's panel does not show: the budget is the host's business."""
+
+MEMBER_FIELDS: Final = (
+    QuestionField.INTERESTS,
+    QuestionField.REQUIREMENTS,
+    QuestionField.DIET,
+    QuestionField.IMPORTANCE,
+)
+"""What a member is asked about themselves, in order. Pace is derived from the
+profile (the host sets it), so it is not asked."""
+
+MEMBER_TRIP_FACTS: Final = frozenset({"destination", "start_date", "end_date"})
+"""Trip fields the member's instructions show the model: no budget."""
