@@ -12,6 +12,7 @@ from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.profiles.services.profile_service import ProfileNotFoundError
 from tuttitrip.trips import db
+from tuttitrip.trips.checkins.services import checkin_service
 from tuttitrip.trips.logic import member_rules
 from tuttitrip.trips.schemas import MemberRead, TripMembership, TripRole
 
@@ -57,6 +58,20 @@ async def _target(
     if sub is None or role is None:
         raise MemberNotFoundError(str(profile_id))
     return profile, sub, role
+
+
+async def member_left(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> None:
+    """Clear what only members may keep on a trip, when one stops being a member.
+
+    The single place for this cleanup: the removal route calls it, and so must
+    any "leave the trip" route. Flushes, the caller commits.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+        profile_id: Profile of the person who left (it stays on the trip).
+    """
+    await checkin_service.clear_profile(session, trip_id, profile_id)
 
 
 async def list_members(
@@ -118,7 +133,8 @@ async def remove_member(
     """Remove a member from the trip and commit.
 
     The account loses access (the trip is a 404 for it). The profile stays on
-    the trip without an account, so the person still counts in the plan.
+    the trip without an account, so the person still counts in the plan. Their
+    check-in (room number) is deleted.
 
     Args:
         session: Open session.
@@ -135,4 +151,5 @@ async def remove_member(
         raise MemberForbiddenError(msg)
     await db.delete_member(session, membership.trip_id, sub)
     await profile_service.unlink_account(session, membership, profile_id)
+    await member_left(session, membership.trip_id, profile_id)
     await session.commit()
