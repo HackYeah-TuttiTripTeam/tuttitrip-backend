@@ -27,6 +27,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.realtime import (
     RealtimeModel,
     WebRTCAnswer,
@@ -36,15 +37,22 @@ from pydantic_ai.realtime import (
 from tests.shared.fakes import authorize
 from tests.shared.interview_world import World
 from tests.shared.paths import path
+from tuttitrip.interview import constants
 from tuttitrip.interview.schemas import SessionStatus
 from tuttitrip.interview.services import run_guard, session_service, voice_service
+from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.main import create_app
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import trip_service
 
-pytestmark = pytest.mark.usefixtures("stored")
+pytestmark = [
+    pytest.mark.usefixtures("stored"),
+    pytest.mark.filterwarnings(
+        "ignore::pydantic_ai_harness.spend.UnpricedModelWarning"
+    ),
+]
 
 ME = AuthenticatedUser(sub="auth0|host")
 SESSION_ID = uuid.uuid4()
@@ -152,8 +160,10 @@ def world(monkeypatch: pytest.MonkeyPatch) -> World:
         "open_session",
         AsyncMock(return_value=(session, False)),
     )
+    w.known_sessions = {SESSION_ID}
     monkeypatch.setattr(voice_service, "get_sessionmaker", lambda: w.deps().sessions)
     monkeypatch.setattr(voice_service, "_provider_hangup", AsyncMock())
+    monkeypatch.setattr(voice_service, "_extract", AsyncMock())
     voice_service.CALLS.clear()
     return w
 
@@ -172,7 +182,9 @@ def client() -> Any:  # ruff: ignore[any-type]
 
 
 def use(monkeypatch: pytest.MonkeyPatch, realtime: FakeRealtime) -> None:
-    monkeypatch.setattr(voice_service, "realtime_for", lambda _deps: realtime)
+    monkeypatch.setattr(
+        voice_service, "realtime_for", lambda _deps, locale="pl": (locale, realtime)[1]
+    )
 
 
 def offer(client: TestClient, world: World, sdp: str = "OFFER") -> Any:  # ruff: ignore[any-type]
@@ -251,9 +263,13 @@ def test_the_time_limit_closes_the_call_and_keeps_the_conversation(
             voice_max_seconds=0.2,
             voice_attach_timeout_seconds=5.0,
             voice_trip_seconds=1800,
+            voice_heartbeat_seconds=10.0,
+            voice_claim_ttl_seconds=45.0,
+            run_timeout_seconds=5.0,
         )
     )
     monkeypatch.setattr(voice_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(run_guard, "get_settings", lambda: settings)
     use(monkeypatch, FakeRealtime())
     call_id = offer(client, world).json()["call_id"]
     task = voice_service.CALLS[call_id].task
@@ -349,9 +365,13 @@ def test_the_trips_voice_time_is_limited_and_booked_per_call(
             voice_max_seconds=60.0,
             voice_attach_timeout_seconds=5.0,
             voice_trip_seconds=3,
+            voice_heartbeat_seconds=10.0,
+            voice_claim_ttl_seconds=45.0,
+            run_timeout_seconds=5.0,
         )
     )
     monkeypatch.setattr(voice_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(run_guard, "get_settings", lambda: settings)
     use(monkeypatch, FakeRealtime())
     first = offer(client, world).json()["call_id"]
     assert hangup(client, world, first).status_code == 204
@@ -421,9 +441,13 @@ def test_a_sideband_that_never_attaches_times_out_with_503(
             voice_max_seconds=60.0,
             voice_attach_timeout_seconds=0.1,
             voice_trip_seconds=1800,
+            voice_heartbeat_seconds=10.0,
+            voice_claim_ttl_seconds=45.0,
+            run_timeout_seconds=5.0,
         )
     )
     monkeypatch.setattr(voice_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(run_guard, "get_settings", lambda: settings)
     use(monkeypatch, FakeRealtime(never_attach=True))
     assert offer(client, world).status_code == 503
     assert not voice_service.CALLS
@@ -529,3 +553,311 @@ def test_the_interview_agent_resolves_its_tools_and_instructions_for_realtime(
     assert "show_card" not in model.tools  # a call has no screen
     assert model.instructions is not None
     assert "voice call" in model.instructions
+
+
+# --- #214: stale locks, takeover, language, extraction ---------------------
+
+
+def tuned(monkeypatch: pytest.MonkeyPatch, **values: float) -> None:
+    """Settings of a test: short claims and a fast heartbeat."""
+    settings = SimpleNamespace(
+        interview=SimpleNamespace(
+            **{
+                "voice_max_seconds": 60.0,
+                "voice_attach_timeout_seconds": 5.0,
+                "voice_trip_seconds": 1800,
+                "voice_heartbeat_seconds": 10.0,
+                "voice_claim_ttl_seconds": 45.0,
+                "run_timeout_seconds": 5.0,
+                **values,
+            }
+        )
+    )
+    monkeypatch.setattr(voice_service, "get_settings", lambda: settings)
+    monkeypatch.setattr(run_guard, "get_settings", lambda: settings)
+
+
+def acquire_text(world: World) -> Any:  # ruff: ignore[any-type]
+    return asyncio.run(
+        run_guard.acquire(
+            world.deps().sessions, world.membership, SESSION_ID, limit_seconds=60
+        )
+    )
+
+
+def test_a_dead_calls_claim_expires_on_its_own_and_a_text_turn_takes_over(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tuned(monkeypatch, voice_claim_ttl_seconds=0.1)
+
+    async def scenario() -> None:
+        sessions = world.deps().sessions
+        await run_guard.acquire(
+            sessions,
+            world.membership,
+            SESSION_ID,
+            limit_seconds=60,
+            voice_limit=1800,
+        )  # a call whose tab vanished: nobody releases it or sends a heartbeat
+        with pytest.raises(run_guard.SessionBusyError) as busy:
+            await run_guard.acquire(
+                sessions, world.membership, SESSION_ID, limit_seconds=60
+            )
+        assert busy.value.kind == "voice"
+        await asyncio.sleep(0.2)
+        turn = await run_guard.acquire(
+            sessions, world.membership, SESSION_ID, limit_seconds=60
+        )
+        await run_guard.release(turn)
+
+    asyncio.run(scenario())
+    assert not world.running
+
+
+def test_the_heartbeat_keeps_a_live_call_claimed_and_stops_with_the_call(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tuned(monkeypatch, voice_claim_ttl_seconds=0.3, voice_heartbeat_seconds=0.05)
+
+    async def scenario() -> None:
+        sessions = world.deps().sessions
+        claim = await run_guard.acquire(
+            sessions,
+            world.membership,
+            SESSION_ID,
+            limit_seconds=60,
+            voice_limit=1800,
+        )
+        owner = asyncio.current_task()
+        assert owner is not None
+        call = voice_service.Call(
+            deps=world.deps(),
+            provider_session=WebRTCSession("openai", session_id="c"),
+            claim=claim,
+        )
+        beat = asyncio.create_task(voice_service._heartbeat(call, owner))  # ruff: ignore[private-member-access]
+        await asyncio.sleep(0.8)  # longer than the claim lives without a beat
+        with pytest.raises(run_guard.SessionBusyError):
+            await run_guard.acquire(
+                sessions, world.membership, SESSION_ID, limit_seconds=60
+            )
+        beat.cancel()
+        await asyncio.sleep(0.5)  # the beat stopped: the claim lapses
+        turn = await run_guard.acquire(
+            sessions, world.membership, SESSION_ID, limit_seconds=60
+        )
+        await run_guard.release(turn)
+
+    asyncio.run(scenario())
+
+
+def test_the_409_says_what_holds_the_interview(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use(monkeypatch, FakeRealtime())
+    text_turn = acquire_text(world)
+    assert (
+        offer(client, world).json()["detail"]
+        == "Another turn of this interview is still running"
+    )
+    asyncio.run(run_guard.release(text_turn))
+    call_id = offer(client, world).json()["call_id"]
+    assert (
+        offer(client, world).json()["detail"]
+        == "A voice call of this interview is still running"
+    )
+    hangup(client, world, call_id)
+
+
+def release(client: TestClient, world: World) -> Any:  # ruff: ignore[any-type]
+    return client.post(path("voice_release", trip_id=world.trip_id))
+
+
+def test_release_ends_the_call_stores_it_and_frees_the_interview(
+    client: TestClient,
+    world: World,
+    stored: list[list[ModelMessage]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+    assert release(client, world).status_code == 204
+    assert call_id not in voice_service.CALLS
+    assert len(stored) == 1  # the transcript is not lost
+    assert not world.running
+    # A text turn takes the interview over at once.
+    asyncio.run(run_guard.release(acquire_text(world)))
+    assert release(client, world).status_code == 204  # nothing runs: still fine
+
+
+def test_release_clears_a_claim_left_by_a_call_this_process_does_not_know(
+    client: TestClient, world: World
+) -> None:
+    asyncio.run(
+        run_guard.acquire(
+            world.deps().sessions,
+            world.membership,
+            SESSION_ID,
+            limit_seconds=60,
+            voice_limit=1800,
+        )
+    )  # after a restart or on another process: no entry in CALLS
+    assert offer(client, world).status_code == 409
+    assert release(client, world).status_code == 204
+    assert not world.running
+
+
+def test_release_leaves_a_running_text_turn_alone(
+    client: TestClient, world: World
+) -> None:
+    turn = acquire_text(world)
+    assert release(client, world).status_code == 204
+    assert world.running  # still held by the text turn
+    asyncio.run(run_guard.release(turn))
+
+
+def test_a_call_whose_claim_was_taken_away_ends_by_itself(
+    client: TestClient,
+    world: World,
+    stored: list[list[ModelMessage]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tuned(monkeypatch, voice_heartbeat_seconds=0.05)
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+    task = voice_service.CALLS[call_id].task
+    assert task is not None
+    world.running.clear()  # cleared from outside, e.g. by a release on another process
+
+    async def wait() -> None:
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), 5)
+
+    assert client.portal is not None
+    client.portal.call(wait)
+    assert call_id not in voice_service.CALLS
+    assert len(stored) == 1
+
+
+def test_release_needs_the_interview_permission(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def check(_s: object, trip_id: uuid.UUID, sub: str, min_role: TripRole) -> Any:  # ruff: ignore[any-type]
+        if not TripRole.MEMBER.satisfies(min_role):
+            raise trip_service.TripRoleError(str(min_role))
+        return TripMembership(trip_id=trip_id, sub=sub, role=TripRole.MEMBER)
+
+    monkeypatch.setattr(trip_service, "get_membership", AsyncMock(side_effect=check))
+    assert release(client, world).status_code == 403
+
+
+def test_the_call_language_is_pinned_in_the_transcription_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    for locale in ("pl", "en"):
+        model = voice_service.LocalizedRealtimeModel(
+            "gpt-realtime-2.1-mini", language=locale
+        )
+        config = model._session_config("hi", None, model_settings=None)  # ruff: ignore[private-member-access]
+        assert config["audio"]["input"]["transcription"]["language"] == locale
+
+
+def test_the_instructions_name_the_language_the_currency_rule_and_the_tool_rules(
+    world: World,
+) -> None:
+    model = RecordingRealtimeModel()
+    deps = world.deps()
+    deps.voice = True
+    realtime = voice_service.realtime_for(deps, model, locale="en")
+
+    async def go() -> None:
+        await realtime.answer_webrtc_offer("OFFER")
+
+    asyncio.run(go())
+    text = model.instructions or ""
+    assert "English" in text
+    assert "Currency: PLN" in text  # the trip has none, so the default
+    assert "processing" in text  # the rule that forbids saying it
+    assert "build_plan_now" in text
+
+
+def test_the_trips_own_currency_is_what_the_context_says(world: World) -> None:
+    world.trip = world.trip.model_copy(update={"currency": "EUR"})
+    model = RecordingRealtimeModel()
+    deps = world.deps()
+    deps.voice = True
+    realtime = voice_service.realtime_for(deps, model)
+
+    async def go() -> None:
+        await realtime.answer_webrtc_offer("OFFER")
+
+    asyncio.run(go())
+    assert "Currency: EUR" in (model.instructions or "")
+
+
+def test_the_extraction_run_saves_the_calls_facts_and_stores_nothing(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.undo()  # the real _extract, on the world's fake database
+    world.install(monkeypatch)
+    monkeypatch.setattr(
+        session_service, "load_history", AsyncMock(return_value=list(TRANSCRIPT))
+    )
+    seen: list[str] = []
+    moves = iter(
+        [
+            ModelResponse(
+                parts=[
+                    ToolCallPart(
+                        "set_trip_basics",
+                        {"city": "Berlin", "start_date": "2026-10-16", "days": 3},
+                    )
+                ]
+            ),
+            ModelResponse(parts=[TextPart("Zapisane.")]),
+        ]
+    )
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        seen.append(str(messages[-1]))
+        return next(moves)
+
+    appended = AsyncMock()
+    monkeypatch.setattr(session_service, "append_messages", appended)
+    call = voice_service.Call(
+        deps=world.deps(),
+        provider_session=WebRTCSession("openai", session_id="c"),
+        claim=SimpleNamespace(),  # ty: ignore[invalid-argument-type] not used by the extraction
+    )
+    with interview_agent.override(model=FunctionModel(respond)):
+        asyncio.run(voice_service._extract(call))  # ruff: ignore[private-member-access]
+    assert world.trip.destination == "Berlin"
+    assert constants.EXTRACTION_PROMPT in seen[0]
+    appended.assert_not_awaited()  # the host sees no prompt of ours in the history
+
+
+def test_a_failing_extraction_does_not_lose_the_stored_transcript(
+    client: TestClient,
+    world: World,
+    stored: list[list[ModelMessage]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        voice_service, "_extract", AsyncMock(side_effect=RuntimeError("model down"))
+    )
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+    assert hangup(client, world, call_id).status_code == 204
+    assert len(stored) == 1
+    assert not world.running  # the interview is free again
+    voice_service._extract.assert_awaited_once()  # ty: ignore[unresolved-attribute]  # ruff: ignore[private-member-access]
+
+
+def test_a_call_without_a_transcript_runs_no_extraction(
+    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(FakeProviderSession, "all_messages", staticmethod(list))
+    use(monkeypatch, FakeRealtime())
+    call_id = offer(client, world).json()["call_id"]
+    hangup(client, world, call_id)
+    voice_service._extract.assert_not_awaited()  # ty: ignore[unresolved-attribute]  # ruff: ignore[private-member-access]

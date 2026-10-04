@@ -161,6 +161,8 @@ async def saved(
     Returns:
         The result with a ``STATE_SNAPSHOT`` of the "What we already know" panel.
     """
+    # What the plan was built from has changed: a new request builds a new one.
+    ctx.deps.state.draft_plan = None
     if not ctx.deps.is_member:
         # A member's values stay unmarked on purpose: they read as "set by a
         # person", so the host's assistant asks before it changes them.
