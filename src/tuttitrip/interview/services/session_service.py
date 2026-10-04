@@ -1,14 +1,30 @@
 """Interview sessions: resume, history storage and the "What we already know" view.
 
-The history is stored as JSONB through ``ModelMessagesTypeAdapter``. It is
-written only by the server (the AG-UI endpoint passes the stored history to the
-adapter as ``message_history``); what a client sends is never saved as truth.
+Contract for the AG-UI endpoint (#56). The history is stored as JSONB through
+``ModelMessagesTypeAdapter`` and is written only by the server:
+
+- The only thing the client sends is the host's last text. The endpoint passes
+  it to the agent as ``user_prompt`` and the stored history as
+  ``message_history`` (``load_history``), never the client's ``messages`` or
+  ``state``. pydantic-ai's AG-UI adapter would build
+  ``[*server_history, *frontend_messages]`` and treat a trailing client request
+  as resumed, leaving the host's turn out of ``new_messages()``.
+- After the run, ``append_messages(result.new_messages())`` stores that user
+  turn, the tool calls and the answer.
+- One run per session at a time: the endpoint must reject (409) or serialise a
+  second run on the same session, or both would append from the same base.
+- Do not store a ``SystemPromptPart`` from a run and do not rely on a stored
+  one: ``Agent`` instructions are applied per run, and a stored system prompt
+  would go stale when the instructions change.
+- ``GET .../sessions/current`` takes ``dir=desc`` to show the newest messages
+  first (the chat UI reads page 1 of ``desc`` and scrolls up).
 """
 
 from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
+from pydantic import ValidationError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
@@ -16,7 +32,6 @@ from pydantic_ai.messages import (
     TextPart,
     UserPromptPart,
 )
-from pydantic_core import to_jsonable_python
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.interview import db
@@ -44,6 +59,10 @@ class SessionNotFoundError(Exception):
     """The trip has no such (open) interview session."""
 
 
+class HistoryIncompatibleError(Exception):
+    """The stored history no longer validates (e.g. after a pydantic-ai upgrade)."""
+
+
 class UnknownFieldError(Exception):
     """A value cannot be marked: it is not filled or not on this trip."""
 
@@ -52,7 +71,13 @@ def _display(history: Sequence[ModelMessage]) -> list[DisplayMessage]:
     shown: list[DisplayMessage] = []
 
     def add(role: MessageRole, text: str, stamp: datetime | None) -> None:
-        if text.strip():
+        if not text.strip():
+            return
+        if shown and shown[-1].role is role is MessageRole.ASSISTANT:
+            # Text before and after a tool call is one answer for the host.
+            last = shown[-1]
+            shown[-1] = last.model_copy(update={"text": f"{last.text}\n\n{text}"})
+        else:
             shown.append(
                 DisplayMessage(
                     position=len(shown), role=role, text=text, timestamp=stamp
@@ -77,7 +102,11 @@ def _display(history: Sequence[ModelMessage]) -> list[DisplayMessage]:
 
 
 def _history(row: InterviewSession) -> list[ModelMessage]:
-    return ModelMessagesTypeAdapter.validate_python(row.history)
+    try:
+        return ModelMessagesTypeAdapter.validate_python(row.history)
+    except ValidationError as exc:
+        msg = f"Stored history of session {row.id} cannot be read"
+        raise HistoryIncompatibleError(msg) from exc
 
 
 def _read(row: InterviewSession, shown: int) -> SessionRead:
@@ -161,6 +190,7 @@ async def load_history(
 
     Raises:
         SessionNotFoundError: No such session on this trip.
+        HistoryIncompatibleError: The stored history no longer validates.
     """
     row = await db.select_session(session, membership.trip_id, session_id)
     if row is None:
@@ -176,11 +206,16 @@ async def append_messages(
 ) -> None:
     """Add the messages of a finished run to the stored history.
 
+    The run must have been started with the host's text as ``user_prompt`` (see
+    the module docstring), so ``result.new_messages()`` holds the user turn, the
+    tool calls and the answer. Messages that came from a client are not history
+    and must never be passed here.
+
     Args:
         session: Open session.
         membership: The caller's checked membership of the trip.
         session_id: The AG-UI ``threadId``.
-        messages: New messages only (``result.new_messages()``).
+        messages: ``result.new_messages()`` of a run the server executed.
 
     Raises:
         SessionNotFoundError: No such session on this trip.
@@ -188,7 +223,10 @@ async def append_messages(
     row = await db.select_session(session, membership.trip_id, session_id, lock=True)
     if row is None:
         raise SessionNotFoundError(str(session_id))
-    row.history = [*row.history, *to_jsonable_python(list(messages))]
+    row.history = [
+        *row.history,
+        *ModelMessagesTypeAdapter.dump_python(list(messages), mode="json"),
+    ]
     await session.commit()
 
 
@@ -224,6 +262,12 @@ async def mark_assistant_values(
     Call it right after the agent tool saved them through the ``trips`` or
     ``profiles`` services. If the host edits a value afterwards, its source
     turns into ``host`` by itself.
+
+    The digest is taken from a fresh read, not from the value the tool wrote.
+    If the host edits the same value between the tool's write and this call,
+    that edit is recorded as the assistant's (a small window; call it right
+    after the write). If the host re-enters exactly the assistant's value, the
+    digest still matches and the source stays ``assistant``.
 
     Args:
         session: Open session.

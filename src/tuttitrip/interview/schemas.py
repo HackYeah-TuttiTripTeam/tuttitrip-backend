@@ -33,7 +33,6 @@ class SessionStatus(StrEnum):
     """State of an interview session."""
 
     OPEN = "open"
-    CLOSED = "closed"
 
 
 class SessionRead(BaseModel):

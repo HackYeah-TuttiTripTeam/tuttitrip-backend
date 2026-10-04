@@ -27,8 +27,9 @@ class InterviewSession(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    # No plain index: the partial unique index above serves every lookup.
     trip_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("trips.id", ondelete="CASCADE"), index=True
+        ForeignKey("trips.id", ondelete="CASCADE")
     )
     status: Mapped[SessionStatus] = mapped_column(
         Enum(

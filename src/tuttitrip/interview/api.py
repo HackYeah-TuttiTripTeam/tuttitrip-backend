@@ -14,7 +14,10 @@ from tuttitrip.interview.schemas import (
     SessionRead,
 )
 from tuttitrip.interview.services import session_service
-from tuttitrip.interview.services.session_service import SessionNotFoundError
+from tuttitrip.interview.services.session_service import (
+    HistoryIncompatibleError,
+    SessionNotFoundError,
+)
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
@@ -48,10 +51,7 @@ async def start_session(
     Returns:
         The open session.
     """
-    try:
-        read, created = await session_service.open_session(session, membership)
-    except SessionNotFoundError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, NO_SESSION) from exc
+    read, created = await session_service.open_session(session, membership)
     if not created:
         response.status_code = status.HTTP_200_OK
     return read
@@ -68,6 +68,8 @@ async def get_current_session(
     """Read the open session with a page of the conversation to display.
 
     Only the questions and answers are listed; tool calls stay in the history.
+    Use `dir=desc` to get the newest messages first (chat UI). 409 when the
+    stored history cannot be read any more.
 
     Args:
         membership: The caller's membership (co-host or above).
@@ -81,6 +83,8 @@ async def get_current_session(
         return await session_service.get_current(session, membership, query)
     except SessionNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SESSION) from exc
+    except HistoryIncompatibleError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.get("/knowledge", dependencies=[requires(Feature.INTERVIEW, Access.READ)])

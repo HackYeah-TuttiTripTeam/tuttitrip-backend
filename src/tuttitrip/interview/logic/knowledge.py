@@ -33,6 +33,9 @@ _BUDGET_FIELDS = {
     "budget_day_max",
     "budget_flex_pct",
 }
+# Bookkeeping that changes without the host or assistant changing the person:
+# linking an account sets `user_sub`, the rest is derived on read.
+_PERSON_VOLATILE = {"id", "trip_id", "user_sub", "age_group", "customized_fields"}
 _PREFERENCE_VOLATILE = {"updated_by_sub", "updated_at", "filled"}
 
 
@@ -64,14 +67,17 @@ def values(
         One entry per trip field, per person and per person's preferences.
     """
     budget = trip.model_dump(mode="json", include=_BUDGET_FIELDS)
-    has_budget = trip.budget_total_min is not None or trip.budget_day_min is not None
+    has_budget = trip.currency is not None and (
+        trip.budget_total_min is not None or trip.budget_day_min is not None
+    )
     dates = [trip.start_date, trip.end_date]
     out = {
         FieldRef(field=KnowledgeField.DESTINATION): Value(
             filled=trip.destination is not None, digest=_digest(trip.destination)
         ),
         FieldRef(field=KnowledgeField.DATES): Value(
-            filled=trip.start_date is not None, digest=_digest(dates)
+            filled=trip.start_date is not None and trip.end_date is not None,
+            digest=_digest(dates),
         ),
         FieldRef(field=KnowledgeField.BUDGET): Value(
             filled=has_budget, digest=_digest(budget)
@@ -79,7 +85,10 @@ def values(
     }
     for person in people:
         ref = FieldRef(field=KnowledgeField.PEOPLE, profile_id=person.id)
-        out[ref] = Value(filled=True, digest=_digest(person.model_dump(mode="json")))
+        out[ref] = Value(
+            filled=True,
+            digest=_digest(person.model_dump(mode="json", exclude=_PERSON_VOLATILE)),
+        )
     for prefs in preferences:
         ref = FieldRef(field=KnowledgeField.PREFERENCES, profile_id=prefs.profile_id)
         data = prefs.model_dump(mode="json", exclude=_PREFERENCE_VOLATILE)

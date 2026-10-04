@@ -25,9 +25,7 @@ def upgrade() -> None:
         sa.Column("trip_id", sa.Uuid(), nullable=False),
         sa.Column(
             "status",
-            sa.Enum(
-                "open", "closed", name="interview_status", native_enum=False, length=10
-            ),
+            sa.Enum("open", name="interview_status", native_enum=False, length=10),
             server_default="open",
             nullable=False,
         ),
@@ -57,12 +55,6 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_interview_sessions")),
-    )
-    op.create_index(
-        op.f("ix_interview_sessions_trip_id"),
-        "interview_sessions",
-        ["trip_id"],
-        unique=False,
     )
     op.create_index(
         "uq_interview_sessions_open_trip",
@@ -132,8 +124,5 @@ def downgrade() -> None:
         "uq_interview_sessions_open_trip",
         table_name="interview_sessions",
         postgresql_where=sa.text("status = 'open'"),
-    )
-    op.drop_index(
-        op.f("ix_interview_sessions_trip_id"), table_name="interview_sessions"
     )
     op.drop_table("interview_sessions")

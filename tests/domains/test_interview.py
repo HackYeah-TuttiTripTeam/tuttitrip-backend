@@ -3,7 +3,7 @@
 import asyncio
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock
@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
@@ -22,6 +23,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.models.test import TestModel
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
@@ -139,27 +141,80 @@ def _prefs(person: ProfileRead, *, filled: bool) -> PreferencesRead:
 # --- history ---------------------------------------------------------------
 
 
-def test_history_with_tool_calls_survives_a_json_round_trip() -> None:
+def test_history_with_tool_calls_survives_a_json_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     row = InterviewSession(id=uuid.uuid4(), trip_id=TRIP, history=[])
     session = AsyncMock()
+    monkeypatch.setattr(db, "select_session", AsyncMock(return_value=row))
     original = _history()
-    asyncio.run(_append(session, row, original[:2]))
-    asyncio.run(_append(session, row, original[2:]))
+
+    async def store() -> None:
+        await session_service.append_messages(session, HOST, row.id, original[:2])
+        await session_service.append_messages(session, HOST, row.id, original[2:])
+
+    asyncio.run(store())
     assert row.history == ModelMessagesTypeAdapter.dump_python(original, mode="json")
     assert ModelMessagesTypeAdapter.validate_python(row.history) == original
     assert session.commit.await_count == 2
 
 
-async def _append(
-    session: AsyncMock, row: InterviewSession, messages: list[ModelMessage]
+def test_agent_run_with_user_prompt_stores_the_user_turn(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db_select = AsyncMock(return_value=row)
-    original = db.select_session
-    db.select_session = db_select
-    try:
-        await session_service.append_messages(session, HOST, row.id, messages)
-    finally:
-        db.select_session = original
+    # The #56 contract: the host's text is `user_prompt`, the stored history is
+    # `message_history`, and `new_messages()` is what gets appended.
+    agent = Agent(TestModel(custom_output_text="Ile osób jedzie?"))
+    row = InterviewSession(id=uuid.uuid4(), trip_id=TRIP, history=[])
+    session = AsyncMock()
+    monkeypatch.setattr(db, "select_session", AsyncMock(return_value=row))
+
+    async def turn(text: str) -> None:
+        stored = await session_service.load_history(session, HOST, row.id)
+        result = await agent.run(text, message_history=stored)
+        await session_service.append_messages(
+            session, HOST, row.id, result.new_messages()
+        )
+
+    async def talk() -> list[ModelMessage]:
+        await turn("Jedziemy do Krakowa")
+        await turn("Nas jest czworo")
+        return await session_service.load_history(session, HOST, row.id)
+
+    loaded = asyncio.run(talk())
+    shown = session_service._display(loaded)  # ruff: ignore[private-member-access]
+    assert [(m.role, m.text) for m in shown] == [
+        (MessageRole.USER, "Jedziemy do Krakowa"),
+        (MessageRole.ASSISTANT, "Ile osób jedzie?"),
+        (MessageRole.USER, "Nas jest czworo"),
+        (MessageRole.ASSISTANT, "Ile osób jedzie?"),
+    ]
+    assert len(loaded) == 4
+
+
+def test_unreadable_stored_history_fails_clearly() -> None:
+    row = InterviewSession(id=uuid.uuid4(), trip_id=TRIP, history=[{"kind": "nope"}])
+    with pytest.raises(session_service.HistoryIncompatibleError):
+        session_service._history(row)  # ruff: ignore[private-member-access]
+
+
+def test_text_around_a_tool_call_is_one_assistant_message() -> None:
+    history: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="Cześć")]),
+        ModelResponse(
+            parts=[
+                TextPart(content="Sprawdzam."),
+                ToolCallPart(tool_name="save", args={}),
+            ]
+        ),
+        ModelRequest(parts=[ToolReturnPart(tool_name="save", content="ok")]),
+        ModelResponse(parts=[TextPart(content="Gotowe.")]),
+    ]
+    shown = session_service._display(history)  # ruff: ignore[private-member-access]
+    assert [(m.role, m.text) for m in shown] == [
+        (MessageRole.USER, "Cześć"),
+        (MessageRole.ASSISTANT, "Sprawdzam.\n\nGotowe."),
+    ]
 
 
 def test_append_to_a_session_of_another_trip_is_not_found() -> None:
@@ -260,6 +315,36 @@ def test_source_is_assistant_until_the_host_changes_the_value() -> None:
     edited = knowledge.values(_trip(destination="Gdańsk"), [], [])
     assert knowledge.sources(edited, stored)[0].source is ValueSource.HOST
     assert knowledge.sources(written, {})[0].source is ValueSource.HOST
+
+
+def test_dates_need_both_ends_and_budget_needs_a_currency() -> None:
+    dates, budget = (
+        FieldRef(field=f) for f in (KnowledgeField.DATES, KnowledgeField.BUDGET)
+    )
+    day = date(2026, 11, 1)
+    only_start = knowledge.values(_trip(start_date=day), [], [])
+    assert not only_start[dates].filled
+    both = knowledge.values(_trip(start_date=day, end_date=day), [], [])
+    assert both[dates].filled
+    no_currency = knowledge.values(_trip(budget_day_min=Decimal(100)), [], [])
+    assert not no_currency[budget].filled
+    paid = knowledge.values(_trip(budget_day_min=Decimal(100), currency="PLN"), [], [])
+    assert paid[budget].filled
+
+
+def test_linking_an_account_does_not_change_the_person_digest() -> None:
+    person = _person()
+    ref = FieldRef(field=KnowledgeField.PEOPLE, profile_id=person.id)
+    linked = person.model_copy(update={"user_sub": "auth0|ola"})
+    assert (
+        knowledge.values(_trip(), [person], [])[ref].digest
+        == knowledge.values(_trip(), [linked], [])[ref].digest
+    )
+    renamed = person.model_copy(update={"display_name": "Ola K."})
+    assert (
+        knowledge.values(_trip(), [renamed], [])[ref].digest
+        != knowledge.values(_trip(), [person], [])[ref].digest
+    )
 
 
 def test_preference_digest_ignores_who_and_when_saved() -> None:
