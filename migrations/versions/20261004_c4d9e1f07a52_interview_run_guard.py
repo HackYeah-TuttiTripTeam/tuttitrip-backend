@@ -1,7 +1,7 @@
 """Interview run guard and voice time used.
 
 Revision ID: c4d9e1f07a52
-Revises: 65807aa11765
+Revises: 306bfea56fc5
 Create Date: 2026-10-04 12:30:00.000000
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c4d9e1f07a52"
-down_revision: str | None = "65807aa11765"
+down_revision: str | None = "306bfea56fc5"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
