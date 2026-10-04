@@ -21,9 +21,12 @@ from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.db.session import database_url
+from tuttitrip.trips.checkins import db as checkins_db
+from tuttitrip.trips.checkins.services import checkin_service
 from tuttitrip.trips.locations import db as locations_db
 from tuttitrip.trips.locations.models import TripLocation, TripLocationConsent
 from tuttitrip.trips.locations.schemas import LocationQuery
+from tuttitrip.trips.locations.services import location_service
 from tuttitrip.trips.models import Trip
 from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import member_service, trip_service
@@ -362,3 +365,40 @@ def test_sql_visibility_purge_and_cascade() -> None:
         await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_account_erasure_deletes_locations_and_checkins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        profile_service,
+        "account_profile_ids",
+        AsyncMock(return_value=[MY_PROFILE]),
+    )
+    monkeypatch.setattr(locations_db, "delete_for_profiles", AsyncMock(return_value=1))
+    monkeypatch.setattr(checkins_db, "delete_for_profiles", AsyncMock(return_value=2))
+    session = AsyncMock()
+    assert asyncio.run(location_service.erase_account(session, ME.sub)) == {
+        "location_consents_removed": 1
+    }
+    assert asyncio.run(checkin_service.erase_account(session, ME.sub)) == {
+        "checkins_removed": 2
+    }
+    locations_db.delete_for_profiles.assert_awaited_once_with(  # ty: ignore[unresolved-attribute]
+        session, [MY_PROFILE]
+    )
+
+
+def test_account_erasure_without_profiles_touches_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        profile_service, "account_profile_ids", AsyncMock(return_value=[])
+    )
+    delete = AsyncMock()
+    monkeypatch.setattr(locations_db, "delete_for_profiles", delete)
+    session = AsyncMock()
+    assert asyncio.run(location_service.erase_account(session, ME.sub)) == {
+        "location_consents_removed": 0
+    }
+    delete.assert_not_awaited()

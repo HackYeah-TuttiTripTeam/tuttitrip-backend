@@ -1,5 +1,6 @@
 """Location queries on PostgreSQL."""
 
+from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
@@ -215,3 +216,26 @@ async def purge_expired(session: AsyncSession, trip_id: UUID, now: datetime) -> 
             or_(TripLocation.expires_at <= now, ~has_consent),
         )
     )
+
+
+async def delete_for_profiles(
+    session: AsyncSession, profile_ids: Sequence[UUID]
+) -> int:
+    """Delete the consents and positions of some profiles, on every trip.
+
+    Args:
+        session: Open session (caller commits).
+        profile_ids: The profiles.
+
+    Returns:
+        How many consents were deleted.
+    """
+    await session.execute(
+        delete(TripLocation).where(TripLocation.profile_id.in_(profile_ids))
+    )
+    result = await session.execute(
+        delete(TripLocationConsent)
+        .where(TripLocationConsent.profile_id.in_(profile_ids))
+        .returning(TripLocationConsent.profile_id)
+    )
+    return len(result.all())

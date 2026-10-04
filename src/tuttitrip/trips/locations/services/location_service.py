@@ -135,6 +135,25 @@ async def clear_profile(session: AsyncSession, trip_id: UUID, profile_id: UUID) 
     await db.delete_for_profile(session, trip_id, profile_id)
 
 
+async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
+    """Delete the shared location and consent of a deleted account.
+
+    Must run before the profiles lose their link to the account. No commit.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject of the deleted account.
+
+    Returns:
+        ``location_consents_removed``.
+    """
+    profile_ids = await profile_service.account_profile_ids(session, sub)
+    if not profile_ids:
+        return {"location_consents_removed": 0}
+    removed = await db.delete_for_profiles(session, profile_ids)
+    return {"location_consents_removed": removed}
+
+
 async def update_position(
     session: AsyncSession, membership: TripMembership, data: PositionUpdate
 ) -> LocationRead:
