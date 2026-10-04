@@ -55,6 +55,7 @@ class ErrorCode(StrEnum):
     MODEL_OUTPUT_INVALID = "model_output_invalid"
     CITY_NOT_FOUND = "city_not_found"
     RATE_LIMITED = "rate_limited"
+    SLUG_CONFLICT = "slug_conflict"  # the worker's ErrorCode needs it too
 
 
 class ContractPayload(BaseModel):

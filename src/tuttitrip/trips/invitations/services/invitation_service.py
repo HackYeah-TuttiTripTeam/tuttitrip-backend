@@ -315,3 +315,17 @@ async def accept(session: AsyncSession, sub: str, body: InvitationAccept) -> Joi
     except ProfileNotFoundError, ProfileClaimedError, InvitationProfileMismatchError:
         await session.rollback()
         raise
+
+
+async def erase_account(session: AsyncSession, sub: str) -> dict[str, int]:
+    """Revoke the invitation links of a deleted account, without committing.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject of the deleted account.
+
+    Returns:
+        ``invitations_revoked``.
+    """
+    revoked = await db.revoke_created_by(session, sub, datetime.now(UTC))
+    return {"invitations_revoked": revoked}
