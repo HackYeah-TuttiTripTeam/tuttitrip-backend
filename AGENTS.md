@@ -64,6 +64,7 @@ src/tuttitrip/
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
   mcp/                 MCP server at /api/v1/mcp (FastMCP); tools call other domains' services
+  notifications/       inbox table (outbox); producers call notifications.services
   places/              city and place catalog; prices and hours carry source + verified mark
 contracts/             jobs.schema.json: rendered job contract (compared with the worker)
 migrations/            Alembic (async); versions/ holds revisions
@@ -727,6 +728,30 @@ Wydania:
   `feedback_service.list_for_trip()`, which returns active vetoes.
 - Own profile (`profiles.user_sub` equals the caller) or co-host and above;
   the services take a `TripMembership` as the author, not `CurrentUser`.
+
+## Notifications
+
+One table, `notifications`, feeds the list, the unread counter and the live
+stream. Other domains create notifications with
+`notifications.services.notification_service.notify(session, recipients=...,
+type=..., trip_id=..., params=..., actions=..., dedupe_key=..., actor=...)`
+inside their own transaction; it never commits, so a rollback takes the
+notification back. `resolve(session, dedupe_key)` marks all with that key as
+read (an approved request disappears from the basket).
+
+- The database keeps `type` (open text, no CHECK) and small `params` (strings
+  only: names, ids, amounts; never tokens or private data, they reach the
+  browser). Title and text are composed by the frontend in the user's language.
+- `actions` are codes from `NotificationActionCode`; the backend never stores
+  URLs or API paths.
+- `dedupe_key` makes a repeated event a no-op per recipient
+  (`UNIQUE (user_sub, dedupe_key)`); `actor` never gets their own.
+- The producer decides the recipients; the service does not check membership.
+- An `AFTER INSERT` trigger sends `pg_notify('notifications', {id, user_sub})`
+  (ids only: the payload is capped at 8000 bytes). The worker may `SELECT`,
+  `INSERT` and `DELETE` on the table (`deploy/worker-grants.sql`).
+- Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
+  is marked `integration`.
 
 ## Git flow
 
