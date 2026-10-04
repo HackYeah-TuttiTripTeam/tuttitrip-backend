@@ -8,7 +8,12 @@ import hashlib
 import json
 from typing import Protocol
 
-from dbos import DBOSClient, EnqueueOptions, WorkflowSerializationFormat
+from dbos import (
+    DBOSClient,
+    EnqueueOptions,
+    WorkflowSerializationFormat,
+    WorkflowStatus,
+)
 from dbos import error as dbos_error
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -16,6 +21,7 @@ from tuttitrip.shared.jobs.contracts import (
     PROGRESS_EVENT,
     WORKFLOWS,
     ContractPayload,
+    ErrorCode,
     Progress,
     Queue,
     Workflow,
@@ -27,9 +33,76 @@ TIMEOUT_SECONDS: dict[Workflow, float] = {
     Workflow.GENERATE_TRIP_PLAN: 900.0,
     Workflow.EMBED_TEXTS: 300.0,
     Workflow.PING: 60.0,
+    Workflow.PARSE_PASTED_PLAN: 600.0,
+    Workflow.EXTRACT_OFFER_EVIDENCE: 600.0,
+    Workflow.FETCH_PLACE_CANDIDATES: 900.0,
+    Workflow.WRITE_JUSTIFICATIONS: 600.0,
+    Workflow.PARSE_EXPENSE_TEXT: 120.0,
+    Workflow.READ_RECEIPT: 300.0,
+}
+
+NOT_IMPLEMENTED_MESSAGE = "Jeszcze niedostępne"
+
+# Worker codes that get a client-readable message (Polish, English) instead of
+# the raw text.
+ERROR_MESSAGES: dict[str, tuple[str, str]] = {
+    ErrorCode.NOT_IMPLEMENTED: (NOT_IMPLEMENTED_MESSAGE, "Not available yet"),
+    ErrorCode.DOCUMENT_NOT_FOUND: (
+        "Nie znaleziono wklejonej oferty",
+        "The pasted offer was not found",
+    ),
+    ErrorCode.CITY_NOT_FOUND: (
+        "Nie znaleziono takiego miasta",
+        "No such city was found",
+    ),
+    ErrorCode.RATE_LIMITED: (
+        "Dzienny limit zapytań został wyczerpany, spróbuj jutro",
+        "The daily request limit is used up, try again tomorrow",
+    ),
+    ErrorCode.SLUG_CONFLICT: (
+        "Ta nazwa pasuje do kilku miast, doprecyzuj nazwę miasta",
+        "This name matches more than one city, please be more specific",
+    ),
 }
 
 _UNAVAILABLE = (SQLAlchemyError, dbos_error.DBOSException, OSError)
+
+
+def _messages(code: str | None, error: BaseException) -> tuple[str, str | None]:
+    pl_en = None if code is None else ERROR_MESSAGES.get(code)
+    return pl_en or (str(error), None)
+
+
+def job_state(status: WorkflowStatus, progress: object) -> JobState:
+    """Translate a DBOS status into the API's ``JobState``.
+
+    The worker's ``ContractError`` code (``PortableWorkflowError.code``) goes to
+    ``error_code``; codes listed in ``ERROR_MESSAGES`` (``not_implemented``,
+    ``document_not_found``, ``city_not_found``, ``rate_limited``,
+    ``slug_conflict``) get a readable message in Polish and English.
+
+    Args:
+        status: DBOS workflow status.
+        progress: Latest ``progress`` event value, if any.
+
+    Returns:
+        The state.
+    """
+    error = status.error
+    raw = getattr(error, "code", None)
+    code = raw if isinstance(raw, str) else None
+    text, text_en = (None, None) if error is None else _messages(code, error)
+    return JobState(
+        workflow_id=status.workflow_id,
+        workflow_name=status.name,
+        status=status.status,
+        owner=status.authenticated_user,
+        output=status.output if isinstance(status.output, dict) else None,
+        error=text,
+        error_en=text_en,
+        error_code=str(code) if code is not None else None,
+        progress=Progress.model_validate(progress) if progress else None,
+    )
 
 
 class JobNotFoundError(Exception):
@@ -155,15 +228,7 @@ class DbosJobQueue:
             raise JobNotFoundError(workflow_id) from exc
         except _UNAVAILABLE as exc:
             raise JobQueueUnavailableError(str(exc)) from exc
-        return JobState(
-            workflow_id=status.workflow_id,
-            workflow_name=status.name,
-            status=status.status,
-            owner=status.authenticated_user,
-            output=status.output if isinstance(status.output, dict) else None,
-            error=str(status.error) if status.error is not None else None,
-            progress=Progress.model_validate(progress) if progress else None,
-        )
+        return job_state(status, progress)
 
     async def cancel(self, workflow_id: str) -> None:
         """Cancel a workflow (no-op once it has finished).

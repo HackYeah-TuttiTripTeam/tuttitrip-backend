@@ -1,0 +1,65 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>TuttiTrip</title>
+<style>
+  html, body { margin:0; height:100%; }
+  body { background:var(--background); color:var(--foreground); font-family:var(--font-sans); overflow:hidden; }
+  .cover { position:relative; height:288px; overflow:hidden; }
+  .art { position:absolute; top:0; left:480px; width:480px; height:288px; overflow:hidden; }
+  .art svg { display:block; width:480px; height:288px; }
+  .brand { fill:var(--brand); }
+  .ink { fill:var(--foreground); }
+  .tint { fill:var(--want-soft); }
+  .warm { fill:var(--decline); }
+  .paper { fill:var(--background); }
+  .mark { fill:var(--brand-ink); }
+  .ring { fill:none; stroke:var(--primary); stroke-width:5px; }
+  .ring-paper { fill:none; stroke:var(--background); stroke-width:5px; }
+  .blk { rx:var(--radius-lg); }
+  .words { position:absolute; left:var(--space-6); bottom:var(--space-6); max-width:440px; }
+  .name { margin:0; font-family:var(--font-display); font-size:84px; line-height:.92; font-weight:800; letter-spacing:-.035em; color:var(--foreground); }
+  .tag { margin:var(--space-2) 0 0 4px; font-size:14px; line-height:20px; color:var(--muted-foreground); }
+</style>
+</head>
+<body>
+<div class="cover">
+<div class="art" aria-hidden="true">
+<svg viewBox="0 0 480 288" width="480" height="288">
+<!--
+  blocks      brand 160×320 bled top and bottom (the mark's green) · foreground ink 240×176 bled off the right · want-soft 120×88 (tint) · one decline dot (the single "nie chcę") — about 40% of 960×288
+  arrangement brand slab left, ink block top-right bleeding off the edge, tint tile under it; bottoms on space-6 lines, space-4 gutters
+  pattern     the route-dot plot from FairnessMeter and the mark: three rows of route dots at an 8px pitch, one stop per row at a different position, a goal ring in paper on the ink block and one in primary on the tint; "plan, po którym nikt nie czuje, że przegrał" read as people placed on one line
+  scales      gutters space-4; dot pitch 8 (space-2); stop r 8 = 16px plot dot; goal ring r 9 = ring-size 18; corners radius-lg 20
+-->
+<rect class="brand blk" x="16" y="-24" width="160" height="336" rx="20"/>
+<rect class="ink blk" x="192" y="24" width="312" height="176" rx="20"/>
+<rect class="tint blk" x="192" y="216" width="120" height="48" rx="20"/>
+<g class="mark">
+  <circle cx="40" cy="72" r="2"/><circle cx="56" cy="72" r="2"/><circle cx="72" cy="72" r="2"/><circle cx="88" cy="72" r="2"/><circle cx="104" cy="72" r="2"/><circle cx="120" cy="72" r="2"/><circle cx="136" cy="72" r="2"/><circle cx="152" cy="72" r="2"/>
+  <circle cx="96" cy="72" r="8"/>
+  <circle cx="40" cy="144" r="2"/><circle cx="56" cy="144" r="2"/><circle cx="72" cy="144" r="2"/><circle cx="88" cy="144" r="2"/><circle cx="104" cy="144" r="2"/><circle cx="120" cy="144" r="2"/><circle cx="136" cy="144" r="2"/><circle cx="152" cy="144" r="2"/>
+  <circle cx="128" cy="144" r="8"/>
+  <circle cx="40" cy="216" r="2"/><circle cx="56" cy="216" r="2"/><circle cx="72" cy="216" r="2"/><circle cx="88" cy="216" r="2"/><circle cx="104" cy="216" r="2"/><circle cx="120" cy="216" r="2"/><circle cx="136" cy="216" r="2"/>
+  <circle cx="64" cy="216" r="8"/>
+</g>
+<g class="paper">
+  <circle cx="216" cy="72" r="2"/><circle cx="232" cy="72" r="2"/><circle cx="248" cy="72" r="2"/><circle cx="264" cy="72" r="2"/><circle cx="280" cy="72" r="2"/><circle cx="296" cy="72" r="2"/><circle cx="312" cy="72" r="2"/><circle cx="328" cy="72" r="2"/><circle cx="344" cy="72" r="2"/><circle cx="360" cy="72" r="2"/>
+  <circle cx="216" cy="144" r="2"/><circle cx="232" cy="144" r="2"/><circle cx="248" cy="144" r="2"/><circle cx="264" cy="144" r="2"/><circle cx="280" cy="144" r="2"/><circle cx="296" cy="144" r="2"/><circle cx="312" cy="144" r="2"/><circle cx="328" cy="144" r="2"/><circle cx="344" cy="144" r="2"/><circle cx="360" cy="144" r="2"/><circle cx="376" cy="144" r="2"/><circle cx="392" cy="144" r="2"/>
+  <circle cx="280" cy="72" r="8"/>
+  <circle cx="344" cy="144" r="8"/>
+</g>
+<circle class="warm" cx="248" cy="144" r="8"/>
+<circle class="ring-paper" cx="424" cy="144" r="10"/>
+<circle class="ring" cx="284" cy="240" r="10"/>
+</svg>
+</div>
+<div class="words">
+  <h1 class="name">TuttiTrip</h1>
+  <p class="tag">Plan wyjazdu, po którym nikt nie czuje, że przegrał.</p>
+</div>
+</div>
+</body>
+</html>

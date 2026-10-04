@@ -7,6 +7,7 @@ of a removed feature is simply ignored by resolution. The worker role has no
 grants on these tables (``deploy/worker-grants.sql``).
 """
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from tuttitrip.shared.db.base import Base
 from tuttitrip.shared.permissions.registry import Access
+from tuttitrip.shared.permissions.schemas import TokenScope
 
 FEATURE_CODE_LENGTH = 100
 SUB_LENGTH = 255
@@ -105,3 +107,47 @@ class PermissionAudit(Base):
     target_role: Mapped[str | None] = mapped_column(String(50))
     change: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class AccessToken(Base):
+    """Access without an account: one scope on one profile of one trip.
+
+    Only the SHA-256 of the token is stored (the token is 256 random bits, so
+    a fast hash is enough); the plain token exists once, in the creation
+    response.
+    """
+
+    __tablename__ = "access_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    scope: Mapped[TokenScope] = mapped_column(
+        Enum(TokenScope, name="token_scope", native_enum=False, length=20)
+    )
+    trip_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("trips.id", ondelete="CASCADE"), index=True
+    )
+    profile_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), index=True
+    )
+    expires_at: Mapped[datetime]
+    revoked_at: Mapped[datetime | None]
+    created_by: Mapped[str] = mapped_column(String(SUB_LENGTH))
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    last_used_at: Mapped[datetime | None]
+
+
+class AccountBlock(Base):
+    """An account the API refuses (blocked, or deleted in Auth0).
+
+    Auth0 access tokens stay valid until they expire, so every authenticated
+    request checks this table (in the grants query). A deleted account keeps
+    its row for the same reason. The worker role has no grants here.
+    """
+
+    __tablename__ = "account_blocks"
+
+    user_sub: Mapped[str] = mapped_column(String(SUB_LENGTH), primary_key=True)
+    deleted: Mapped[bool] = mapped_column(default=False, server_default=false())
+    blocked_by: Mapped[str] = mapped_column(String(SUB_LENGTH))
+    blocked_at: Mapped[datetime] = mapped_column(server_default=func.now())

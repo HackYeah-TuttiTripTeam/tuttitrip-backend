@@ -24,9 +24,20 @@ uv run alembic upgrade head               # migrate
 uv run uvicorn tuttitrip.main:app --reload
 docker compose up --build                 # db + migrate + api in containers
 
-# Must all pass before every commit (CI runs the same):
-uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
+# Must all pass before every commit (this is all CI runs: lint, types, unit + architecture tests):
+uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest -m "not integration and not e2e"
+
+# Local only, before the PR is marked ready (CI does not run them; part of the smoke step).
+# Exit code 5 means "no such tests yet" (fine): today every test is a unit test (mocked services, SQL
+# rendered without a DB), so the set is empty.
+uv run pytest -m integration
 ```
+
+Test markers (registered in `pyproject.toml`, strict): `integration` for a test that needs a real
+Postgres, a DBOS runtime or another live service, `e2e` for one against a running stack, the
+network or a real model. Mark such a test at the moment you write it; it then stays off CI and
+runs in the local smoke step. A fast test with fakes, mocked services or a `TestClient` with
+overridden dependencies is a unit test and carries no marker.
 
 ## Layout: vertical slices
 
@@ -39,14 +50,24 @@ src/tuttitrip/
     auth/              Auth0 JWT verification, CurrentUser (authentication only)
     permissions/       feature registry, roles/grants, requires(), GET /api/v1/me, admin API
     health/            GET /api/v1/health (DB + worker), GET /api/v1/health/live
+    llm/               Pydantic AI model catalog (services/model_catalog.py)
+    pagination/        list contract: PageParams, Page[T], BulkSelection (paginate()/selected() are in db/pagination.py)
     jobs/              DBOS client: enqueue/status/cancel worker jobs, contract mirror
+  accounts/            own Auth0 account: PATCH /api/v1/me/account (name, e-mail+password accounts only)
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
-  interview/           AI interview agent (AG-UI endpoint goes here)
+  voting/              vote links for people without an account, host's vote summary
+  interview/           AI interview: AG-UI endpoint, tools, question order, voice
   planning/            planner agent; subdomains fairness/ and linter/
+                       algorithm spec (canonical for planning/**/logic): docs/algorytm.md
+                       solvers: logic/solver.py (local search, default) and logic/cpsat.py
+                       (OR-Tools CP-SAT, `TUTTITRIP_PLANNING__SOLVER=cp_sat`), one `Solver` interface
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
+  mcp/                 MCP server at /api/v1/mcp (FastMCP); tools call other domains' services
+  notifications/       inbox table (outbox); producers call notifications.services
+  places/              city and place catalog; prices and hours carry source + verified mark
 contracts/             jobs.schema.json: rendered job contract (compared with the worker)
 migrations/            Alembic (async); versions/ holds revisions
 deploy/                host deployment scripts (bash), gateway config
@@ -107,14 +128,56 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   `/api/v1/openapi.json`, `/api/v1/docs` and `/api/v1/redoc`. Routers in
   `api.py` keep their own short prefix (`/trips`); `create_app()` adds the
   version once. `tests/architecture/test_routes.py` fails on any route outside
-  it (allow-list `ALLOWED_UNVERSIONED`, empty on purpose).
+  it (allow-list `ALLOWED_UNVERSIONED`: only the MCP resource metadata).
 - Route-level tests iterate `fastapi.routing.iter_route_contexts(app.routes)`:
   FastAPI 0.142 includes routers lazily, so `app.routes` alone does not list them.
 - The deployed frontends call the API same-origin through their Worker proxy
   (`https://tuttitrip[-develop].gburek.app/api/...`), so a browser never needs CORS
   there; CORS still matters for direct cross-origin use. It allows no
   credentials (the API takes bearer tokens, never cookies).
+- The one exception is the MCP server (`mcp/api.py`, `Settings.mcp.enabled`):
+  two exact routes added after the routers, `/api/v1/mcp` and the resource
+  metadata `/.well-known/oauth-protected-resource/api/v1/mcp` at the root
+  (RFC 9728). Never mount an app under `/api/v1`: a mount swallows REST 405s and
+  redirects. `test_routes.py` allows only the metadata path and no mounts at
+  all, `test_permissions.py` lists both in `MCP_ROUTES`.
 - Old unversioned paths (`/health`, `/openapi.json`, `/docs`, `/trips`...) answer 404.
+
+## Lists
+
+Every endpoint that returns a collection is paginated, filterable and
+sortable on the server. No endpoint returns a bare list[...]; the legacy
+exceptions are listed in tests/architecture/test_lists.py and only shrink.
+
+- Query: page (from 1), size (default 20, max 100), sort (an enum per
+  endpoint, mapped to columns in db.py, with id as the last key), dir
+  (asc|desc), and typed filters declared once as a Pydantic model that the
+  query and any bulk operation share.
+- Response: Page[T] = items, total, page, size, pages. A page past the end
+  returns empty items and the real total, not 404.
+- Use shared.pagination and paginate(). Never sort by a client-provided
+  column name. Index what you filter and sort on.
+- A bulk operation on a list takes either ids (max 100) or the same filter
+  model, never both, and always scopes by the caller.
+
+How:
+
+- Declare the filters once: `class MyFilters(ListFilters)`. The list query is
+  `class MyQuery(PageParams, MyFilters)` plus `sort: MySort`, taken as
+  `Annotated[MyQuery, Query()]`. A bulk body is `BulkSelection[MyFilters]`
+  (pass the real id type as the second parameter, e.g. `UUID`).
+- In `db.py`: one `scoped(caller)` select and one `apply_filters(stmt, filters)`.
+  The list is `paginate(session, apply_filters(scoped(caller), q), q,
+  ordering(COLUMNS, q.sort, Model.id))` (`shared/db/pagination.py`) and returns
+  `Page[Read]`. `stmt` selects one entity; filter on to-many relations with
+  `EXISTS`, never a join. NULLs sort last.
+- A bulk service takes the caller scope and must use it: it builds the target
+  ids with `selected(scoped(caller), Model.id, selection, apply_filters)` and
+  puts that in the `UPDATE`/`DELETE` (`Model.id.in_(...)`), never the raw
+  `selection.ids`.
+- `LEGACY_UNPAGED` in `tests/architecture/test_lists.py` may only shrink: never
+  add a route to it. The test also looks at return annotations and unwraps
+  `Optional`, `Annotated` and `Sequence`.
 
 ## Conventions
 
@@ -128,7 +191,24 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
 - Tests never call real LLMs (`models.ALLOW_MODEL_REQUESTS = False` in
   `tests/conftest.py`); use `agent.override(model=TestModel(...))`.
 - Domain tests go in `tests/domains/`, shared infrastructure in `tests/shared/`.
+- Algorithm fixtures (test city, persona families, expected values of
+  `docs/algorytm.md` section 7) live in `tests/fixtures/` (`city`, `personas`,
+  `scenarios`, `expected`); reuse them instead of inventing data per test.
 - Services raise domain exceptions; `api.py` maps them to HTTP errors.
+- Validation errors (422) never echo request values: `shared/errors/api.py`
+  strips `input` and `ctx` from every item. This protects secrets in headers
+  and bodies and large pasted texts; do not add a handler that returns them.
+- Because `ctx` is stripped, a stable error code travels in the error `type`
+  (kept by the handler), never in `ctx`. Trip rules from `check_trip` use the
+  enum `TripErrorCode` in `trips/schemas.py` (`trip.dates_order`, ...), with
+  `loc` `["body", field]`; the enum is the single list and reaches OpenAPI
+  through the 422 model of `POST`/`PATCH /trips`. Clients map errors by `type`,
+  never by `msg`. New rule = new enum member plus a test. `POST /trips` takes
+  the same fields as `PATCH` and validates them with `check_trip(complete=True)`.
+- A domain error other than 422 that a client must tell apart carries
+  `detail.code` from a per-domain `StrEnum` in `schemas.py` (e.g.
+  `AccountErrorCode` in `accounts/schemas.py`, `account.provider_managed`),
+  with a response model in OpenAPI; `detail.message` is for developers.
 
 ## Settings and secrets
 
@@ -150,8 +230,14 @@ Cross-domain FKs use strings (`ForeignKey("trips.id")`), never imports.
   `.is_admin` expose it; the permission system turns it into `*` WRITE
   (section "Uprawnienia"). `GET /api/v1/me` returns `roles`, `is_admin` and
   `access`.
-- Provider API keys (e.g. `OPENAI_API_KEY`) are read by Pydantic AI under
-  their own names and are not Settings fields.
+- Models: agents use catalog ids (`tuttitrip:agent`, `chat`, `decide`,
+  `decide-laya`, `decide-cloud`, `openrouter`) with `catalog.capability()`,
+  never `provider:model` strings. The GB10 key is `TUTTITRIP_LLM__GB10_API_KEY`;
+  OpenRouter reads `OPENROUTER_API_KEY` when `TUTTITRIP_LLM__OPENROUTER_API_KEY`
+  is empty. A chain link without its key is skipped; a chain with no key raises
+  `UserError`. Live check outside CI: `uv run python scripts/smoke_llm.py`.
+- Other provider API keys are read by Pydantic AI under their own names and are
+  not Settings fields.
 - Never commit secrets or `.env`. CI/deploy secrets are GitHub Actions
   secrets/variables; host-only secrets live in `~/tuttitrip/*.env` on the host.
 
@@ -246,7 +332,8 @@ Nowy węzeł (skill `new-permission`):
 
 ### Ochrona endpointu
 
-Każdy endpoint ma dokładnie jeden znacznik w `dependencies=[...]`:
+Każdy endpoint ma dokładnie jeden znacznik w `dependencies=[...]`: `requires(...)`,
+`public()` albo `token_access(...)` (dostęp bez konta, niżej):
 
 ```python
 from tuttitrip.shared.permissions.api import requires
@@ -256,8 +343,8 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 ```
 
 - Bez tokenu 401, bez uprawnienia 403 `Missing permission trips.core:READ`.
-- `public()` (bez logowania) tylko dla `/api/v1/health`, `/api/v1/health/live` i smoke
-  testu `/api/v1/jobs/ping*`. Lista jest w `tests/architecture/test_permissions.py`;
+- `public()` (bez logowania) tylko dla `/api/v1/health`, `/api/v1/health/live`, smoke
+  testu `/api/v1/jobs/ping*` i logowania jury `POST /api/v1/auth/demo` (sekcja "Wejście jury"). Lista jest w `tests/architecture/test_permissions.py`;
   `/api/v1/docs`, `/api/v1/openapi.json` i `/api/v1/redoc` są publiczne z definicji.
 - `tests/architecture/test_permissions.py` przechodzi po `create_app().routes`
   (z zależnościami routerów) i nie przepuści trasy bez znacznika, z dwoma
@@ -265,15 +352,74 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 - OpenAPI dostaje `x-required-permission: "trips.core:READ"` (albo
   `x-public: true`), linijkę „Wymagane uprawnienie” w opisie i odpowiedzi
   401/403, więc widać to w `/api/v1/docs` i w kliencie TS.
+- `token_access(TokenScope.VOTE)` to dostęp bez konta, dla osoby z linkiem (np. głosowanie
+  babci). Trasa czyta nagłówek `X-Access-Token`, a dowód (`TokenAccessDep`, czyli
+  `TokenAccess` z `trip_id` i `profile_id` z tokenu) przekazuje do serwisu jak `TripMembership`.
+  Brak nagłówka to 401, token nieznany, wygasły, odwołany albo z innym zakresem to 404.
+  Trasa tokenowa nie ma w ścieżce niczego o wyjeździe ani profilu (`{trip_id}`, `{profile_id}`:
+  wyjazd i profil biorą się z tokenu); test pilnuje i tego, i listy takich tras
+  (`TOKEN_ENDPOINTS` w `tests/architecture/test_permissions.py`). Odpowiedzi tras tokenowych
+  i utworzenia tokenu mają `Cache-Control: no-store`. OpenAPI dostaje `x-token-access: "vote"`
+  i odpowiedzi 401/404.
+- Tokeny: 32 losowe bajty (`secrets.token_urlsafe`), w tabeli `access_tokens` tylko SHA-256.
+  Wyszukanie po haszu SHA-256 jest porównaniem; atak czasowy nie ma sensu przy 256-bitowym
+  losowym tokenie. Długość nagłówka sprawdza kod (nie `Header(max_length=...)`: błąd walidacji
+  odbijałby sekret w odpowiedzi), za długi token to 404 bez zapytania do bazy. Token widać
+  jeden raz w odpowiedzi tworzenia (`POST /trips/{trip_id}/profiles/{profile_id}/access-tokens`,
+  co-host, tylko dla profilu bez konta, 409 przy koncie albo przy 5 aktywnych tokenach;
+  lista bez sekretu: `GET` na tej samej ścieżce; odwołanie: `DELETE .../access-tokens/{token_id}`).
+  Nie logujemy go, nie wkładamy do wyjątków, ścieżki ani query. Link z tokenem: token w
+  fragmencie URL (#), front przesyła go w nagłówku X-Access-Token; nigdy w ścieżce ani query.
+  `last_used_at` zapisujemy dopiero po sprawdzeniu zakresu, co najwyżej raz na minutę.
+  Zakres zapisany jest jako nazwa członka `TokenScope` w VARCHAR bez CHECK, więc nowy zakres
+  nie wymaga migracji; nowa trasa tokenowa trafia na listę w teście architektury.
+- Zaproszenia (`trips/invitations`, tabela `trip_invitations`, nie `access_tokens`): dołącza zalogowana
+  osoba, więc trasy dołączania mają `requires(Feature.TRIPS_INVITATIONS, ...)`, nie `token_access`. Te same
+  zasady tokenu (32 bajty, tylko SHA-256, 404 bez rozróżnienia: nieznany, wygasły, odwołany, wyczerpany;
+  `Cache-Control: no-store`). Token nigdy w ścieżce ani query (test pilnuje parametrów `token`): link to
+  `https://<front>/join#t=<token>`, a front wysyła token w ciele `POST /invitations/preview` (nazwa podróży)
+  i `POST /invitations/accept` (ciało: `token`, opcjonalnie `display_name`). Tworzenie, lista i odwołanie
+  (`POST/GET /trips/{trip_id}/invitations`, `DELETE .../{invitation_id}`): co-host i host, TTL domyślnie 7 dni
+  (max 30), `max_uses` domyślnie 10 (1 do 100), najwyżej 20 działających zaproszeń na wyjazd (limit miękki, bez blokady: równoległe tworzenie może go lekko przekroczyć).
+  Dołączenie w jednej transakcji: `UPDATE ... SET uses = uses + 1 WHERE uses < max_uses AND ...`, potem wiersz
+  `trip_members` (member) i profil dorosłego z kontem (`profile_service.create_account_profile`, imię z
+  żądania albo "Uczestnik"). Ponowne przyjęcie przez członka daje 200 (`already_member: true`) bez nowego
+  profilu i bez zużycia limitu. Osoba usunięta wcześniej (profil zostaje bez konta, #121) dostaje nowy profil.
+  TODO: okresowo usuwać wygasłe i odwołane tokeny (dziś zostają w tabeli).
+- Linki głosowe (domena `voting`, bez własnych tabel: to tokeny `access_tokens` o zakresie `vote`).
+  Host tworzy je dla profilu bez konta: `POST/GET /trips/{trip_id}/vote-links`, `DELETE .../{link_id}`
+  (`TripCoHost`, liść `trips.vote_links`). Jeden działający link na profil: nowy odwołuje poprzednie w tej
+  samej transakcji (advisory lock na profil, więc równoległe tworzenie zostawia jeden). `POST` zwraca
+  `token` i `url` = `/glos#t=<token>` (front dopisuje swój origin; token tylko we fragmencie), raz,
+  z `Cache-Control: no-store`; lista (`Page`, filtry `profile_id` i `state` active/expired/revoked)
+  nigdy go nie zwraca. Same trasy tokenowe (`token_access`) dopisuje #81. Odpowiedzi 401/404 tras
+  tokenowych też mają `Cache-Control: no-store`.
+- Wynik zbiorczy `GET /trips/{trip_id}/vote-summary` (`TripCoHost`, `trips.vote_links:READ`, `Page`):
+  per miejsce liczby tak, nie, obojętnie i weta oraz osoby z powodem i źródłem (`app`, `link`, `host`).
+  Liczy go czysta funkcja `voting/logic/summary.py` (bez wag `w_i`, te należą do werdyktu planu).
+  Źródło wynika z autora zapisu: `link:<id tokenu>` (`link_author()` z `profiles/feedback/schemas.py`,
+  kontrakt dla #81) to `link`; konto profilu to `app`; ktoś inny (ocena) lub `on_behalf` (weto) to `host`.
 - Gdy decyzja zależy od uprawnienia w środku logiki, `api.py` wstrzykuje
   `EffectivePermissionsDep` i przekazuje obiekt do serwisu, który woła
   `permissions.allows(Feature.X, Access.WRITE)`.
+
+### Narzędzia MCP
+
+Serwer MCP (`mcp/api.py`) ma własne uwierzytelnianie: token Auth0 z audience
+równym `TUTTITRIP_MCP__RESOURCE_URL` (inny niż audience API; ten sam
+`TokenVerifier`, ten sam claim ról). Każde narzędzie ma dokładnie jeden
+`auth=mcp_requires(Feature.X, Access.Y)`, który wymaga `mcp:READ` i `X:Y`
+(granty liczone raz na żądanie z bazy, nigdy z tokenu); narzędzie bez zgody
+znika z `tools/list`. Test przechodzi po `create_mcp(...).local_provider` i
+pilnuje jednego `mcp_requires` na narzędzie. Dostęp do wyjazdu sprawdza
+narzędzie przez `trip_service.get_membership`. Serwera nie uruchamiamy przez
+stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
 
 ### Role
 
 | Rola | Uprawnienia | Uwagi |
 | --- | --- | --- |
-| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `expenses.settlement` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
+| `user` | liście bez `admin.*`: `WRITE` na `accounts.profile`, `trips.*`, `profiles.*`, `interview`, `planning.proposals`, `planning.plans`, `accommodation`, `expenses.core`, `jobs`; `READ` na `planning.fairness`, `planning.linter`, `search`, `places.catalog`, `expenses.settlement`, `mcp` | Ma ją każdy zalogowany bez przypisania. Admin może ją edytować, ale tylko liśćmi spoza `admin.*`. |
 | `superadmin` | `*:WRITE` | Tylko z claimu Auth0 `admin` (lista osób jest w Akcji Auth0). API jej nie przypisze ani nie zmieni, a wiersz w bazie jest ignorowany. Nowe funkcjonalności obejmuje automatycznie (test). |
 | własne | dowolne | `POST /admin/permissions/roles`. |
 
@@ -305,10 +451,210 @@ from tuttitrip.shared.permissions.registry import Access, Feature
 - Gdy `trip_id` przychodzi w treści żądania, serwis woła
   `trip_service.get_membership(session, trip_id, sub, TripRole.X)` sam (np.
   generowanie planu wymaga `co_host`).
+- Osoba bez konta nie ma roli na wyjeździe: ma token (`token_access`), który daje jedną funkcję
+  i jeden profil jednego wyjazdu (patrz „Ochrona endpointu”).
 - `TripRead.my_role` mówi frontendowi, jaką rolę ma użytkownik na wyjeździe.
 - Nowy zasób z właścicielem (inny niż wyjazd): ten sam wzorzec w jego domenie,
   czyli tabela członkostwa albo `owner_sub`, serwis z `get_membership`
   i zależność w `api.py`. Bez ogólnych ACL per obiekt.
+
+## Interview (`interview/`)
+
+- The agent runs on Qwen (`tuttitrip:agent`, then OpenRouter) in this backend,
+  not as a worker job, because the host waits for it (decision D2). It only
+  drafts: tools write through `trips` and `profiles` services with the
+  membership from `deps` (`InterviewDeps`), never from tool arguments, and call
+  `mark_assistant_values` after every write so "who set this" stays right.
+- `POST /trips/{trip_id}/interview/agui` speaks AG-UI 1.0 through
+  `AGUIAdapter`, subclassed in `services/agui_service.py`. The **only** client
+  input used is the text of the last user message (the `user_prompt` of the run);
+  the stored session history is the `message_history`, `result.new_messages()` is
+  appended on completion, and the client's `messages`, `state`, `tools` and
+  `resume` are ignored. One run per session, text or voice (`run_guard`: one
+  atomic `UPDATE` of `interview_sessions.running_until`, 409; acquired before the
+  history is read, released in a `finally` around the stream and by the response's
+  background task, expiring a margin after the run's time limit), at most
+  `interview.run_timeout_seconds` long. A failed turn keeps what it did
+  (`history_repair.settle`). Voice time per trip is limited
+  (`interview.voice_trip_seconds`, booked in `voice_seconds`, 429). Run errors are a Polish `RUN_ERROR`
+  with a `code` (`spend_limit`, `timeout`, `unavailable`, `error`).
+  A voice call holds the session on a short claim (`interview.voice_claim_ttl_seconds`) that the
+  call's heartbeat (`voice_heartbeat_seconds`) keeps alive, so a dead call frees the interview by
+  itself; `running_kind` (`text` or `voice`) is `SessionRead.running` and picks the 409 text;
+  `POST .../voice/release` ends a call that runs elsewhere (transcript stored, claim cleared) and
+  leaves a text turn alone; a call whose claim is gone ends itself. When a call ends its
+  transcript is stored and one run of the interview agent over it saves what is still missing
+  (`voice_service._extract`, not stored in the history, idempotent). The transcription language is
+  pinned to the offer's `locale` (`LocalizedRealtimeModel`).
+- The adapter subclass lives in `services`, so `api.py` imports no `pydantic_ai`
+  and the architecture rules need no exception.
+- The next question is `interview/logic/next_question.py` (pure, explicit
+  table in `constants.py`); the model only words it and shows it with the
+  `show_card` tool. The host's answer to a card is the text of their next message.
+- Which question comes first is measured, not tabled (`question_service`): the
+  solver (`planning/logic/what_if.py`, outside the event loop, work limit in
+  evaluated plans so it is deterministic) is re-run for two or three plausible
+  answers of each missing field, and the field that changes the plan most wins
+  (`logic/informativeness.py`, ties by field name). Past
+  `interview.impact_budget_seconds`, or without a city, the fixed table decides.
+  The card of a question is the fixed map in `constants.CARD_OF_FIELD`.
+- A preliminary plan needs only the city (`POST .../interview/draft-plan` and the
+  `build_plan_now` tool call the same `draft_plan_service`; one per turn).
+  `logic/plan_defaults.py` lists the assumptions (one day, two adults, no budget
+  limit, default preferences); they are applied in memory by `plan_service`
+  (`PlanAssumptions`, never stored on the trip), and the version is marked
+  `params.draft`.
+- The same agent and endpoints serve a trip member, chosen by the role (not by
+  anything in the conversation): a member gets their own session
+  (`interview_sessions.profile_id`, unreadable to others), a panel with only
+  themselves and no budget, and only the `*_my_*` tools of `member_tools.py`,
+  which take no person (`deps.own_profile_id`). Their values are left unmarked on
+  purpose, so they read as a person's and the host's assistant asks before
+  changing them. Voice and the draft plan stay with co-hosts.
+- `SpendLimits` keeps its counters in this process (`InMemorySpendStore`): a deploy
+  resets the per-trip text budget. A shared store would need Redis; accepted for now.
+  `overwrite_host_values` is honoured only after a NOT SAVED result of that tool for
+  the same values followed by a later user message.
+- Tests: `FunctionModel` through `tests/shared/interview_world.py` (real
+  services over an in-memory trip). Voice: `services/voice_service.py`, tested
+  with the realtime session replaced; the real session is checked on a deployment.
+
+## Wejście jury jednym linkiem (domena `demo`)
+
+Jury wchodzi na wspólne, zwykłe konto demo (rola `user`, nigdy superadmin) linkiem
+`https://tuttitrip.gburek.app/demo#t=<token>`. Front czyta fragment, usuwa go z paska
+adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login` w
+`PUBLIC_ENDPOINTS` testu architektury). Backend porównuje SHA-256 tokenu z
+`TUTTITRIP_DEMO__TOKEN_SHA256`; przy zgodności robi w Auth0 grant `password-realm`
+(realm `Username-Password-Authentication`, audience API) i zwraca
+`{access_token, expires_in, token_type, refresh_token}` z `Cache-Control: no-store`.
+
+- Każdy zły kształt żądania (brak ciała, brak/pusty/za długi token, zły token) i wyłączone
+  demo (pusty `TUTTITRIP_DEMO__TOKEN_SHA256`) to to samo `404` z `Cache-Control: no-store`,
+  nigdy `422`. Limiter (domyślnie 10 żądań/min na IP, `429` z `Retry-After`) działa przed
+  czytaniem ciała. Błąd Auth0 to `502` (w logu tylko kod powodu, np. `status_403`). Tokenu
+  ani danych konta nie logujemy.
+- Limiter jest w pamięci procesu (twardy limit 10 000 kluczy, najstarsze wypadają), więc
+  zakładamy jeden proces API (jeden worker uvicorna); przy kilku każdy ma własny budżet.
+- IP klienta: gateway (`deploy/gateway/nginx.conf`) wysyła jawnie `CF-Connecting-IP`
+  (a gdy go brak, adres gniazda) i nadpisuje `X-Forwarded-For` jedną wartością. Uvicorn
+  ufa `X-Forwarded-*` tylko od adresów z `FORWARDED_ALLOW_IPS`; `deploy.sh` ustawia tam
+  podsieć sieci Docker `tuttitrip` (nie `*`). Trasa używa więc `request.client.host`,
+  a nagłówek dopisany przez klienta nie zmienia jego budżetu. Znane i przyjęte ograniczenie:
+  gateway nasłuchuje na adresie mostu docker0, więc kontener z domyślnego mostka mógłby
+  ustawić własny `CF-Connecting-IP` i ominąć limit na IP; publiczna ścieżka idzie przez
+  Cloudflare, który nadpisuje ten nagłówek na brzegu. Lokalnie bez gatewaya
+  uvicorn ufa tylko 127.0.0.1.
+- `refresh_token` wraca tylko przy `TUTTITRIP_DEMO__OFFLINE_ACCESS=true` (aplikacja
+  Auth0 musi mieć włączone refresh tokeny); domyślnie wyłączone, access token żyje
+  tyle, ile skonfigurowano w Auth0 dla API.
+- Ustawienia są sprawdzane przy starcie: `TOKEN_SHA256` to 64 znaki hex albo pusty, a gdy
+  nie jest pusty, `USERNAME`, `PASSWORD` i `CLIENT_ID` muszą być wpisane.
+- Dane konta (`USERNAME`, `PASSWORD`, `CLIENT_ID`, `CLIENT_SECRET` dla aplikacji
+  poufnej) tylko w środowisku hosta (`~/tuttitrip/app.env`), nigdy w repo ani odpowiedzi.
+  Zapytania do Auth0 idą przez httpx z własnym `User-Agent` (Cloudflare blokuje
+  domyślny agent Pythona).
+- Obrót tokenu bez wdrożenia kodu: `TOKEN=$(openssl rand -hex 24)`, w `app.env` wpisz
+  `TUTTITRIP_DEMO__TOKEN_SHA256=$(printf %s "$TOKEN" | sha256sum | cut -d' ' -f1)`,
+  zrestartuj kontener (deploy zapisuje `envs/<env>.env` z `app.env`), nowy link to
+  `.../demo#t=$TOKEN`. Stary link przestaje działać od razu.
+- Dane demo: `python -m tuttitrip.demo.services.seed_command` loguje się na konto demo
+  (stąd bierze `sub`, nie ma osobnego ustawienia), kasuje tylko wyjazdy z
+  `owner_sub` równym temu `sub` (wyjazdy innych osób, do których konto tylko dołączyło,
+  zostają) i tworzy zestaw od nowa (Warszawa z rodziną: 4 osoby, preferencje, wymagania
+  noclegowe, wagi; Gdańsk, Kraków, Berlin; oceny miejsc, jeśli katalog ma miejsca danego
+  miasta). Plan to na razie stub solvera. Reset jest atomowy: jedna transakcja z
+  `pg_advisory_xact_lock` (równoległe resety czekają na siebie), a commity serwisów to
+  tylko savepointy, więc błąd w połowie cofa wszystko i poprzednie dane zostają.
+  Jest idempotentny; `deploy/deploy.sh` uruchamia go po wdrożeniu i włączeniu routingu
+  (`timeout 120`, log w `~/tuttitrip/demo-seed-<env>.log`, błąd nie psuje wdrożenia), a
+  codzienny reset robi harmonogram workera (tuttitrip-worker#37), który woła wewnętrzny
+  `POST /api/v1/internal/demo/reset` z tym samym kodem (`demo/services/reset_service.py`).
+- Endpoint wewnętrzny: `public()` (na liście `PUBLIC_ENDPOINTS` jako `reset_demo`), poza
+  OpenAPI, chroniony sekretem `Authorization: Bearer $TUTTITRIP_DEMO__RESET_SECRET`; zły,
+  brakujący i nieustawiony sekret to to samo `404`. Gdy demo jest wyłączone (pusty
+  `TOKEN_SHA256`), odpowiada dokładnie `{"status": "disabled"}` i niczego nie rusza. Gateway
+  (`deploy/gateway/nginx.conf`) zwraca `404` dla `/api/v1/internal/`, a worker woła
+  kontener API bezpośrednio w sieci Docker (`http://tuttitrip-api[-<env>]:8000`).
+  `deploy.sh` generuje sekret raz (`DEMO_RESET_SECRET` w `~/tuttitrip/deploy.env`) i
+  zapisuje do obu plików env (API i workera) jako `sha256("<sekret>:<env>")`, osobny dla każdego środowiska; wpis w `app.env` ma pierwszeństwo. Sekret ma co najmniej 24 znaki (walidator). Działający worker czyta env przy tworzeniu kontenera, więc po pierwszym wdrożeniu backendu trzeba go odtworzyć.
+- Wszyscy jurorzy dzielą jedno konto: zmiany jednego widzą inni do następnego resetu.
+
+## Design system
+
+Skill `tuttitrip-design-system` (`.claude/skills/tuttitrip-design-system`) jest wspólny dla wszystkich
+repozytoriów TuttiTrip; UI powstaje we frontendzie. W backendzie teksty, które czyta człowiek (komunikaty
+błędów pokazywane w aplikacji, opisy narzędzi MCP, eksport planu), piszemy według słownika UI z README
+skilla: „sprawdzenie planu” i „problemy”, a nie „linter” i „naruszenia”; werdykty „Obowiązkowo”, „Pasuje”,
+„Kultowe, ale nie Twoje”, „Pomiń”; powody „Za drogo”, „Za daleko” i tak dalej. Kody reguł i nazwy
+komponentów nie trafiają do tekstów dla ludzi.
+
+## Praca agentów nad issues
+
+Nad backlogiem pracuje równolegle kilku agentów AI i ludzi. Te zasady pilnują, żeby nikt nie wchodził
+innym w drogę i żeby każda funkcja przeszła ten sam proces. Dotyczą też ludzi.
+
+1. Wybór issue. Bierzesz tylko issue z tablicy
+   [TuttiTrip](https://github.com/orgs/HackYeah-TuttiTripTeam/projects/1) ze statusem Todo, bez etykiety
+   `in-progress` i bez przypisanej osoby. Linia „Zależy od:” w opisie wymienia issues, które muszą być
+   zmergowane do `develop`. Jeśli któreś nie jest, pracuj tylko na jego kontrakcie (np. stała odpowiedź z
+   OpenAPI) i napisz to w komentarzu. Kolejność: najpierw P0, potem P1, w obrębie milestone'u.
+2. Zajęcie issue, zanim napiszesz kod:
+   - `gh issue edit <nr> --add-label in-progress`,
+   - Status na tablicy: In Progress,
+   - komentarz „Start” z nazwą gałęzi, ścieżką worktree i krótkim planem (pliki, które zmienisz).
+   Etykieta `in-progress` znaczy „zajęte”. Nie bierz takiego issue i nie zmieniaj go bez zgody zespołu.
+3. Worktree i gałąź. Nigdy nie pracuj w głównym klonie repozytorium. Jedno issue to jeden worktree, jedna
+   gałąź i jeden PR do `develop`:
+
+   ```bash
+   git -C ~/Documents/GitHub/<repo> fetch origin
+   git -C ~/Documents/GitHub/<repo> worktree add -b feature/<nr>-<krotka-nazwa> \
+     ~/Documents/GitHub/worktrees/tuttitrip/<repo>-<nr>-<krotka-nazwa> origin/develop
+   ```
+
+   (`<repo>` to `tuttitrip-backend`, `tuttitrip-worker` albo `tuttitrip-frontend`; w repo zbiorczym
+   `tuttitrip` gałąź bierzesz z `origin/main`.)
+4. Komentarze ze statusem w issue po każdym etapie: plan, implementacja z testami, wynik smoke testu,
+   wynik review subagenta, link do PR. Krótko: co zrobione, co dalej, co blokuje. Gdy utkniesz: etykieta
+   `blocked` i komentarz z powodem i tym, czego potrzebujesz.
+5. Pliki wspólne, w których łatwo o konflikt, zmieniaj małymi krokami i przed PR rób
+   `git fetch origin && git rebase origin/develop`:
+   - `src/tuttitrip/main.py` (`ROUTERS`) i `shared/permissions/registry.py` (`Feature`, migracje z rolą `user`),
+   - migracje Alembic: jedna głowa; przed PR przepnij `down_revision` na aktualną głowę `develop`
+     i uruchom `uv run alembic heads`,
+   - `shared/config/settings.py` razem z `.env.example`,
+   - `shared/jobs/contracts.py` i `contracts/jobs.schema.json` (najpierw worker, skill `sync-contracts`).
+6. Smoke test jest obowiązkowy dla KAŻDEGO zrealizowanego feature'a. Podglądy gałęzi są domyślnie wyłączone (zmienna organizacji `PREVIEW_DEPLOYS=false`, oszczędzamy
+   moc obliczeniową): develop i main wdrażają się zawsze, gałąź tylko z etykietą `preview` na PR (albo gdy
+   zmienna ma wartość `true`). Użyj etykiety wyłącznie, gdy żywy podgląd jest niezbędny; w pozostałych
+   przypadkach smoke test robisz lokalnie, a po merge'u sprawdzasz develop. Pominięty podgląd zostawia
+   w podsumowaniu joba jedną linię "Preview disabled (PREVIEW_DEPLOYS=false); add label `preview` to deploy".
+   CI sprawdza tylko lint, typy, testy jednostkowe i architektury (`pytest -m "not integration and not e2e"`).
+   Testy z markerami `integration` i `e2e` nie chodzą na CI, więc przed oznaczeniem PR jako gotowego
+   uruchom lokalnie `uv run pytest` (cały zestaw, albo osobno `uv run pytest -m integration`)
+   i wpisz wynik w komentarzu ze smoke testem.
+   Przejdź scenariusz z kryteriów akceptacji issue:
+   - lokalnie: lokalny stos (`docker compose`, albo `uv run` na lokalnym PostgreSQL; README), Swagger pod
+     `/api/v1/docs`, endpointy z tokenem konta testowego i `/api/v1/health`; po merge'u to samo na API develop,
+   - tylko gdy podgląd jest niezbędny: etykieta `preview` na PR wdraża API pod
+     `https://tuttitrip-api-<slug>.gburek.app/api/v1/...`,
+   - dla endpointów z uprawnieniami sprawdź też 401 bez tokenu, 403 bez uprawnienia i 404 dla cudzej
+     podróży.
+   Wynik (kroki, odpowiedzi albo zrzuty ekranu) wpisz w komentarzu w issue. Bez zielonego smoke testu
+   nie ma PR.
+7. Review subagenta. Po zielonym smoke teście uruchom subagenta-recenzenta z diffem gałęzi, treścią
+   issue i story źródłową. Sprawdza:
+   - uproszczenie kodu i zbędną złożoność (skille `simplify` i `ponytail-review`),
+   - złożoność logiki,
+   - poprawność biznesową względem story, słownika z dokumentu architektonicznego i, przy logice
+     planowania, specyfikacji algorytmu (`docs/algorytm.md` w tuttitrip-backend).
+   Popraw to, co znalazł, i **powtórz smoke test**. Wynik review i drugiego smoke testu wpisz w komentarzu.
+8. PR. Dopiero po tym otwórz PR do `develop` skillem `open-pr` (`Closes #<nr>`) i ustaw Status: In
+   Review. Po merge'u zdejmij `in-progress`, usuń worktree
+   (`git -C ~/Documents/GitHub/<repo> worktree remove <ścieżka>`); zamknij issue ręcznie
+   (`gh issue close <nr> --comment "Zmergowane w #<PR>"`), bo `Closes` zamyka issue dopiero po merge'u
+   do `main` (wydanie). Status: Done.
 
 ## Zgłoszenia, PR i wydania
 
@@ -343,7 +689,8 @@ Zgłoszenia (issues):
   - [ ] Given gotowy plan, When kliknę "Pobierz PDF", Then dostanę plik z planem dzień po dniu
 
   ### Definition of Done
-  - [ ] CI zielone (lint, typy, testy, testy architektury)
+  - [ ] CI zielone (lint, typy, testy jednostkowe, testy architektury)
+  - [ ] Lokalnie przeszły testy integracyjne i smoke test (`uv run pytest -m integration`)
   - [ ] PR zmergowany do `develop` i sprawdzony na wdrożeniu develop
 
   ### Obszar
@@ -378,10 +725,160 @@ Wydania:
   `feat` podnosi wersję minor, pozostałe typy patch, pierwsze wydanie to
   `v0.1.0`. Nie prowadzimy pliku CHANGELOG.md.
 
+## Places catalog conventions
+
+- Every price and every opening-hours entry has a source and a `verified`
+  mark; the database refuses `verified` without `source_url` and `checked_at`
+  (and, for hours, without `opening_hours`).
+- Free admission is a `place_prices` row with `amount` 0 and `verified` true.
+  No row means the price is unknown (unverified, the delta in E6).
+- Concessions: `age_min`/`age_max` on the price row; when null the defaults
+  are child up to 17, senior from 65, family 2+2 (`family_size` overrides).
+- `unit` says what the price is for: `person`, `night` (lodging, E6 multiplies
+  by the nights) or `group`.
+- `indoor` and `wheelchair` are null when unknown. Tags, diet tags, amenities
+  and cuisine are the StrEnums in `places/schemas.py` (`PlaceTag`, `DietTag`,
+  `Cuisine`, `Amenity`), mirrored by CHECK constraints; add a value in both
+  the enum and a migration.
+- Money is `Decimal` in the code and a string in the API (`"35.00"`).
+
+### Sheet import (demo cities)
+
+- Source: the public Google Sheet (`TUTTITRIP_CITIES__SHEET_ID`), downloaded by
+  `deploy/fetch-cities.sh` into the volume `tuttitrip-cities-data` after every
+  deploy; `python -m tuttitrip.places.services.import_command` imports
+  `miasta.xlsx` (the deploy runs it after `alembic upgrade head`). It is not a
+  migration: a corrected cell reaches every environment without code.
+- Contract: sheet names and column headers (`places/logic/sheet_rows.py`,
+  `REQUIRED_COLUMNS`). Drift, a row without `url_zrodla` or `data_sprawdzenia`,
+  or a category/tag outside `CATEGORY_MAP`/`TAG_MAP` rejects the whole workbook
+  with every bad row listed; nothing is written (one transaction). Extending the
+  sheet's dictionary means extending those maps (and the enums, if needed).
+- Unknown stays unknown: an empty price is no `place_prices` row, empty or seasonal
+  hours are `opening_hours` NULL, empty `kryte` is `indoor` NULL, `*_zweryfikowane`
+  is the only source of `verified`. Lodging amenities are only the "tak" ones.
+- Idempotent upsert on (`source`, `source_key`). Rows the sheet drops are **kept**
+  (not hidden: ratings, vetoes and plans may reference them) and only counted in the
+  import report; delete them by hand if a place really disappeared. Prices and fares
+  are replaced to match the sheet.
+- Text in a numeric column (`niezweryfikowane`, a typo) is unknown plus a warning
+  naming the row and column; only structural drift (sheet or column names, empty
+  `miasta`, missing source or date, unmapped category or tag) rejects the workbook.
+- `cena_ulgowa` becomes `TicketCategory.REDUCED` ("reduced", for whom unknown).
+  `planning/logic/cost.py` never applies it, so a place with only a reduced price
+  counts as unpriced (the plan needs approval).
+- **Stairs caveat:** `places.stairs` is NOT NULL with default 0, so an empty `schody`
+  is stored as 0.0, which reads as "no stairs", not "unknown". The sheet leaves it
+  empty almost everywhere, so the accessibility linter and the wheelchair/E0 stairs
+  rules cannot tell unknown from step-free. Do not treat `stairs == 0` as verified
+  until the column can be NULL (tracked in a follow-up issue).
+- The sheet wins over OSM: a `source = 'osm'` row for the same `osm_type`/`osm_id`
+  is taken over (becomes `sheet`). The migration `sheet_catalog_rules` adds triggers
+  that skip writes of role `tuttitrip_worker` (the OSM import) to `source = 'sheet'`
+  places and their prices, so the worker needs no special code.
+- Transit fares: `ticket_type` is `<code>:<zone>` (`single:1+2`, `24h:I`, `family:AB`),
+  `person_category` is `adult` or `reduced`.
+
+## Ratings and vetoes (profiles/feedback)
+
+- A rating (`place_ratings`, one row per profile and place, upsert) is the vote
+  `v_ip` of E1: `want` +1, `neutral` 0, `dont_want` -1. `dont_want` needs a
+  `reason_code`, other values forbid it (CHECK and 422). Reason codes are the
+  plan contract's `ReasonCode`; do not add a second list.
+- A veto (`place_vetoes`) is the hard constraint of E0, not a vote. It keeps
+  its author (`created_by_sub`, `on_behalf`); revoking sets `revoked_at` and
+  it stops blocking at once. Planning reads only
+  `feedback_service.list_for_trip()`, which returns active vetoes.
+- Own profile (`profiles.user_sub` equals the caller) or co-host and above;
+  the services take a `TripMembership` as the author, not `CurrentUser`.
+
+## Notifications
+
+One table, `notifications`, feeds the list, the unread counter and the live
+stream. Other domains create notifications with
+`notifications.services.notification_service.notify(session, recipients=...,
+type=..., trip_id=..., params=..., actions=..., dedupe_key=..., actor=...)`
+inside their own transaction; it never commits, so a rollback takes the
+notification back. `resolve(session, dedupe_key)` marks all with that key as
+read (an approved request disappears from the basket).
+
+- The database keeps `type` (open text, no CHECK) and small `params` (strings
+  only: names, ids, amounts; never tokens or private data, they reach the
+  browser). Title and text are composed by the frontend in the user's language.
+- `actions` are codes from `NotificationActionCode`; the backend never stores
+  URLs or API paths.
+- `dedupe_key` makes a repeated event a no-op per recipient
+  (`UNIQUE (user_sub, dedupe_key)`); `actor` never gets their own. A key must carry
+  the id of the thing and, when the event can legitimately happen again, a version or
+  period (`proposal:<id>:v2`, `daily:<trip>:2026-10-05`), or the second one is silently
+  dropped forever.
+- The producer decides the recipients; the service does not check membership.
+- An `AFTER INSERT` trigger sends `pg_notify('notifications', {id, user_sub})`
+  (ids only: the payload is capped at 8000 bytes). The worker may `SELECT`,
+  `INSERT` and `DELETE` on the table (`deploy/worker-grants.sql`).
+- `GET /notifications` (`Page[NotificationRead]`: `page`, `size`, `sort` = `created_at`|`type`,
+  `dir` default `desc`, filters `read`, repeatable `type`, `trip_id`, `created_from` inclusive,
+  `created_to` exclusive, UTC) and `GET /notifications/unread-count` (`{"count": n}`) need
+  `notifications:READ`. Every query is `WHERE user_sub = <caller>`; another user's rows simply
+  do not exist for you (no 403). `NotificationFilter` is the one filter model for the list and
+  for bulk marking.
+- `POST /notifications/mark` (`notifications:WRITE`): body `{"read": bool, "ids": [uuid] | null,
+  "filters": NotificationFilter | null}`, exactly one of `ids` (1 to 100, else 422) and `filters`
+  (`{}` = all); answers `{"updated": n}`, counting only rows that changed state. One `UPDATE`
+  scoped to the caller (foreign ids are skipped silently).
+- `GET /notifications/{id}` (`notifications:READ`): one notification of the caller, read as tolerantly
+  as the list; 404 for an unknown id and for someone else's (not told apart). For `?open=<id>` links.
+- `GET /notifications/stream` (SSE, `notifications:READ`, `Authorization: Bearer`, so read it with
+  `fetch`). Events: `ready` (`{"unread": n}`), `notification` (SSE `id` = notification id, data =
+  `NotificationRead`), `resync` (`{"reason"}`: reload list and counter). FastAPI sends a `ping`
+  comment every 15 s. `NotificationHub` (`notifications/services/hub.py`) keeps one direct
+  asyncpg `LISTEN notifications` connection per process (not from the pool, no PgBouncer in
+  transaction mode), starts on the first stream and is stopped by the lifespan; per-user bounded
+  queues turn an overflow or a reconnect into one `resync`. A stream holds no DB session (the
+  request one is closed at once) and ends at the token's `exp` (`AuthenticatedUser.exp`) or after
+  30 minutes. Reconnect with `Last-Event-ID` (id of the last notification) or `since`: the stream
+  first sends what was missed (up to 50, else `resync`). The reads of rows happen only for users
+  with an open stream.
+- First producers: joining a trip by invitation creates `member_joined` (`open_people`, key
+  `member_joined:<trip>:<sub>`) and a new veto creates `veto_added` (`open_plan`, key
+  `veto:<veto id>`) for the host and co-hosts (`member_service.organizer_subs`), never for the
+  author, in the same transaction as the change.
+- Needs a real PostgreSQL to test (trigger, `NOTIFY`): `tests/domains/test_notifications_db.py`
+  is marked `integration`.
+
+## Plan proposals, budget consent and calendar export (planning)
+
+- Proposal (`planning/proposals`, `plan_proposals`, `proposal_responses`): the host
+  (`TripHost`) sends the latest stored plan version; every member with an account
+  (`trip_members`, host included) approves, rejects or comments (`PUT .../response`, one
+  answer per member, a comment needs a remark). The host's sending counts as their approval.
+  `status`: `outdated` (the plan changed after sending), else `approved` (all approved), else
+  `rejected` (somebody rejects), else `pending`. People without an account are listed apart.
+  A new plan version makes the open proposal `superseded` (`on_plan_changed`, same transaction as
+  the version); answering it is a 409 with `detail.code = proposal.outdated`.
+- Budget consent (`planning/budget_approvals`, `budget_approvals`): a plan version with
+  `needs_approval` opens one `pending` question in the transaction that stores it (amount over
+  `B_do`, `kappa`, who gains most; copies). `approve` keeps `P_flex`; `reject` stores `P_strict` as
+  the newest version (same input hash). Both write a `budget_approval` entry to `plan_decisions`
+  (`effects.budget` holds the facts, the numbers are `P_flex` minus `P_strict`). A decided row is
+  frozen by a trigger. Any new version supersedes a pending question. 409
+  `budget_approval.not_pending` otherwise.
+- Notifications (in the same transaction, never committing): `proposal_waiting` for members except
+  the host (key `proposal:<id>`), `budget_approval_waiting` for the host only (key `budget:<id>`).
+  A member's answer resolves only their own (`resolve(..., user_sub=...)`), a new version or a
+  decision resolves all.
+- Calendar: `GET /trips/{trip_id}/plans/{plan_id}/calendar.ics` only for a version that every
+  member with an account approved (409 `plan.not_approved`). `plans/logic/ics.py` uses
+  `icalendar`; `UID` is a UUIDv5 of version and stop, `DTSTAMP` the time the version was stored,
+  `SEQUENCE` its number, times in the city zone with a `VTIMEZONE`: the same bytes every time.
+- Upgrades (`planning/logic/upgrades.py`): for a plan below `B_od`, adds and dearer same-category
+  replacements that fit under `B_od` and raise `J`; stored in the plan as `upgrades` (empty when
+  none). They use the solver's own evaluator, so vetoes, blocks and limits hold.
+
 ## Git flow
 
 - `main` is production; `develop` is integration. Both change only through
-  PRs with green `checks` and `contracts-check`, with no force-push and no
+  PRs with green `lint`, `tests` and `contracts-check`, with no force-push and no
   deletion (0 required approvals: a 5-person, 24 h team, so CI is the gate).
   GitHub cannot enforce this for a private repo on the org's free plan
   (branch protection and rulesets both return 403), so it is a team rule
@@ -404,8 +901,13 @@ Wydania:
 ## Deployment
 
 `/api/v1/openapi.json` and `/api/v1/docs` are public on every deployment (the
-frontend generates its client from them). Every push runs CI (`checks` on the org runners `[self-hosted, hackathon]`),
-then `deploy` on the runner installed on the host (`[self-hosted, tuttitrip-deploy]`).
+frontend generates its client from them). Every push runs CI once (checks run on push only): `lint` and
+`tests` and `contracts-check` in parallel on the org runners `[self-hosted, hackathon]`,
+then `deploy` on the runner installed on the host
+(`[self-hosted, tuttitrip-deploy]`). A branch preview deploys only when the org variable `PREVIEW_DEPLOYS` is `true`
+or the PR has the label `preview` (the `preview-gate` job decides and writes a
+summary line when it is off), without waiting for the checks; `main` and `develop` wait for `lint` and `tests`. A newer push cancels
+the unfinished checks of the same branch, never a deployment.
 
 | Branch | URL | Database |
 | --- | --- | --- |
@@ -416,6 +918,9 @@ then `deploy` on the runner installed on the host (`[self-hosted, tuttitrip-depl
 Slug: lowercase, every run of non-alphanumerics becomes `-`, trimmed, label
 capped at 63 chars (`feature/cos tam` -> `tuttitrip-api-feature-cos-tam`).
 Naming lives in `deploy/lib.sh` and is tested in `tests/test_deploy_naming.py`.
+The MCP server is on only in `main` and `develop` (`tt_mcp_env`, tested in
+`tests/test_deploy_mcp.py`); previews answer 404 on `/api/v1/mcp`. How to connect
+clients and what the Auth0 tenant must enable: README, "Serwer MCP".
 
 On the host, everything is namespaced: Docker network `tuttitrip`, containers
 `tuttitrip-postgres` (pgvector image, volume `tuttitrip-postgres-data`), `tuttitrip-gateway` (nginx on `172.17.0.1:18080`, routes

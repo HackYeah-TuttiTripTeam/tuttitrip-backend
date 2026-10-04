@@ -1,27 +1,48 @@
 name: CI
 
+# One run per commit: checks run on push only. The only pull_request trigger is
+# the `labeled` event, which does nothing but deploy a preview (label `preview`).
+#   lint, tests    parallel, on the org runners; a newer push to the same branch
+#                  cancels them (never on main/develop).
+#   contracts-check  8 s of curl + diff, independent of the other jobs (no needs);
+#                  private repo, so it stays on the self-hosted runners.
+#   deploy         main/develop wait for lint + tests; a branch preview (when
+#                  enabled, see below) deploys at once, not waiting for the queue.
+#                  Deploys are never cancelled mid-way, they run one after another per branch.
+#
+# Branch previews (the deployments of branches other than main/develop) are off
+# unless the org variable PREVIEW_DEPLOYS is 'true' or the PR carries the label
+# `preview`. Adding that label starts a run that only deploys the preview.
 on:
   push:
     branches: ["**"]
   pull_request:
+    types: [labeled]
 
 permissions:
   contents: read
+  pull-requests: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+# uv keeps its package cache in ~/.cache/uv, which stays on the self-hosted
+# runners between runs, so the GitHub cache upload/download step is off.
 
+# CI_SKIP_CHECKS (org variable): 'true' skips lint, tests and contract checks everywhere
+# except main, so the self-hosted runners only build and deploy. Temporary, for the
+# hackathon finish; set it back to 'false' (or delete it) to restore full CI.
 jobs:
-  checks:
-    name: checks
+  lint:
+    name: lint
+    if: github.event_name == 'push' && (vars.CI_SKIP_CHECKS != 'true' || github.ref == 'refs/heads/main')
     runs-on: [self-hosted, hackathon]
-    timeout-minutes: 15
+    timeout-minutes: 10
+    concurrency:
+      group: ci-lint-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          enable-cache: true
+          enable-cache: false
       - name: Install
         run: uv sync --locked
       - name: Ruff lint
@@ -30,32 +51,93 @@ jobs:
         run: uv run ruff format --check .
       - name: Types (ty)
         run: uv run ty check
-      - name: Tests
-        run: uv run pytest
+
+  tests:
+    name: tests
+    if: github.event_name == 'push' && (vars.CI_SKIP_CHECKS != 'true' || github.ref == 'refs/heads/main')
+    runs-on: [self-hosted, hackathon]
+    timeout-minutes: 15
+    concurrency:
+      group: ci-tests-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+      - name: Install
+        run: uv sync --locked
+      # Unit and architecture tests only. Integration/e2e tests run locally before the PR
+      # (`uv run pytest -m "integration or e2e"`, see AGENTS.md).
+      - name: Tests (unit and architecture)
+        run: uv run pytest -m "not integration and not e2e"
 
   contracts-check:
+    if: github.event_name == 'push' && (vars.CI_SKIP_CHECKS != 'true' || github.ref == 'refs/heads/main')
     name: contracts-check
     runs-on: [self-hosted, hackathon]
     timeout-minutes: 5
+    concurrency:
+      group: ci-contracts-${{ github.ref }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main' }}
     env:
       # Fine-grained PAT (or GitHub App token) with Contents: read on
       # HackYeah-TuttiTripTeam/tuttitrip-worker. GITHUB_TOKEN cannot read
       # another private repository.
       GH_TOKEN: ${{ secrets.WORKER_REPO_TOKEN }}
-      BRANCH: ${{ github.head_ref || github.ref_name }}
+      BRANCH: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Compare contracts/jobs.schema.json with tuttitrip-worker
         run: deploy/check-contract.sh
 
-  deploy:
+  # Decides whether this branch gets a preview. Runs on the deploy host, so it
+  # does not take a slot from the hackathon runners.
+  preview-gate:
+    name: preview-gate
+    if: >-
+      (github.event_name == 'push' && github.ref != 'refs/heads/develop' && github.ref != 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'preview' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, tuttitrip-deploy]
+    timeout-minutes: 5
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PREVIEW_DEPLOYS: ${{ vars.PREVIEW_DEPLOYS }}
+      EVENT: ${{ github.event_name }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - id: gate
+        run: |
+          enabled=false
+          if [ "$PREVIEW_DEPLOYS" = true ] || [ "$EVENT" = pull_request ]; then
+            enabled=true
+          elif curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/commits/$SHA/pulls" |
+              jq -e 'any(.[]; .state == "open" and any(.labels[]; .name == "preview"))' >/dev/null; then
+            enabled=true
+          fi
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+          if [ "$enabled" != true ]; then
+            echo "Preview disabled (PREVIEW_DEPLOYS=false); add label \`preview\` to deploy" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # Branch previews: no dependency on lint/tests, so the queue does not hold them back.
+  deploy-preview:
     name: deploy
-    needs: [checks, contracts-check]
-    if: github.event_name == 'push'
+    needs: preview-gate
+    if: needs.preview-gate.outputs.enabled == 'true'
     # Runner installed on the deploy host itself (dellpromaxgb10).
     runs-on: [self-hosted, tuttitrip-deploy]
     timeout-minutes: 20
-    env:
+    concurrency:
+      group: deploy-${{ github.head_ref || github.ref_name }}
+      cancel-in-progress: false
+    env: &deploy-env
+      BRANCH: ${{ github.head_ref || github.ref_name }}
+      SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_TUNNEL_ID: ${{ vars.CLOUDFLARE_TUNNEL_ID }}
@@ -64,16 +146,34 @@ jobs:
       TUTTITRIP_AUTH0__AUDIENCE: ${{ vars.AUTH0_AUDIENCE }}
       TUTTITRIP_CORS_ORIGINS: ${{ vars.CORS_ORIGINS }}
       TUTTITRIP_CORS_ORIGIN_REGEX: ${{ vars.CORS_ORIGIN_REGEX }}
-    steps:
+    steps: &deploy-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
       - name: Deploy and clean up stale branches
-        run: deploy/deploy.sh "${GITHUB_REF_NAME}" "${GITHUB_SHA}"
+        run: deploy/deploy.sh "$BRANCH" "$SHA"
       - name: Public health check
         run: |
           . deploy/lib.sh
-          url="https://$(tt_hostname "$(tt_env "${GITHUB_REF_NAME}")")/api/v1/health"
+          url="https://$(tt_hostname "$(tt_env "$BRANCH")")/api/v1/health"
           for _ in $(seq 30); do
             if curl -fsS "$url"; then echo; echo "OK: $url"; exit 0; fi
             sleep 5
           done
           echo "::error::$url did not become healthy"; exit 1
+
+  # main and develop only go out after lint and tests are green. contracts-check
+  # is not a dependency of a deployment: it reports drift on its own.
+  deploy:
+    name: deploy
+    needs: [lint, tests]
+    if: >-
+      always() && !cancelled() && !contains(needs.*.result, 'failure') &&
+      github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main')
+    runs-on: [self-hosted, tuttitrip-deploy]
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-${{ github.head_ref || github.ref_name }}
+      cancel-in-progress: false
+    env: *deploy-env
+    steps: *deploy-steps

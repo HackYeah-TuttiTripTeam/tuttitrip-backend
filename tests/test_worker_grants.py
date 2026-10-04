@@ -44,8 +44,61 @@ def test_worker_has_no_access_to_permissions() -> None:
         "user_roles",
         "user_grants",
         "permission_audit",
+        "account_blocks",
         "trip_members",
     ):
         assert f"public.{table}" not in sql
     assert "ALL TABLES" not in sql.upper()
     assert "DEFAULT PRIVILEGES" not in sql.upper()
+
+
+def _granted(privilege: str) -> set[str]:
+    sql = "\n".join(
+        line for line in GRANTS.read_text().splitlines() if not line.startswith("--")
+    )
+    found: set[str] = set()
+    for match in re.finditer(rf"GRANT {privilege}\s+ON (.+?)\s+TO", sql, re.DOTALL):
+        found |= set(re.findall(r"public\.([a-z_]+)", match.group(1)))
+    return found
+
+
+def test_worker_reads_pasted_texts_and_the_catalog() -> None:
+    assert {
+        "pasted_documents",
+        "places",
+        "cities",
+        "place_prices",
+        "transit_fares",
+    } <= _granted("SELECT")
+
+
+def test_catalog_import_may_insert_but_never_delete() -> None:
+    assert _granted("INSERT") == {"places", "cities", "place_prices"}
+    assert not {"places", "cities", "pasted_documents"} & _granted(
+        "SELECT, INSERT, UPDATE, DELETE"
+    )
+
+
+def test_osm_import_updates_only_the_columns_its_upsert_sets() -> None:
+    sql = GRANTS.read_text()
+    assert _granted("UPDATE") == {"place_prices"}  # table-wide; none on cities/places
+    match = re.search(r"GRANT UPDATE \(([^)]+)\)\s+ON public\.places", sql)
+    assert match is not None
+    columns = {name.strip() for name in match.group(1).split(",")}
+    assert columns == {
+        "name", "category", "tags", "lat", "lon", "wheelchair", "indoor",
+        "cuisine", "diet_tags", "amenities", "opening_hours",
+    }  # fmt: skip
+    assert not columns & {"city_slug", "source", "hours_verified", "osm_id", "id"}
+
+
+def test_worker_writes_osm_fetch_state_without_delete() -> None:
+    sql = "\n".join(
+        line for line in GRANTS.read_text().splitlines() if not line.startswith("--")
+    )
+    match = re.search(r"GRANT SELECT, INSERT, UPDATE\s+ON (.+?)\s+TO", sql, re.DOTALL)
+    assert match is not None
+    assert set(re.findall(r"public\.([a-z_]+)", match.group(1))) == {
+        "city_fetches",
+        "city_fetch_attempts",
+    }

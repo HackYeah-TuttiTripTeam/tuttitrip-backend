@@ -1,25 +1,64 @@
 """Trip ORM models."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time
+from decimal import Decimal
 
-from sqlalchemy import CheckConstraint, Enum, ForeignKey, String, func
+from sqlalchemy import (
+    CheckConstraint,
+    Enum,
+    Float,
+    ForeignKey,
+    Numeric,
+    String,
+    Time,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tuttitrip.shared.db.base import Base
-from tuttitrip.trips.schemas import TripRole
+from tuttitrip.trips.schemas import MemberStatus, TripRole
 
 
 class Trip(Base):
     """A trip created by one organizer (Auth0 ``sub``), who is its host."""
 
     __tablename__ = "trips"
+    __table_args__ = (
+        CheckConstraint("end_date >= start_date", name="dates"),
+        CheckConstraint("day_start < day_end", name="day_window"),
+        CheckConstraint("budget_total_min <= budget_total_max", name="budget_total"),
+        CheckConstraint("budget_day_min <= budget_day_max", name="budget_day"),
+        CheckConstraint("budget_flex_pct BETWEEN 0 AND 50", name="budget_flex"),
+        CheckConstraint("fairness_alpha BETWEEN 0 AND 3", name="fairness_alpha"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     owner_sub: Mapped[str] = mapped_column(String(255), index=True)
     name: Mapped[str] = mapped_column(String(200))
     destination: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    start_date: Mapped[date | None] = mapped_column()
+    end_date: Mapped[date | None] = mapped_column()
+    # Time of day `T` for the solver; an evening outing is e.g. 18:00-23:00.
+    day_start: Mapped[time] = mapped_column(Time, server_default=text("'09:00'"))
+    day_end: Mapped[time] = mapped_column(Time, server_default=text("'19:00'"))
+    # Plain text, no FK: the cities table comes with another issue.
+    city_slug: Mapped[str | None] = mapped_column(String(64))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    budget_total_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    budget_total_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    budget_day_min: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    budget_day_max: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # `flex` of E6 in percent, solver divides by 100: B_max = B_do * (1 + flex).
+    budget_flex_pct: Mapped[int] = mapped_column(server_default=text("10"))
+    # Group goal alpha of E5.
+    fairness_alpha: Mapped[float] = mapped_column(Float, server_default=text("1"))
+    # After a day goes over its budget, propose cheaper days (backend#89).
+    propose_cheaper_alternatives: Mapped[bool] = mapped_column(
+        server_default=text("true")
+    )
 
 
 class TripMember(Base):
@@ -30,6 +69,10 @@ class TripMember(Base):
         CheckConstraint(
             "role IN ({})".format(", ".join(f"'{r.value}'" for r in TripRole)),
             name="role",
+        ),
+        CheckConstraint(
+            "status IN ({})".format(", ".join(f"'{s.value}'" for s in MemberStatus)),
+            name="status",
         ),
     )
 
@@ -45,5 +88,15 @@ class TripMember(Base):
             length=10,
             values_callable=lambda roles: [r.value for r in roles],
         )
+    )
+    status: Mapped[MemberStatus] = mapped_column(
+        Enum(
+            MemberStatus,
+            name="member_status",
+            native_enum=False,
+            length=10,
+            values_callable=lambda statuses: [s.value for s in statuses],
+        ),
+        server_default=MemberStatus.PENDING.value,
     )
     added_at: Mapped[datetime] = mapped_column(server_default=func.now())

@@ -1,10 +1,22 @@
 """Trip DTOs."""
 
-from datetime import datetime
+from datetime import date, datetime, time
+from decimal import Decimal
 from enum import StrEnum, unique
+from typing import Annotated, Literal, Self, override
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    computed_field,
+    model_validator,
+)
+from pydantic_core import InitErrorDetails, PydanticCustomError
+
+from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 
 
 @unique
@@ -40,15 +52,188 @@ class TripRole(StrEnum):
         return self.rank >= required.rank
 
 
-class TripCreate(BaseModel):
-    """Payload for creating a trip."""
+@unique
+class MemberStatus(StrEnum):
+    """Whether a member confirmed they are going.
+
+    The host and the creator are ``confirmed``; someone who joined from an
+    invitation is ``pending`` until they confirm. Leaving the trip removes the
+    membership, so there is no third value.
+    """
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+
+
+SLUG = r"^[a-z0-9-]+$"  # same rule as city slugs: lowercase, no diacritics, "-"
+FLEX = (
+    "Flex of E6 in percent (0-50), the solver divides it by 100: "
+    "B_max = B_do * (1 + flex_pct / 100)."
+)
+ALPHA = "Group goal alpha of E5 (0-3); 1 balances fairness and total utility."
+CHEAPER = (
+    "Propose cheaper days when a day goes over its budget (backend#89); on by default."
+)
+Money = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)]
+
+
+@unique
+class TripErrorCode(StrEnum):
+    """Stable code of a trip rule violation, sent as the 422 item's ``type``.
+
+    The global 422 handler strips ``ctx``, so clients read the code from
+    ``type``. Map errors by this code and ``loc``, never by ``msg``.
+    """
+
+    NULL_NOT_ALLOWED = "trip.null_not_allowed"
+    PAIR_REQUIRED = "trip.pair_required"
+    DATES_ORDER = "trip.dates_order"
+    BUDGET_ORDER = "trip.budget_order"
+    DAY_WINDOW_ORDER = "trip.day_window_order"
+
+
+class TripValidationError(BaseModel):
+    """One 422 item of a trip rule violation."""
+
+    type: TripErrorCode
+    loc: list[str] = Field(description='`["body", field]`')
+    msg: str = Field(description="For people; may change, do not parse it.")
+
+
+class TripValidationErrors(BaseModel):
+    """The 422 body of ``POST`` and ``PATCH`` ``/trips``."""
+
+    detail: list[TripValidationError]
+
+
+_REQUIRED_WHEN_SENT = (
+    "name",
+    "day_start",
+    "day_end",
+    "budget_flex_pct",
+    "fairness_alpha",
+    "propose_cheaper_alternatives",
+)
+# (lower, upper, order error code) pairs: both set or both empty (E6: B_od <= B_do).
+_PAIRS = (
+    ("start_date", "end_date", TripErrorCode.DATES_ORDER),
+    ("budget_total_min", "budget_total_max", TripErrorCode.BUDGET_ORDER),
+    ("budget_day_min", "budget_day_max", TripErrorCode.BUDGET_ORDER),
+)
+_TEMPLATE = "{message}"  # pydantic fills it from the context
+
+
+def _error(field: str, code: TripErrorCode, message: str) -> InitErrorDetails:
+    # The code goes in the error `type`: the global 422 handler strips `ctx`
+    # and `input`, but keeps `type`, so this is where a client can read it.
+    custom = PydanticCustomError(code.value, _TEMPLATE, {"message": message})
+    return InitErrorDetails(
+        type=custom,
+        loc=(field,),
+        input=None,
+    )
+
+
+def check_trip(trip: TripUpdate, *, complete: bool) -> None:
+    """Check the cross-field rules of trip details.
+
+    Every error carries the offending field as ``loc`` and a ``TripErrorCode``
+    as ``type``, in one shape.
+
+    Args:
+        trip: The payload (``complete=False``) or the merged trip state.
+        complete: Also require dates and each budget range to be set in pairs.
+            Off for a PATCH body, which may send one half of a pair.
+
+    Raises:
+        ValidationError: One error per broken rule, ``loc`` is ``(field,)``.
+    """
+    errors = [
+        _error(field, TripErrorCode.NULL_NOT_ALLOWED, f"{field} cannot be null")
+        for field in _REQUIRED_WHEN_SENT
+        if field in trip.model_fields_set and getattr(trip, field) is None
+    ]
+    for lower, upper, order_code in _PAIRS:
+        lo, hi = getattr(trip, lower), getattr(trip, upper)
+        if complete and (lo is None) != (hi is None):
+            missing = lower if lo is None else upper
+            errors.append(
+                _error(
+                    missing,
+                    TripErrorCode.PAIR_REQUIRED,
+                    f"{missing} is required with its pair",
+                )
+            )
+        elif lo is not None and hi is not None and hi < lo:
+            errors.append(
+                _error(upper, order_code, f"{upper} must not be before {lower}")
+            )
+    if trip.day_start and trip.day_end and trip.day_end <= trip.day_start:
+        errors.append(
+            _error(
+                "day_end",
+                TripErrorCode.DAY_WINDOW_ORDER,
+                "day_end must be after day_start",
+            )
+        )
+    if errors:
+        title = "TripUpdate"
+        raise ValidationError.from_exception_data(title, errors)
+
+
+class TripUpdate(BaseModel):
+    """PATCH payload: only the fields that are sent change; ``null`` clears.
+
+    The service checks the merged state with ``check_trip(complete=True)``, so
+    a lone ``end_date`` is compared with the stored ``start_date``.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    destination: str | None = Field(default=None, max_length=200)
+    start_date: date | None = None
+    end_date: date | None = None
+    day_start: time | None = None
+    day_end: time | None = None
+    city_slug: str | None = Field(default=None, max_length=64, pattern=SLUG)
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    budget_total_min: Money | None = None
+    budget_total_max: Money | None = None
+    budget_day_min: Money | None = None
+    budget_day_max: Money | None = None
+    budget_flex_pct: int | None = Field(default=None, ge=0, le=50, description=FLEX)
+    fairness_alpha: float | None = Field(default=None, ge=0, le=3, description=ALPHA)
+    propose_cheaper_alternatives: bool | None = Field(default=None, description=CHEAPER)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        check_trip(self, complete=False)
+        return self
+
+
+class TripCreate(TripUpdate):
+    """POST payload: a whole trip in one request.
+
+    Same fields as ``TripUpdate`` but ``name`` is required and the result must
+    pass ``check_trip(complete=True)``, so dates and budget ranges come in
+    pairs. Only ``name`` and ``destination`` are enough.
+    """
 
     name: str = Field(min_length=1, max_length=200)
-    destination: str | None = Field(default=None, max_length=200)
+    propose_cheaper_alternatives: bool | None = Field(default=True, description=CHEAPER)
+
+    # Overrides the inherited ``_check`` (same name replaces the validator):
+    # a create body is a whole trip, so pairs are required (complete=True).
+    @override
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        check_trip(self, complete=True)
+        return self
 
 
-class TripRead(BaseModel):
-    """A trip as returned by the API."""
+class TripDetails(BaseModel):
+    """A trip's own data, read from the ORM model."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -56,7 +241,115 @@ class TripRead(BaseModel):
     name: str
     destination: str | None
     created_at: datetime
+    start_date: date | None
+    end_date: date | None
+    day_start: time
+    day_end: time
+    city_slug: str | None
+    currency: str | None
+    budget_total_min: Decimal | None
+    budget_total_max: Decimal | None
+    budget_day_min: Decimal | None
+    budget_day_max: Decimal | None
+    budget_flex_pct: int = Field(description=FLEX)
+    fairness_alpha: float = Field(description=ALPHA)
+    propose_cheaper_alternatives: bool = Field(default=True, description=CHEAPER)
+
+    @computed_field
+    @property
+    def kind(self) -> Literal["trip", "outing"]:
+        """``outing`` for a single day without a stay, otherwise ``trip``.
+
+        Returns:
+            The kind derived from the dates.
+        """
+        same_day = self.start_date is not None and self.start_date == self.end_date
+        return "outing" if same_day else "trip"
+
+
+class TripRead(TripDetails):
+    """A trip as returned by the API."""
+
     my_role: TripRole = Field(description="The caller's role on this trip.")
+    my_status: MemberStatus = Field(
+        description="Whether the caller confirmed they are going (`confirmed`)."
+    )
+
+
+@unique
+class TripSort(StrEnum):
+    """Sort keys of ``GET /trips`` (``id`` is always the last key)."""
+
+    CREATED_AT = "created_at"
+    START_DATE = "start_date"
+    NAME = "name"
+
+
+@unique
+class TripWhen(StrEnum):
+    """Time filter of the trip list, the history of the groups a person is in."""
+
+    PAST = "past"
+    UPCOMING = "upcoming"
+
+
+class TripFilter(ListFilters):
+    """Filters of the trip list; all optional and combined with AND."""
+
+    q: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=100,
+            description="Part of the name or destination, case-insensitive.",
+        ),
+    ] = None
+    city: Annotated[
+        str | None,
+        Field(pattern=SLUG, max_length=64, description="Exact `city_slug`."),
+    ] = None
+    kind: Annotated[
+        Literal["trip", "outing"] | None,
+        Field(description="`outing` is a single day; `trip` is anything else."),
+    ] = None
+    start_from: Annotated[
+        date | None, Field(description="`start_date` on or after this day.")
+    ] = None
+    start_to: Annotated[
+        date | None, Field(description="`start_date` on or before this day.")
+    ] = None
+    role: Annotated[
+        list[TripRole] | None,
+        Field(description="The caller's role on the trip; repeat for several."),
+    ] = None
+    when: Annotated[
+        TripWhen | None,
+        Field(
+            description=(
+                "`past`: the trip ended before today. `upcoming`: it ends today "
+                "or later, or has no dates yet. Omitted: all trips."
+            )
+        ),
+    ] = None
+    status: Annotated[
+        MemberStatus | None,
+        Field(description="The caller's participation status on the trip."),
+    ] = None
+
+    @model_validator(mode="after")
+    def _range_order(self) -> Self:
+        if self.start_from and self.start_to and self.start_from > self.start_to:
+            msg = "start_from must not be after start_to"
+            raise ValueError(msg)
+        return self
+
+
+class TripListQuery(PageParams, TripFilter):
+    """Query of ``GET /trips``: paging, sort and the filters."""
+
+    sort: TripSort = TripSort.CREATED_AT
+    # Overrides the base default (ASC): newest trips first.
+    dir: Annotated[SortDir, Field(description="Sort direction.")] = SortDir.DESC
 
 
 class TripMembership(BaseModel):
@@ -65,3 +358,20 @@ class TripMembership(BaseModel):
     trip_id: UUID
     sub: str
     role: TripRole
+    status: MemberStatus = MemberStatus.CONFIRMED
+
+
+class MemberRead(BaseModel):
+    """A person on the trip who has an account, with their trip role."""
+
+    profile_id: UUID = Field(description="Use it in the member routes.")
+    display_name: str
+    role: TripRole
+    status: MemberStatus = Field(description="Whether the member confirmed.")
+    is_me: bool = Field(description="Whether this member is the caller.")
+
+
+class MemberRoleUpdate(BaseModel):
+    """Payload for changing a member's role (the host role cannot be given)."""
+
+    role: Literal[TripRole.MEMBER, TripRole.CO_HOST]

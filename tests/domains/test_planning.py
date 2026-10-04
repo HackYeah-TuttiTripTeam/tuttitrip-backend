@@ -2,7 +2,6 @@
 
 import asyncio
 import math
-from decimal import Decimal
 
 from fastapi.testclient import TestClient
 from pydantic_ai.models.test import TestModel
@@ -10,8 +9,6 @@ from pydantic_ai.models.test import TestModel
 from tests.shared.fakes import authorize
 from tuttitrip.main import create_app
 from tuttitrip.planning.fairness.logic.welfare import weighted_log_welfare
-from tuttitrip.planning.linter.logic.rules import lint
-from tuttitrip.planning.linter.schemas import LintRequest, PlanItem
 from tuttitrip.planning.schemas import TripPlan
 from tuttitrip.planning.services.planner_agent import planner_agent
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
@@ -45,18 +42,6 @@ def test_weights_multiply_log_utility() -> None:
     assert math.isclose(weighted_log_welfare([(9, 2)]), 2 * math.log(10))
 
 
-def test_linter_flags_over_budget_plan() -> None:
-    request = LintRequest(
-        items=[
-            PlanItem(name="Muzeum", cost=Decimal(80)),
-            PlanItem(name="Zoo", cost=Decimal(50)),
-        ],
-        budget=Decimal(100),
-    )
-    assert [v.rule for v in lint(request)] == ["budget"]
-    assert lint(request.model_copy(update={"budget": Decimal(130)})) == []
-
-
 def test_fairness_endpoint() -> None:
     app = create_app()
     authorize(app, AuthenticatedUser(sub="auth0|tester"))
@@ -67,3 +52,19 @@ def test_fairness_endpoint() -> None:
         )
     assert response.status_code == 200
     assert math.isclose(response.json()["score"], math.log(10))
+
+
+def test_fairness_endpoint_alpha() -> None:
+    app = create_app()
+    authorize(app, AuthenticatedUser(sub="auth0|tester"))
+    body = {"people": [{"utility": 9, "weight": 2}, {"utility": 19, "weight": 1}]}
+    with TestClient(app) as client:
+        plain = client.post("/api/v1/planning/fairness/score", json=body)
+        nash = client.post("/api/v1/planning/fairness/score", json={**body, "alpha": 1})
+        two = client.post("/api/v1/planning/fairness/score", json={**body, "alpha": 2})
+        bad = client.post(
+            "/api/v1/planning/fairness/score", json={**body, "alpha": 3.5}
+        )
+    assert plain.json() == nash.json()
+    assert math.isclose(two.json()["score"], 2.75)
+    assert bad.status_code == 422

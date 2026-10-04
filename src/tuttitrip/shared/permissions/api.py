@@ -4,7 +4,9 @@ Every route declares exactly one marker in ``dependencies=[...]``:
 
 * ``requires(Feature.X, Access.READ|WRITE)``: 401 without a valid token,
   403 ``Missing permission x:LEVEL`` when the caller lacks it;
-* ``public()``: no authentication (health, smoke test).
+* ``public()``: no authentication (health, smoke test);
+* ``token_access(TokenScope.X)``: no account, a scoped ``X-Access-Token`` bound
+  to one profile of one trip; anything wrong with the token is a 404.
 
 Permissions are resolved once per request (FastAPI caches dependencies within
 a request) from one query, never across requests and never from the token,
@@ -14,7 +16,17 @@ except the Auth0 ``admin`` claim, which means ``*`` WRITE.
 from dataclasses import dataclass
 from typing import Annotated, Any, override
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, params, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Response,
+    params,
+    status,
+)
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
 
@@ -34,9 +46,11 @@ from tuttitrip.shared.permissions.schemas import (
     RoleCreate,
     RoleRead,
     RoleUpdate,
+    TokenAccess,
+    TokenScope,
     UserPermissionsRead,
 )
-from tuttitrip.shared.permissions.services import permission_service
+from tuttitrip.shared.permissions.services import permission_service, token_service
 from tuttitrip.shared.permissions.services.permission_service import (
     Actor,
     EscalationError,
@@ -48,15 +62,19 @@ from tuttitrip.shared.permissions.services.permission_service import (
 
 router = APIRouter()
 
+ACCOUNT_BLOCKED = "Konto zablokowane"
+
 OPENAPI_PERMISSION_KEY = "x-required-permission"
 OPENAPI_PUBLIC_KEY = "x-public"
+OPENAPI_TOKEN_KEY = "x-token-access"  # ruff: ignore[hardcoded-password-string] a header name, not a secret
+ACCESS_TOKEN_HEADER = "X-Access-Token"  # ruff: ignore[hardcoded-password-string] a header name, not a secret
 
 
 # --- resolution --------------------------------------------------------------
 
 
 async def get_user_grants(user: CurrentUser, session: SessionDep) -> list[Grant]:
-    """Load the caller's grants (one query; skipped for superadmins).
+    """Load the caller's grants and refuse a blocked account (one query).
 
     Args:
         user: The authenticated caller.
@@ -64,10 +82,19 @@ async def get_user_grants(user: CurrentUser, session: SessionDep) -> list[Grant]
 
     Returns:
         Grants from the caller's roles, the default role and direct grants.
+
+    Raises:
+        HTTPException: 403 when the account is blocked or deleted.
     """
     if user.is_admin:
-        return []  # the claim alone grants everything
-    return await permission_service.load_grants(session, user.sub)
+        # The claim alone grants everything, but a blocked account is refused too.
+        grants: list[Grant] = []
+        blocked = await permission_service.is_blocked(session, user.sub)
+    else:
+        grants, blocked = await permission_service.load_access(session, user.sub)
+    if blocked:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, ACCOUNT_BLOCKED)
+    return grants
 
 
 def get_effective_permissions(
@@ -124,6 +151,78 @@ class PublicMarker:
         """Do nothing: the marker is only read by tests and OpenAPI."""
 
 
+async def get_token_access(
+    session: SessionDep,
+    token: Annotated[
+        str | None,
+        Header(
+            alias=ACCESS_TOKEN_HEADER,
+            description="Secret access token (from the link fragment).",
+        ),
+    ] = None,
+) -> TokenAccess:
+    """Check the ``X-Access-Token`` header (once per request).
+
+    Args:
+        session: Database session.
+        token: The presented token.
+
+    Returns:
+        Proof of access to one profile of one trip.
+
+    Raises:
+        HTTPException: 401 without the header, 404 for any bad token. The
+            length is checked in the service (not by FastAPI), because a
+            validation error would echo the secret back.
+    """
+    if not token:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Missing access token",
+            headers=NO_STORE_HEADERS,
+        )
+    try:
+        return await token_service.authenticate(session, token)
+    except token_service.InvalidTokenError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND, headers=NO_STORE_HEADERS
+        ) from None
+
+
+TokenAccessDep = Annotated[TokenAccess, Depends(get_token_access)]
+NO_STORE = "no-store"
+NO_STORE_HEADERS = {"Cache-Control": NO_STORE}
+TOKEN_NOT_FOUND = "Not found"  # ruff: ignore[hardcoded-password-string] a message, not a secret
+
+
+@dataclass(frozen=True, slots=True)
+class TokenRequirement:
+    """Dependency that demands a valid token of ``scope`` (see ``token_access``)."""
+
+    scope: TokenScope
+
+    @override
+    def __str__(self) -> str:
+        return self.scope.value
+
+    async def __call__(
+        self, access: TokenAccessDep, session: SessionDep, response: Response
+    ) -> None:
+        """Raise 404 unless the token has the scope; then record the use.
+
+        Args:
+            access: The checked token.
+            session: Database session.
+            response: The response (gets ``Cache-Control: no-store``).
+        """
+        if access.scope != self.scope:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND, headers=NO_STORE_HEADERS
+            )
+        response.headers["Cache-Control"] = NO_STORE
+        await token_service.touch(session, access.token_id)
+
+
 def requires(feature: Feature, level: Access) -> params.Depends:
     """Route marker: the caller needs ``level`` on ``feature`` (or an ancestor).
 
@@ -150,6 +249,38 @@ def public() -> params.Depends:
     return params.Depends(PublicMarker())
 
 
+def _set_no_store(response: Response) -> None:
+    response.headers["Cache-Control"] = NO_STORE
+
+
+def no_store() -> params.Depends:
+    """Not a marker: ``Cache-Control: no-store`` for responses that carry secrets.
+
+    Returns:
+        The dependency to put in ``dependencies=[...]`` next to the marker.
+    """
+    return params.Depends(_set_no_store)
+
+
+def token_access(scope: TokenScope) -> params.Depends:
+    """Route marker: no account, a valid access token of ``scope``.
+
+    The route takes ``TokenAccessDep`` to learn which trip and profile the
+    token is bound to, and never has ``{trip_id}`` in its path (the trip comes
+    from the token).
+
+    Args:
+        scope: What the token must allow.
+
+    Returns:
+        The dependency to put in ``dependencies=[...]``.
+    """
+    return params.Depends(TokenRequirement(scope))
+
+
+Marker = PermissionRequirement | PublicMarker | TokenRequirement
+
+
 def api_routes(app: FastAPI) -> list[RouteContext]:
     """Every API route as served, with router and include-level settings applied.
 
@@ -169,7 +300,7 @@ def api_routes(app: FastAPI) -> list[RouteContext]:
     ]
 
 
-def route_markers(route: RouteContext) -> list[PermissionRequirement | PublicMarker]:
+def route_markers(route: RouteContext) -> list[Marker]:
     """Every permission marker in a route's dependency tree.
 
     Includes router-level dependencies and markers nested in sub-dependencies.
@@ -180,22 +311,28 @@ def route_markers(route: RouteContext) -> list[PermissionRequirement | PublicMar
     Returns:
         The markers found.
     """
-    found: list[PermissionRequirement | PublicMarker] = []
+    found: list[Marker] = []
     stack: list[Dependant] = list(route.dependant.dependencies)
     while stack:
         dependant = stack.pop()
-        if isinstance(dependant.call, PermissionRequirement | PublicMarker):
+        if isinstance(dependant.call, Marker):
             found.append(dependant.call)
         stack.extend(dependant.dependencies)
     return found
 
 
-def _annotate(
-    operation: dict[str, Any], marker: PermissionRequirement | PublicMarker
-) -> None:
+def _annotate(operation: dict[str, Any], marker: Marker) -> None:
     if isinstance(marker, PublicMarker):
         operation[OPENAPI_PUBLIC_KEY] = True
         line = "Publiczny: nie wymaga logowania."
+    elif isinstance(marker, TokenRequirement):
+        operation[OPENAPI_TOKEN_KEY] = str(marker)
+        line = f"Dostęp tokenem bez konta (`{ACCESS_TOKEN_HEADER}`), zakres `{marker}`."
+        responses = operation.setdefault("responses", {})
+        responses.setdefault("401", {"description": "Brak nagłówka z tokenem"})
+        responses.setdefault(
+            "404", {"description": "Token nieznany, wygasły, odwołany albo inny zakres"}
+        )
     else:
         operation[OPENAPI_PERMISSION_KEY] = str(marker)
         line = f"Wymagane uprawnienie: `{marker}`."
@@ -209,9 +346,10 @@ def document_permissions(app: FastAPI) -> None:
     """Show each route's requirement in OpenAPI (extension + description line).
 
     Builds the schema once (FastAPI caches it in ``app.openapi_schema``) and
-    annotates it: operations get ``x-required-permission: "feature:LEVEL"``
-    or ``x-public: true``, a Polish line in the description and 401/403
-    responses. Call it last in the app factory.
+    annotates it: operations get ``x-required-permission: "feature:LEVEL"``,
+    ``x-token-access: "scope"`` or ``x-public: true``, a Polish line in the
+    description and 401/403 (token routes: 401/404) responses. Call it last
+    in the app factory.
 
     Args:
         app: The application.
@@ -255,6 +393,25 @@ def read_me(user: CurrentUser, permissions: EffectivePermissionsDep) -> MeRespon
         is_admin=user.is_admin,
         access=permissions.as_dict(),
     )
+
+
+# --- access without an account ----------------------------------------------
+
+
+@router.get("/vote/access", tags=["vote"], dependencies=[token_access(TokenScope.VOTE)])
+def read_vote_access(access: TokenAccessDep) -> TokenAccess:
+    """Say which trip and profile the voting token is bound to.
+
+    Voting routes use the same marker and ``TokenAccessDep``; this one lets
+    the voting page check its link before showing anything.
+
+    Args:
+        access: The checked token.
+
+    Returns:
+        Trip, profile and scope of the token.
+    """
+    return access
 
 
 # --- admin API ---------------------------------------------------------------

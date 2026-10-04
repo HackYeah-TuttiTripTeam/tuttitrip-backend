@@ -6,8 +6,9 @@
 #      CLOUDFLARE_ZONE_ID (optional), TUTTITRIP_AUTH0__DOMAIN/AUDIENCE and
 #      TUTTITRIP_CORS_ORIGINS/_ORIGIN_REGEX (optional; app defaults otherwise).
 # Host files (never committed), under $TT_STATE_DIR (~/tuttitrip):
-#      deploy.env  POSTGRES_PASSWORD (generated on first run)
-#      app.env     optional extra app env for every branch (e.g. OPENAI_API_KEY)
+#      deploy.env  POSTGRES_PASSWORD, WORKER_DB_PASSWORD, DEMO_RESET_SECRET (generated on first run)
+#      app.env     optional extra app env for every branch (e.g. OPENAI_API_KEY,
+#                  TUTTITRIP_CITIES__SHEET_ID: the cities sheet, see fetch-cities.sh)
 #      admin.env   admin tools (deploy/admin/setup.sh, run after a main deploy)
 set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -37,7 +38,7 @@ flock 9  # one deploy/cleanup at a time on this host
 gen_password() { head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32; }
 umask 077
 touch "$TT_STATE_DIR/deploy.env"
-for var in POSTGRES_PASSWORD WORKER_DB_PASSWORD; do
+for var in POSTGRES_PASSWORD WORKER_DB_PASSWORD DEMO_RESET_SECRET; do
   if ! grep -q "^$var=" "$TT_STATE_DIR/deploy.env"; then
     printf '%s=%s\n' "$var" "$(gen_password)" >>"$TT_STATE_DIR/deploy.env"
     tt_log "generated $var in $TT_STATE_DIR/deploy.env"
@@ -94,9 +95,22 @@ labels=(--label tuttitrip.managed=true --label tuttitrip.env="$env" --label tutt
 docker build -q -t "$image" "${labels[@]}" "$repo" >/dev/null
 tt_log "built $image"
 
+# Demo cities: download the public Google Sheet into the shared volume (the last
+# good copy stays on any problem; never fails the deploy). The sheet id comes
+# from the runner environment, else from app.env (not a secret).
+sheet_id=${TUTTITRIP_CITIES__SHEET_ID:-}
+if [ -z "$sheet_id" ] && [ -f "$TT_STATE_DIR/app.env" ]; then
+  sheet_id=$(grep -E '^TUTTITRIP_CITIES__SHEET_ID=' "$TT_STATE_DIR/app.env" | tail -n1 | cut -d= -f2- | tr -d '\r" ' || true)
+fi
+TUTTITRIP_CITIES__SHEET_ID=$sheet_id TT_CITIES_IMAGE="$image" TT_CITIES_VOLUME="$TT_CITIES_VOLUME" \
+  "$here/fetch-cities.sh" || tt_log "WARNING: cities sheet download crashed; deploy continues with the last copy"
+
 # Env files shared with the worker repo (deploy/CONVENTIONS.md), mode 600.
 envfile="$TT_STATE_DIR/envs/$env.env"
 workerenv="$TT_STATE_DIR/envs/$env.worker.env"
+# Per-environment secret: a preview container running branch code never holds
+# the secret of main (or any other env).
+demo_reset_secret=$(printf '%s:%s' "$DEMO_RESET_SECRET" "$env" | sha256sum | cut -d' ' -f1)
 db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$database"; }
 {
   printf 'TUTTITRIP_ENVIRONMENT=%s\n' "$env"
@@ -104,10 +118,28 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'TUTTITRIP_DATABASE__USER=tuttitrip\nTUTTITRIP_DATABASE__PASSWORD=%s\n' "$POSTGRES_PASSWORD"
   printf 'TUTTITRIP_DATABASE__NAME=%s\n' "$database"
   printf 'TUTTITRIP_DBOS__APPLICATION_VERSION=%s\n' "$env"
+  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$demo_reset_secret"
+  # MCP server: its URL is also the Auth0 API identifier of this environment
+  # (on only for main and develop, see tt_mcp_env).
+  tt_mcp_env "$env"
   for var in TUTTITRIP_AUTH0__DOMAIN TUTTITRIP_AUTH0__AUDIENCE TUTTITRIP_CORS_ORIGINS \
-    TUTTITRIP_CORS_ORIGIN_REGEX TUTTITRIP_LLM__MODEL; do
+    TUTTITRIP_CORS_ORIGIN_REGEX; do
     if [ -n "${!var:-}" ]; then printf '%s=%s\n' "$var" "${!var}"; fi
   done
+  # X-Forwarded-For is trusted only from the gateway's Docker network (uvicorn
+  # reads FORWARDED_ALLOW_IPS); fall back to the private ranges if unknown.
+  printf 'FORWARDED_ALLOW_IPS=%s\n' "$(docker network inspect "$TT_NETWORK" \
+    -f '{{range .IPAM.Config}}{{.Subnet}},{{end}}' 2>/dev/null | sed 's/,$//;s/,\{2,\}/,/g' \
+    | grep . || echo '172.16.0.0/12,192.168.0.0/16,10.0.0.0/8')"
+  # Superadmins the API never blocks or deletes: the Discord ids in the admin
+  # tools' allow-list (admin.env, SUPERADMIN_ALLOW_LIST), as a JSON list. Never
+  # echoed; an app.env entry below wins.
+  if [ -f "$TT_STATE_DIR/admin.env" ]; then
+    ids=$(grep -E '^SUPERADMIN_ALLOW_LIST=' "$TT_STATE_DIR/admin.env" | tail -n1 | cut -d= -f2- \
+      | tr -d '\r"'"'"' ' | tr ',' '\n' | grep -E '^[0-9]+$' | sed 's/.*/"&"/' | paste -sd, - || true)
+    if [ -n "$ids" ]; then printf 'TUTTITRIP_ADMIN__PROTECTED_DISCORD_IDS=[%s]\n' "$ids"; fi
+    unset ids
+  fi
   if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
 } >"$envfile"
 {
@@ -115,6 +147,7 @@ db_url() { printf 'postgresql://%s:%s@%s:5432/%s' "$1" "$2" "$TT_POSTGRES" "$dat
   printf 'DBOS_SYSTEM_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
   printf 'TUTTITRIP_WORKER_DATABASE_URL=%s\n' "$(db_url tuttitrip_worker "$WORKER_DB_PASSWORD")"
   printf 'DBOS__APPVERSION=%s\n' "$env"
+  printf 'TUTTITRIP_DEMO__RESET_SECRET=%s\n' "$demo_reset_secret"
   if [ -f "$TT_STATE_DIR/app.env" ]; then grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$TT_STATE_DIR/app.env" || true; fi
 } >"$workerenv"
 
@@ -128,6 +161,26 @@ docker exec -i "$TT_POSTGRES" psql -q -v ON_ERROR_STOP=1 -v dbname="$database" -
   <"$here/worker-grants.sql" >/dev/null
 tt_log "migrations, DBOS schema and worker grants applied"
 
+# Import the sheet (idempotent upsert, one transaction). A rejected workbook
+# leaves the catalog untouched; it is reported loudly but does not fail the
+# deploy, so a bad edit in the sheet cannot block a release.
+citieslog="$TT_STATE_DIR/cities-import-$env.log"
+set +e
+cities_name="tuttitrip-cities-import-$env"
+timeout -k 5 300 docker run --rm --name "$cities_name" --network "$TT_NETWORK" --env-file "$envfile" \
+  -v "$TT_CITIES_VOLUME:/data/cities:ro" "$image" \
+  python -m tuttitrip.places.services.import_command >"$citieslog" 2>&1
+cities_rc=$?
+set -e
+# timeout kills the docker client, not the container: remove it explicitly.
+docker rm -f "$cities_name" >/dev/null 2>&1 || true
+case "$cities_rc" in
+  0) tt_log "cities sheet imported"; grep -E ': [0-9]+ places|inserted' "$citieslog" >&2 || true ;;
+  2) tt_log "WARNING: no cities sheet in volume $TT_CITIES_VOLUME; the catalog keeps its data" ;;
+  *) tt_log "WARNING: cities import FAILED (exit $cities_rc), catalog unchanged; see $citieslog"
+     tail -n 25 "$citieslog" >&2 || true ;;
+esac
+
 docker rm -f "$container" >/dev/null 2>&1 || true
 docker run -d --name "$container" --network "$TT_NETWORK" --restart unless-stopped \
   "${labels[@]}" --label tuttitrip.role=api --env-file "$envfile" "$image" >/dev/null
@@ -140,9 +193,29 @@ for i in $(seq 60); do
 done
 tt_log "healthy behind the gateway"
 
+# Smoke test of the catalog: the demo city (Warszawa) must have its sheet data.
+demo_places=$(docker exec -i "$TT_POSTGRES" psql -U tuttitrip -d "$database" -tAc \
+  "SELECT count(*) FROM places WHERE city_slug = 'warszawa' AND source = 'sheet'" 2>/dev/null || echo 0)
+if [ "${demo_places:-0}" -gt 0 ]; then
+  tt_log "smoke test: demo city Warszawa has $demo_places sheet places"
+else
+  tt_log "WARNING: smoke test: NO CITY DATA for the demo city (Warszawa); no cities sheet imported yet"
+fi
+
 # --- routing -------------------------------------------------------------------
 cf_ingress_ensure "$host" "http://$TT_GATEWAY_BIND"
 cf_dns_ensure "$host"
+
+# Demo account data (jury login) once routing is live: reset to the sample set.
+# Bounded, logged to a file, and never fails the deploy.
+if grep -qE '^TUTTITRIP_DEMO__TOKEN_SHA256=.' "$envfile"; then
+  demolog="$TT_STATE_DIR/demo-seed-$env.log"
+  if timeout -k 5 120 docker exec "$container" python -m tuttitrip.demo.services.seed_command >"$demolog" 2>&1; then
+    tt_log "demo account data reset"
+  else
+    tt_log "WARNING: demo account reset failed (see $demolog)"; tail -n 5 "$demolog" >&2 || true
+  fi
+fi
 
 # Old images of this environment (keep the one just deployed).
 docker image ls tuttitrip-api --filter "label=tuttitrip.env=$env" --format '{{.Repository}}:{{.Tag}}' \
@@ -191,6 +264,22 @@ if [ "$(docker inspect -f '{{.State.Running}}' "$worker" 2>/dev/null || true)" =
     exit 1
   fi
   tt_log "smoke test passed (ping $ping_id)"
+  # /health should show the worker too (its heartbeat comes every 30 s). The
+  # worker is deployed from its own repo, so this only warns, never fails the
+  # backend deploy (issue #124).
+  worker_state=""
+  for _ in $(seq 40); do
+    worker_state=$(curl -fsS -H "Host: $host" "http://$TT_GATEWAY_BIND/api/v1/health" | jq -r .worker || true)
+    [ "$worker_state" = ok ] && break
+    sleep 3
+  done
+  if [ "$worker_state" = ok ]; then
+    tt_log "/health reports worker ok"
+  else
+    tt_log "WARNING: /health reports worker '${worker_state:-unknown}' for env '$env' although the ping passed"
+    echo "::warning title=Worker heartbeat::/health reports worker '${worker_state:-unknown}' for env '$env' although the ping passed"
+    docker logs --tail 50 "$worker" >&2 || true
+  fi
 else
   tt_log "WARNING: smoke test skipped, no worker running for $env"
 fi

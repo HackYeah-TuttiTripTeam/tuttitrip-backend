@@ -64,6 +64,7 @@ class TokenVerifier:
         roles = claims.get(self.roles_claim, [])
         return AuthenticatedUser(
             sub=str(claims["sub"]),
+            exp=int(claims["exp"]),
             scopes=scope.split() if isinstance(scope, str) else [],
             permissions=[str(p) for p in claims.get("permissions", [])],
             roles=[str(r) for r in roles] if isinstance(roles, list) else [],

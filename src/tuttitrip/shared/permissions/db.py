@@ -1,12 +1,28 @@
 """Queries on roles, role grants, user roles and user grants."""
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
+from uuid import UUID
 
-from sqlalchemy import delete, select, union_all
+from sqlalchemy import (
+    ColumnElement,
+    Select,
+    delete,
+    exists,
+    func,
+    literal,
+    select,
+    union_all,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.shared.db.pagination import ordering, paginate
+from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.models import (
+    AccessToken,
+    AccountBlock,
     PermissionAudit,
     Role,
     RoleGrant,
@@ -14,12 +30,23 @@ from tuttitrip.shared.permissions.models import (
     UserRole,
 )
 from tuttitrip.shared.permissions.registry import Access
+from tuttitrip.shared.permissions.schemas import (
+    AccessTokenQuery,
+    AccessTokenSort,
+    AccessTokenState,
+    TokenScope,
+)
+
+BLOCKED_MARK = "__blocked__"
+"""Pseudo feature code of the row that tells the grants query the account is blocked."""
 
 
 async def select_effective_grants(
     session: AsyncSession, sub: str, *, default_role: str, claim_only_role: str
-) -> Sequence[tuple[str, Access]]:
-    """Every grant that applies to a user, in one round trip.
+) -> tuple[Sequence[tuple[str, Access]], bool]:
+    """Every grant that applies to a user, and whether the account is blocked.
+
+    One round trip: the block rides along as an extra row of the union.
 
     Args:
         session: Open session.
@@ -29,7 +56,7 @@ async def select_effective_grants(
 
     Returns:
         ``(feature, level)`` pairs from the user's roles, the default role and
-        direct grants (duplicates possible).
+        direct grants (duplicates possible), and the blocked flag.
     """
     assigned = select(UserRole.role_name).where(UserRole.user_sub == sub)
     from_roles = select(RoleGrant.feature, RoleGrant.level).where(
@@ -37,8 +64,71 @@ async def select_effective_grants(
         RoleGrant.role_name != claim_only_role,
     )
     direct = select(UserGrant.feature, UserGrant.level).where(UserGrant.user_sub == sub)
-    result = await session.execute(union_all(from_roles, direct))
-    return [(row[0], Access(row[1])) for row in result.all()]
+    blocked = select(literal(BLOCKED_MARK), literal(Access.READ.value)).where(
+        exists().where(AccountBlock.user_sub == sub)
+    )
+    result = await session.execute(union_all(from_roles, direct, blocked))
+    rows = result.all()
+    grants: list[tuple[str, Access]] = [
+        (str(row[0]), Access(row[1])) for row in rows if row[0] != BLOCKED_MARK
+    ]
+    return grants, len(grants) < len(rows)
+
+
+async def upsert_account_block(
+    session: AsyncSession, sub: str, *, deleted: bool, blocked_by: str
+) -> None:
+    """Block an account, or mark it deleted (idempotent; caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+        deleted: Whether the account is gone from Auth0.
+        blocked_by: Auth0 subject of the admin.
+    """
+    statement = insert(AccountBlock).values(
+        user_sub=sub, deleted=deleted, blocked_by=blocked_by
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[AccountBlock.user_sub],
+            set_={"deleted": statement.excluded.deleted},
+        )
+    )
+
+
+async def delete_account_block(session: AsyncSession, sub: str) -> None:
+    """Lift a block (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+    """
+    await session.execute(delete(AccountBlock).where(AccountBlock.user_sub == sub))
+
+
+async def select_account_block(session: AsyncSession, sub: str) -> AccountBlock | None:
+    """Find the block of an account.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        The row, or None.
+    """
+    return await session.get(AccountBlock, sub)
+
+
+async def delete_user_access(session: AsyncSession, sub: str) -> None:
+    """Remove a user's role assignments and direct grants (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+    """
+    await session.execute(delete(UserRole).where(UserRole.user_sub == sub))
+    await session.execute(delete(UserGrant).where(UserGrant.user_sub == sub))
 
 
 async def select_roles(session: AsyncSession) -> Sequence[Role]:
@@ -282,3 +372,264 @@ async def select_audit(
     if target_sub is not None:
         statement = statement.where(PermissionAudit.target_sub == target_sub)
     return (await session.scalars(statement)).all()
+
+
+async def insert_access_token(session: AsyncSession, row: AccessToken) -> AccessToken:
+    """Insert a token (hash only) and flush to get server defaults.
+
+    Args:
+        session: Open session (caller commits).
+        row: The new token, built by the service.
+
+    Returns:
+        The persisted row.
+    """
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
+async def select_access_token_by_hash(
+    session: AsyncSession, token_hash: str
+) -> AccessToken | None:
+    """Find a token by its hash.
+
+    Args:
+        session: Open session.
+        token_hash: SHA-256 hex of the presented token.
+
+    Returns:
+        The row (active or not) or None.
+    """
+    return await session.scalar(
+        select(AccessToken).where(AccessToken.token_hash == token_hash)
+    )
+
+
+async def select_access_token(
+    session: AsyncSession, token_id: UUID, trip_id: UUID, profile_id: UUID
+) -> AccessToken | None:
+    """Find a token of one profile of one trip by id.
+
+    Args:
+        session: Open session.
+        token_id: Token id.
+        trip_id: Trip the caller was checked for.
+        profile_id: Profile in the path.
+
+    Returns:
+        The row or None (also when it belongs to another trip or profile).
+    """
+    return await session.scalar(
+        select(AccessToken).where(
+            AccessToken.id == token_id,
+            AccessToken.trip_id == trip_id,
+            AccessToken.profile_id == profile_id,
+        )
+    )
+
+
+async def update_last_used(
+    session: AsyncSession, token_id: UUID, now: datetime, stale_before: datetime
+) -> bool:
+    """Set ``last_used_at`` unless it is newer than ``stale_before``.
+
+    Args:
+        session: Open session (caller commits).
+        token_id: Token id.
+        now: New value.
+        stale_before: Only rows never used or last used before this change.
+
+    Returns:
+        Whether a row changed.
+    """
+    changed = await session.scalar(
+        update(AccessToken)
+        .where(
+            AccessToken.id == token_id,
+            (AccessToken.last_used_at.is_(None))
+            | (AccessToken.last_used_at < stale_before),
+        )
+        .values(last_used_at=now)
+        .returning(AccessToken.id)
+    )
+    return changed is not None
+
+
+async def count_active_access_tokens(
+    session: AsyncSession, profile_id: UUID, scope: TokenScope, now: datetime
+) -> int:
+    """Count a profile's tokens of one scope that are neither revoked nor expired.
+
+    Args:
+        session: Open session.
+        profile_id: Profile.
+        scope: Token scope (other scopes do not count against the cap).
+        now: Current time.
+
+    Returns:
+        The number of active tokens.
+    """
+    return (
+        await session.scalar(
+            select(func.count())
+            .select_from(AccessToken)
+            .where(
+                AccessToken.profile_id == profile_id,
+                AccessToken.scope == scope,
+                AccessToken.revoked_at.is_(None),
+                AccessToken.expires_at > now,
+            )
+        )
+    ) or 0
+
+
+async def select_access_tokens(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID
+) -> Sequence[AccessToken]:
+    """Tokens of one profile of one trip, newest first.
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        profile_id: Profile.
+
+    Returns:
+        Rows.
+    """
+    result = await session.scalars(
+        select(AccessToken)
+        .where(AccessToken.trip_id == trip_id, AccessToken.profile_id == profile_id)
+        .order_by(AccessToken.created_at.desc())
+    )
+    return result.all()
+
+
+_TOKEN_SORT = {
+    AccessTokenSort.CREATED_AT: AccessToken.created_at,
+    AccessTokenSort.EXPIRES_AT: AccessToken.expires_at,
+    AccessTokenSort.LAST_USED_AT: AccessToken.last_used_at,
+}
+
+
+def _state_clause(state: AccessTokenState, now: datetime) -> ColumnElement[bool]:
+    match state:
+        case AccessTokenState.ACTIVE:
+            return AccessToken.revoked_at.is_(None) & (AccessToken.expires_at > now)
+        case AccessTokenState.EXPIRED:
+            return AccessToken.revoked_at.is_(None) & (AccessToken.expires_at <= now)
+        case AccessTokenState.REVOKED:
+            return AccessToken.revoked_at.is_not(None)
+
+
+def _trip_tokens(
+    trip_id: UUID, scope: TokenScope, query: AccessTokenQuery, now: datetime
+) -> Select[AccessToken]:
+    stmt = select(AccessToken).where(
+        AccessToken.trip_id == trip_id, AccessToken.scope == scope
+    )
+    if query.profile_id is not None:
+        stmt = stmt.where(AccessToken.profile_id == query.profile_id)
+    if query.state is not None:
+        stmt = stmt.where(_state_clause(query.state, now))
+    return stmt
+
+
+async def select_trip_tokens_page(
+    session: AsyncSession,
+    trip_id: UUID,
+    scope: TokenScope,
+    query: AccessTokenQuery,
+    now: datetime,
+) -> Page[AccessToken]:
+    """One page of a trip's tokens of one scope.
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        scope: Token scope.
+        query: Page, sort, direction and filters.
+        now: Current time (decides expired from active).
+
+    Returns:
+        The page of rows.
+    """
+    order = ordering(_TOKEN_SORT, query.sort, AccessToken.id)
+    return await paginate(
+        session, _trip_tokens(trip_id, scope, query, now), query, order
+    )
+
+
+async def select_trip_token(
+    session: AsyncSession, token_id: UUID, trip_id: UUID, scope: TokenScope
+) -> AccessToken | None:
+    """Find a token of one scope on a trip by id.
+
+    Args:
+        session: Open session.
+        token_id: Token id.
+        trip_id: Trip the caller was checked for.
+        scope: Token scope.
+
+    Returns:
+        The row, or None (also for another trip or scope).
+    """
+    return await session.scalar(
+        select(AccessToken).where(
+            AccessToken.id == token_id,
+            AccessToken.trip_id == trip_id,
+            AccessToken.scope == scope,
+        )
+    )
+
+
+async def revoke_active_tokens(
+    session: AsyncSession, profile_id: UUID, scope: TokenScope, now: datetime
+) -> None:
+    """Revoke a profile's working tokens of one scope, serialised per profile.
+
+    The transaction-scoped advisory lock makes two parallel replacements run
+    one after the other, so only the later token stays active.
+
+    Args:
+        session: Open session (caller commits).
+        profile_id: Profile.
+        scope: Token scope.
+        now: Revocation time.
+    """
+    await session.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(str(profile_id), 0)))
+    )
+    await session.execute(
+        update(AccessToken)
+        .where(
+            AccessToken.profile_id == profile_id,
+            AccessToken.scope == scope,
+            AccessToken.revoked_at.is_(None),
+            AccessToken.expires_at > now,
+        )
+        .values(revoked_at=now)
+    )
+
+
+async def revoke_tokens_created_by(
+    session: AsyncSession, sub: str, now: datetime
+) -> int:
+    """Revoke the access tokens a user issued that are still open (caller commits).
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject of the issuer.
+        now: Revocation time.
+
+    Returns:
+        How many tokens were revoked.
+    """
+    result = await session.execute(
+        update(AccessToken)
+        .where(AccessToken.created_by == sub, AccessToken.revoked_at.is_(None))
+        .values(revoked_at=now)
+        .returning(AccessToken.id)
+    )
+    return len(result.all())

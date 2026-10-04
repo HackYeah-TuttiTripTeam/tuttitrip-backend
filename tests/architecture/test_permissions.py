@@ -6,31 +6,59 @@ not depend on URL prefixes.
 """
 
 import ast
+import asyncio
+import re
 from pathlib import Path
 
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
+from fastmcp.tools import Tool
+from starlette.routing import Route
 
 from tests.architecture.layout import PACKAGE_ROOT, all_modules, rel
-from tuttitrip.main import create_app
+from tuttitrip.main import API_PREFIX, create_app
+from tuttitrip.mcp.api import McpRequirement, create_mcp
+from tuttitrip.shared.config.settings import McpSettings, Settings
 from tuttitrip.shared.permissions.api import (
     PermissionRequirement,
     PublicMarker,
+    TokenRequirement,
     api_routes,
+    get_token_access,
     public,
     requires,
     route_markers,
+    token_access,
 )
 from tuttitrip.shared.permissions.registry import Access, Feature, is_leaf
+from tuttitrip.shared.permissions.schemas import TokenScope
 from tuttitrip.trips.api import TripAccess
 
 APP = create_app()
 API_ROUTES = api_routes(APP)
 
 # Endpoint function names of the only routes that may be public.
-PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status"}
+PUBLIC_ENDPOINTS = {"health", "live", "ping", "ping_status", "demo_login", "reset_demo"}
+# Endpoint function names of the only routes reachable with an access token
+# instead of an account (the token's trip and profile come from the token).
+TOKEN_ENDPOINTS = {
+    "read_vote_access",
+    "read_vote_session",
+    "rate_place_by_link",
+    "veto_place_by_link",
+    "withdraw_veto_by_link",
+}
+
+
+# The only non-API routes that carry their own guard instead of a marker: the
+# MCP resource metadata (public by design, RFC 9728) and the MCP endpoint,
+# whose tools each declare one `mcp_requires` (checked below).
+MCP_ROUTES = frozenset(
+    {f"/.well-known/oauth-protected-resource{API_PREFIX}/mcp", f"{API_PREFIX}/mcp"}
+)
+MCP_SETTINGS = Settings(mcp=McpSettings(enabled=True))
 
 
 def docs_paths(app: FastAPI) -> set[str | None]:
@@ -43,7 +71,7 @@ def docs_paths(app: FastAPI) -> set[str | None]:
 
 
 def uncovered_routes(app: FastAPI) -> list[str]:
-    """Routes without exactly one marker (``requires`` or ``public``)."""
+    """Routes without exactly one marker (requires, public or token_access)."""
     problems: list[str] = []
     for route in iter_route_contexts(app.routes):
         if isinstance(route.original_route, APIRoute):
@@ -51,6 +79,8 @@ def uncovered_routes(app: FastAPI) -> list[str]:
             if len(markers) != 1:
                 methods = ",".join(sorted(route.methods or ()))
                 problems.append(f"{methods} {route.path}: {len(markers)} markers")
+        elif route.path in MCP_ROUTES and type(route.original_route) is Route:
+            continue
         elif route.path not in docs_paths(app):
             problems.append(f"{route.path}: not an API route and not docs")
     return problems
@@ -97,6 +127,90 @@ def test_coverage_check_catches_unmarked_and_double_marked_routes() -> None:
         "GET /open: 0 markers",
         "GET /twice: 2 markers",
     ]
+
+
+def test_a_token_marker_counts_as_a_marker() -> None:
+    app = FastAPI()
+    app.get("/ok", dependencies=[token_access(TokenScope.VOTE)])(lambda: None)
+    app.get(
+        "/token-and-public",
+        dependencies=[token_access(TokenScope.VOTE), public()],
+    )(lambda: None)
+    app.get(
+        "/token-and-requires",
+        dependencies=[
+            token_access(TokenScope.VOTE),
+            requires(Feature.SEARCH, Access.READ),
+        ],
+    )(lambda: None)
+    assert uncovered_routes(app) == [
+        "GET /token-and-public: 2 markers",
+        "GET /token-and-requires: 2 markers",
+    ]
+
+
+def test_only_the_allow_listed_routes_use_a_token() -> None:
+    token_routes = {
+        r.name
+        for r in API_ROUTES
+        if any(isinstance(m, TokenRequirement) for m in route_markers(r))
+    }
+    assert token_routes == TOKEN_ENDPOINTS
+
+
+def _token_routes(app: FastAPI) -> list[RouteContext]:
+    return [
+        r
+        for r in api_routes(app)
+        if any(isinstance(m, TokenRequirement) for m in route_markers(r))
+    ]
+
+
+def token_routes_with_identifying_path(app: FastAPI) -> list[str]:
+    """Token routes whose path names a trip, a profile or any such object."""
+    return [
+        route.path or ""
+        for route in _token_routes(app)
+        if any(
+            word in name
+            for name in re.findall(r"{(\w+)", route.path or "")
+            for word in ("trip", "profile")
+        )
+    ]
+
+
+def token_routes_outside(app: FastAPI, allowed: set[str]) -> list[str | None]:
+    return [r.name for r in _token_routes(app) if r.name not in allowed]
+
+
+def token_routes_without_token_check(app: FastAPI) -> list[str | None]:
+    return [
+        r.name
+        for r in _token_routes(app)
+        if not any(d.call is get_token_access for d in _dependants(r))
+    ]
+
+
+def test_token_routes_take_the_trip_from_the_token_not_the_path() -> None:
+    assert _token_routes(APP)
+    assert token_routes_with_identifying_path(APP) == []
+
+
+def test_token_routes_check_the_token() -> None:
+    assert token_routes_without_token_check(APP) == []
+
+
+def test_token_route_checks_catch_violations() -> None:
+    app = FastAPI()
+    token = [token_access(TokenScope.VOTE)]
+    app.get("/v/{trip_id}", dependencies=token)(lambda trip_id: trip_id)
+    app.get("/p/{profile_id}", dependencies=token)(lambda profile_id: profile_id)
+    app.get("/ok", dependencies=token)(lambda: None)
+    assert token_routes_with_identifying_path(app) == [
+        "/v/{trip_id}",
+        "/p/{profile_id}",
+    ]
+    assert token_routes_outside(app, TOKEN_ENDPOINTS) == ["<lambda>"] * 3
 
 
 def test_only_the_allow_listed_routes_are_public() -> None:
@@ -166,3 +280,76 @@ def test_feature_codes_are_not_spelled_out_elsewhere() -> None:
         if isinstance(node, ast.Constant) and node.value in codes
     ]
     assert offenders == []
+
+
+SECRET_PARAMS = {
+    "token",
+    "access_token",
+    "invitation_token",
+}  # ids like token_id are fine
+INVITATION_JOIN_ENDPOINTS = {"preview_invitation", "accept_invitation"}
+
+
+def routes_with_a_secret_in_the_url(app: FastAPI) -> list[str]:
+    """Routes whose path or query parameters are named like a token."""
+    problems: list[str] = []
+    for route in api_routes(app):
+        if not isinstance(route.original_route, APIRoute):
+            continue
+        dependant = route.original_route.dependant
+        names = [p.name for p in (*dependant.path_params, *dependant.query_params)]
+        if any(name in SECRET_PARAMS for name in names):
+            problems.append(route.path or "")
+    return problems
+
+
+def test_no_route_takes_a_token_in_the_path_or_query() -> None:
+    assert routes_with_a_secret_in_the_url(APP) == []
+
+
+def test_the_secret_in_url_check_catches_a_token_parameter() -> None:
+    app = FastAPI()
+    app.get("/a/{token}", dependencies=[public()])(lambda token: token)
+    app.get("/b", dependencies=[public()])(lambda token="": token)
+    assert routes_with_a_secret_in_the_url(app) == ["/a/{token}", "/b"]
+
+
+def test_joining_by_invitation_needs_an_account_not_a_token() -> None:
+    joins = [r for r in API_ROUTES if r.name in INVITATION_JOIN_ENDPOINTS]
+    assert {r.name for r in joins} == INVITATION_JOIN_ENDPOINTS
+    for route in joins:
+        (marker,) = route_markers(route)
+        assert isinstance(marker, PermissionRequirement)
+        assert marker.feature is Feature.TRIPS_INVITATIONS
+        assert "{trip_id}" not in (route.path or "")
+
+
+# --- MCP tools ---------------------------------------------------------------
+
+
+def mcp_tools() -> list[Tool]:
+    return list(asyncio.run(create_mcp(MCP_SETTINGS).local_provider.list_tools()))
+
+
+def test_the_mcp_server_has_tools_to_check() -> None:
+    assert {tool.name for tool in mcp_tools()} >= {"whoami"}
+
+
+@pytest.mark.parametrize("tool", mcp_tools(), ids=lambda tool: tool.name)
+def test_every_mcp_tool_has_exactly_one_mcp_requires(tool: Tool) -> None:
+    assert isinstance(tool.auth, McpRequirement), f"{tool.name}: auth is {tool.auth!r}"
+    assert tool.auth.feature in set(Feature)
+    assert is_leaf(tool.auth.feature)
+
+
+def test_the_mcp_app_is_not_a_free_pass_for_other_mounts() -> None:
+    app = create_app(MCP_SETTINGS)
+    assert uncovered_routes(app) == []
+    app.get("/api/v1/mcp-extra")(lambda: None)
+    app.router.routes.append(Route("/.well-known/other", lambda _r: None))
+    app.mount(f"{API_PREFIX}/mcp-sub", FastAPI())
+    assert uncovered_routes(app) == [
+        "GET /api/v1/mcp-extra: 0 markers",
+        "/.well-known/other: not an API route and not docs",
+        "/api/v1/mcp-sub: not an API route and not docs",
+    ]

@@ -12,11 +12,20 @@ dependencies = [
     "asyncpg>=0.31.0",
     "dbos>=3.2.0",
     "fastapi>=0.142.2",
+    "fastmcp-slim[server]>=4.0.10",
+    "httpx>=0.28.1",
+    "icalendar>=7.3.0",
+    "openpyxl>=3.1.5",
+    "ortools>=9.15",
     "pgvector>=0.5.0",
     "pydantic>=2.13.5",
-    "pydantic-ai>=2.54.0",
+    # The harness requires exactly this pydantic-ai-slim; pydantic-ai follows it.
+    "pydantic-ai==2.54.0",
+    "pydantic-ai-harness==0.54.0",
+    "pydantic-ai-slim[ag-ui,openai-realtime]==2.54.0",
     "pydantic-settings>=2.15.0",
     "pyjwt[crypto]>=2.15.1",
+    "python-multipart>=0.0.32",
     "sqlalchemy[asyncio]>=2.1.3",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -27,11 +36,11 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "pytest-archon>=0.0.7",
     "ruff>=0.16.10",
     "ty>=0.0.84",
+    "types-openpyxl>=3.1.5.20260827",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -74,6 +83,12 @@ ignore = [
     "magic-value-comparison", # magic values are fine in test assertions
     "D",                      # test docstrings are optional
     "DOC",                    # ...and so are their Args/Returns sections
+    "hardcoded-password-string",   # tests use made-up tokens and passwords
+    "hardcoded-password-func-arg", # ...also as arguments
+]
+"scripts/**/*.py" = [
+    "implicit-namespace-package", # standalone scripts, not a package
+    "print",                      # output is the point of a smoke script
 ]
 "migrations/**/*.py" = [
     "implicit-namespace-package", # Alembic's script directory is not a Python package
@@ -128,6 +143,11 @@ testpaths = ["tests"]
 strict = true
 addopts = ["-ra", "--strict-config", "--strict-markers", "--import-mode=importlib"]
 filterwarnings = ["error"]
+# CI runs `pytest -m "not integration and not e2e"`; the smoke step runs the rest locally.
+markers = [
+    "integration: needs a real Postgres, DBOS runtime or other service; local smoke step, not CI",
+    "e2e: end to end against a running stack, network or real models; local smoke step, not CI",
+]
 
 # --------------------------------------------------------------------------- #
 # Alembic (migrations live in ./migrations; the DB URL comes from Settings)

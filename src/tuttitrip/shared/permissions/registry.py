@@ -96,6 +96,7 @@ class Feature(StrEnum):
     TRIPS_CORE = "trips.core"
     TRIPS_MEMBERS = "trips.members"
     TRIPS_INVITATIONS = "trips.invitations"
+    TRIPS_VOTE_LINKS = "trips.vote_links"
 
     PROFILES = "profiles"
     PROFILES_CORE = "profiles.core"
@@ -106,6 +107,7 @@ class Feature(StrEnum):
 
     PLANNING = "planning"
     PLANNING_PROPOSALS = "planning.proposals"
+    PLANNING_PLANS = "planning.plans"
     PLANNING_FAIRNESS = "planning.fairness"
     PLANNING_LINTER = "planning.linter"
 
@@ -118,6 +120,12 @@ class Feature(StrEnum):
     EXPENSES_SETTLEMENT = "expenses.settlement"
 
     JOBS = "jobs"
+
+    PLACES = "places"
+    PLACES_CATALOG = "places.catalog"
+
+    MCP = "mcp"
+    NOTIFICATIONS = "notifications"
 
     @property
     def parent(self) -> Feature | None:
@@ -158,7 +166,7 @@ class Feature(StrEnum):
 DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.ROOT: "Wszystkie funkcjonalności aplikacji",
     Feature.ACCOUNTS: "Konto użytkownika",
-    Feature.ACCOUNTS_PROFILE: "Własne konto: tożsamość i uprawnienia (GET /me)",
+    Feature.ACCOUNTS_PROFILE: "Własne konto: tożsamość, uprawnienia i zmiana nazwy",
     Feature.ADMIN: "Administracja (tylko dla administratorów)",
     Feature.ADMIN_PERMISSIONS: "Role, uprawnienia, ich przydział i dziennik zmian",
     Feature.ADMIN_USERS: "Zarządzanie kontami innych użytkowników",
@@ -167,13 +175,15 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.TRIPS_CORE: "Wyjazd: tworzenie, lista i dane podstawowe",
     Feature.TRIPS_MEMBERS: "Uczestnicy wyjazdu i ich role",
     Feature.TRIPS_INVITATIONS: "Zaproszenia na wyjazd",
+    Feature.TRIPS_VOTE_LINKS: "Linki głosowe dla osób bez konta i wynik głosowania",
     Feature.PROFILES: "Profile osób na wyjeździe",
     Feature.PROFILES_CORE: "Profile: osoby, wagi, grupy wiekowe",
     Feature.PROFILES_PREFERENCES: "Preferencje uczestników",
     Feature.PROFILES_FEEDBACK: "Opinie i oceny atrakcji",
     Feature.INTERVIEW: "Wywiad z asystentem AI",
     Feature.PLANNING: "Planowanie wyjazdu",
-    Feature.PLANNING_PROPOSALS: "Propozycje planu generowane przez AI",
+    Feature.PLANNING_PROPOSALS: "Propozycja planu: wysłanie, zatwierdzenie i uwagi",
+    Feature.PLANNING_PLANS: "Plan z miarą sprawiedliwości, księgą i werdyktami",
     Feature.PLANNING_FAIRNESS: "Ocena sprawiedliwości planu",
     Feature.PLANNING_LINTER: "Sprawdzanie planu (godziny, dystanse, budżet)",
     Feature.ACCOMMODATION: "Wymagania wobec noclegu",
@@ -182,6 +192,10 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.EXPENSES_CORE: "Wydatki: lista i dodawanie",
     Feature.EXPENSES_SETTLEMENT: "Rozliczenie wydatków",
     Feature.JOBS: "Zadania w tle (stan i anulowanie)",
+    Feature.PLACES: "Katalog miejsc",
+    Feature.PLACES_CATALOG: "Katalog miejsc i miast: ceny i godziny ze źródłem",
+    Feature.MCP: "Serwer MCP: własne dane w Claude, ChatGPT i innych klientach",
+    Feature.NOTIFICATIONS: "Powiadomienia: skrzynka, licznik i strumień na żywo",
 }
 
 

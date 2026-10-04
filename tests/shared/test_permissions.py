@@ -198,9 +198,17 @@ def test_requirement_without_access_is_403_naming_the_permission() -> None:
     assert caught.value.detail == "Missing permission trips.members:WRITE"
 
 
-def test_superadmin_skips_the_grants_query() -> None:
+def test_superadmin_skips_the_grants_query_but_not_the_block_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     admin = AuthenticatedUser(sub="auth0|root", roles=["admin"])
+    load = AsyncMock()
+    blocked = AsyncMock(return_value=False)
+    monkeypatch.setattr(permission_service, "load_access", load)
+    monkeypatch.setattr(permission_service, "is_blocked", blocked)
     assert asyncio.run(get_user_grants(admin, session=AsyncMock())) == []
+    load.assert_not_awaited()
+    blocked.assert_awaited_once()
 
 
 @pytest.fixture
@@ -287,6 +295,7 @@ def test_me_returns_identity_and_flattened_permissions(client: TestClient) -> No
             "trips.core": "WRITE",
             "trips.members": "WRITE",
             "trips.invitations": "WRITE",
+            "trips.vote_links": "WRITE",
         },
     }
 
@@ -328,6 +337,7 @@ def test_feature_tree_for_admins(client: TestClient) -> None:
         "trips.core",
         "trips.members",
         "trips.invitations",
+        "trips.vote_links",
     ]
     assert trips["description"] == "Wyjazdy"
 
