@@ -21,7 +21,17 @@ from tuttitrip.planning.linter.schemas import (
 )
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 
-CODES = ["closed_day", "opening_hours", "transfer", "budget", "unknown_place"]
+CODES = [
+    "closed_day",
+    "opening_hours",
+    "transfer",
+    "budget",
+    "unknown_place",
+    "distance",
+    "pace",
+    "rest_window",
+    "accessibility",
+]
 
 
 def verified(place_: PlaceRead) -> PlaceRead:
