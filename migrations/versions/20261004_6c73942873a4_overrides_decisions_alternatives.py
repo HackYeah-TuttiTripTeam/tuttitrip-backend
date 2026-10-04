@@ -1,7 +1,7 @@
 """Overrides decisions and plan alternatives.
 
 Revision ID: 6c73942873a4
-Revises: 6a471240ae34
+Revises: 8ea173f4861b
 Create Date: 2026-10-04 04:01:04.338916
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "6c73942873a4"
-down_revision: str | None = "6a471240ae34"
+down_revision: str | None = "8ea173f4861b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
