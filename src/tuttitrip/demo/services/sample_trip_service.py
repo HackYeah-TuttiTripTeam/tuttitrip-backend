@@ -100,6 +100,9 @@ async def create_sample_trip(
     if not settings.enabled or not await _has_catalog(session, settings):
         return None
     today = today or date.today()  # ruff: ignore[call-date-today]  # a calendar day, not an instant
+    # Same lock as the first trip list: a reset and a list never both create one.
+    await db.lock_sample_grant(session, sub)
+    await trip_service.delete_samples(session, sub)  # a reset replaces, never adds
     content = sample_trip(locale, settings.city_slug, today)
     trip_id = await demo_service.create_seed_trip(session, sub, content.trip, today)
     await trip_service.mark_sample(session, trip_id)
@@ -157,6 +160,10 @@ async def _in_transaction(
             await db.lock_sample_grant(session, sub)
             if await db.has_sample_grant(session, sub):
                 return None  # a parallel request was first
+            if await trip_service.has_sample(session, sub):
+                await db.add_sample_grant(session, sub)  # a reset was first
+                await session.commit()
+                return None
             return await create_sample_trip(session, sub, locale, today)
         finally:
             await session.close()
