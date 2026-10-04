@@ -21,6 +21,7 @@ from tuttitrip.planning.anyway.services import anyway_service
 from tuttitrip.planning.logic.hard_constraints import filter_places
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.plan_group import GroupPlan, plan_group
+from tuttitrip.planning.logic.solver import Solver
 from tuttitrip.planning.plans.logic.verdict import build_verdicts
 from tuttitrip.planning.plans.schemas import (
     AnywayEffects,
@@ -59,7 +60,13 @@ def outside(base: GroupPlan) -> list[UUID]:
 
 
 def iconic(place: UUID, v_p: float = 0.0) -> PlanVerdict:
-    return PlanVerdict(place_id=place, verdict=VerdictKind.ICONIC_NOT_YOURS, v_p=v_p)
+    return PlanVerdict(
+        place_id=place,
+        verdict=VerdictKind.ICONIC_NOT_YOURS,
+        v_p=v_p,
+        justification="x",
+        justification_source="template",
+    )
 
 
 def test_a_candidate_gets_a_suggestion_with_the_cost_of_adding_it(
@@ -129,9 +136,10 @@ def test_the_work_is_bounded_by_the_days(
         *,
         alpha: float,
         u_star: Mapping[UUID, float] | None,
+        solver: Solver,
     ) -> GroupPlan:
         runs.append(1)
-        return real(data, params, alpha=alpha, u_star=u_star)
+        return real(data, params, alpha=alpha, u_star=u_star, solver=solver)
 
     monkeypatch.setattr(module, "plan_group", counting)
     candidates = [iconic(p) for p in outside(base)]

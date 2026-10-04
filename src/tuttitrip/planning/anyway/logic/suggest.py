@@ -17,6 +17,7 @@ from uuid import UUID
 from tuttitrip.planning.anyway.logic.constants import CANDIDATES_PER_DAY, TEMPLATE
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.plan_group import GroupPlan, plan_group
+from tuttitrip.planning.logic.solver import Solver, solve
 from tuttitrip.planning.plans.schemas import (
     AnywayEffects,
     AnywaySuggestion,
@@ -82,6 +83,7 @@ def suggest(  # ruff: ignore[too-many-arguments] the plan, its input and the exc
     alpha: float = 1.0,
     rejected: Collection[tuple[int, UUID]] = (),
     params: AlgorithmParams = DEFAULT_PARAMS,
+    solver: Solver = solve,
 ) -> tuple[AnywaySuggestion, ...]:
     """At most one suggestion per day, with the cost of adding it.
 
@@ -92,6 +94,7 @@ def suggest(  # ruff: ignore[too-many-arguments] the plan, its input and the exc
         alpha: The fairness slider the plan was computed with.
         rejected: (day, place) pairs the host said no to.
         params: Algorithm parameters.
+        solver: The solver of the plan (the same one runs the plan with the place).
 
     Returns:
         The suggestions in day order; empty when there is no candidate.
@@ -114,7 +117,9 @@ def suggest(  # ruff: ignore[too-many-arguments] the plan, its input and the exc
         changed = data.model_copy(
             update={"must": data.must | {verdict.place_id}},
         )
-        with_place = plan_group(changed, params, alpha=alpha, u_star=reference)
+        with_place = plan_group(
+            changed, params, alpha=alpha, u_star=reference, solver=solver
+        )
         day = _day_of(with_place, verdict.place_id)
         if day is None or day in found or (day, verdict.place_id) in rejected:
             continue

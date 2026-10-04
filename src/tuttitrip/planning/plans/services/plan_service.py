@@ -347,7 +347,13 @@ def _compute(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     verdicts = build_verdicts(planning, chosen.plan.place_ids)
     upgrades = find_upgrades(planning, chosen, params, alpha=alpha)
     anyway = suggest(
-        planning, chosen, verdicts, alpha=alpha, rejected=rejected, params=params
+        planning,
+        chosen,
+        verdicts,
+        alpha=alpha,
+        rejected=rejected,
+        params=params,
+        solver=configured_solver().solver,
     )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
     alternative = None
