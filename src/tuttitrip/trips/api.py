@@ -30,6 +30,7 @@ from tuttitrip.trips.schemas import (
 )
 from tuttitrip.trips.services import member_service, trip_service
 from tuttitrip.trips.services.member_service import (
+    HostMustTransferError,
     MemberForbiddenError,
     MemberNotFoundError,
 )
@@ -43,6 +44,10 @@ router = APIRouter(prefix="/trips", tags=["trips"])
 
 TRIP_NOT_FOUND = "Trip not found"
 MEMBER_NOT_FOUND = "Member not found"
+HOST_MUST_TRANSFER = (
+    "The host cannot leave: hand the host role to another member first "
+    "(POST /trips/{trip_id}/members/{profile_id}/host)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +103,10 @@ async def list_trips(
     (`created_at` by default, `start_date`, `name`), `dir` (`desc` by default),
     and the filters `q`, `city`, `kind`, `start_from`, `start_to` and `role`
     (repeatable). Trips without `start_date` sort last in both directions.
+
+    `when=past` is the history of the groups the caller was in, `when=upcoming`
+    the trips still ahead (or without dates). `status=pending` finds the trips
+    the caller was added to and has not confirmed yet.
 
     Args:
         query: Paging, sort and filters.
@@ -271,3 +280,75 @@ async def remove_member(
         raise HTTPException(status.HTTP_404_NOT_FOUND, MEMBER_NOT_FOUND) from exc
     except MemberForbiddenError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+
+@router.post(
+    "/{trip_id}/members/{profile_id}/host",  # ruff: ignore[fast-api-unused-path-parameter]
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE)],
+)
+async def transfer_host(
+    profile_id: UUID, membership: TripHost, session: SessionDep
+) -> MemberRead:
+    """Hand the host role to another member; the caller becomes a co-host.
+
+    Needed before the host can leave the trip.
+
+    Args:
+        profile_id: Profile of the new host.
+        membership: The caller's membership (host).
+        session: Database session.
+
+    Returns:
+        The new host.
+    """
+    try:
+        return await member_service.transfer_host(session, membership, profile_id)
+    except MemberNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, MEMBER_NOT_FOUND) from exc
+    except MemberForbiddenError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+
+
+@router.post(
+    "/{trip_id}/membership/confirm",  # ruff: ignore[fast-api-unused-path-parameter]
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE)],
+)
+async def confirm_membership(membership: TripMember, session: SessionDep) -> MemberRead:
+    """Confirm the caller's participation; the host then sees `confirmed`.
+
+    Idempotent. Any member may confirm, whatever their role.
+
+    Args:
+        membership: The caller's membership (any role).
+        session: Database session.
+
+    Returns:
+        The caller as a member.
+    """
+    try:
+        return await member_service.confirm(session, membership)
+    except MemberNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, MEMBER_NOT_FOUND) from exc
+
+
+@router.post(
+    "/{trip_id}/membership/leave",  # ruff: ignore[fast-api-unused-path-parameter]
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={409: {"description": "The host cannot leave before handing over."}},
+    dependencies=[requires(Feature.TRIPS_MEMBERS, Access.WRITE)],
+)
+async def leave_trip(membership: TripMember, session: SessionDep) -> None:
+    """Leave the trip; the caller's profile stays without an account.
+
+    The profile, expenses and balance stay in the trip and the profile can be
+    claimed again from an invitation. The host answers 409 until they hand over
+    the host role.
+
+    Args:
+        membership: The caller's membership (any role).
+        session: Database session.
+    """
+    try:
+        await member_service.leave(session, membership)
+    except HostMustTransferError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, HOST_MUST_TRANSFER) from exc

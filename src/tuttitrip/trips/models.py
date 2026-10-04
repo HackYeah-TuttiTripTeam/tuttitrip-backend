@@ -18,7 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from tuttitrip.shared.db.base import Base
-from tuttitrip.trips.schemas import TripRole
+from tuttitrip.trips.schemas import MemberStatus, TripRole
 
 
 class Trip(Base):
@@ -66,6 +66,10 @@ class TripMember(Base):
             "role IN ({})".format(", ".join(f"'{r.value}'" for r in TripRole)),
             name="role",
         ),
+        CheckConstraint(
+            "status IN ({})".format(", ".join(f"'{s.value}'" for s in MemberStatus)),
+            name="status",
+        ),
     )
 
     trip_id: Mapped[uuid.UUID] = mapped_column(
@@ -80,5 +84,15 @@ class TripMember(Base):
             length=10,
             values_callable=lambda roles: [r.value for r in roles],
         )
+    )
+    status: Mapped[MemberStatus] = mapped_column(
+        Enum(
+            MemberStatus,
+            name="member_status",
+            native_enum=False,
+            length=10,
+            values_callable=lambda statuses: [s.value for s in statuses],
+        ),
+        server_default=MemberStatus.PENDING.value,
     )
     added_at: Mapped[datetime] = mapped_column(server_default=func.now())

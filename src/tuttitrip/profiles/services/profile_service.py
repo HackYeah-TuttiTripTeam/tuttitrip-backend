@@ -393,12 +393,12 @@ async def unlink_account(
 ) -> None:
     """Detach the account from a profile; the person stays as a profile without one.
 
-    Used when a member leaves the trip: the profile keeps counting in the plan.
-    Flushes, the caller commits.
+    Used when a member is removed or leaves: the profile keeps counting in the
+    plan and can be claimed again. Flushes, the caller commits.
 
     Args:
         session: Open session.
-        membership: The caller's checked (co-host) membership.
+        membership: The caller's checked membership.
         profile_id: Profile to detach.
     """
     profile = await _get(session, membership.trip_id, profile_id)

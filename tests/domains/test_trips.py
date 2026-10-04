@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.dialects import postgresql
 
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
@@ -16,12 +17,16 @@ from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.pagination.schemas import Page, PageParams, SortDir
+from tuttitrip.trips import db as trips_db
 from tuttitrip.trips.models import Trip
 from tuttitrip.trips.schemas import (
+    MemberStatus,
+    TripFilter,
     TripMembership,
     TripRead,
     TripRole,
     TripSort,
+    TripWhen,
 )
 from tuttitrip.trips.services import trip_service
 from tuttitrip.trips.services.trip_service import TripNotFoundError, TripRoleError
@@ -153,9 +158,19 @@ def test_outing_patch_is_read_back_with_its_day_window(
 
 
 def test_multi_day_trip_is_a_trip_and_undated_one_too() -> None:
-    assert TripRead.model_validate({**vars(_trip()), "my_role": "host"}).kind == "trip"
+    assert (
+        TripRead.model_validate(
+            {**vars(_trip()), "my_role": "host", "my_status": "confirmed"}
+        ).kind
+        == "trip"
+    )
     undated = _trip(start_date=None, end_date=None)
-    assert TripRead.model_validate({**vars(undated), "my_role": "host"}).kind == "trip"
+    assert (
+        TripRead.model_validate(
+            {**vars(undated), "my_role": "host", "my_status": "confirmed"}
+        ).kind
+        == "trip"
+    )
 
 
 def test_budget_range_and_flex_are_stored(
@@ -485,3 +500,52 @@ def test_list_rejects_bad_params(
     client, listing = list_client
     assert client.get(path("list_trips"), params=params).status_code == 422  # ty: ignore[invalid-argument-type]
     listing.assert_not_awaited()
+
+
+def _filters_sql(**params: object) -> str:
+    stmt = trips_db.apply_filters(
+        trips_db.scoped("auth0|x"), TripFilter.model_validate(params)
+    )
+    return str(stmt.compile(dialect=postgresql.dialect()))
+
+
+def test_past_means_ended_before_today_and_upcoming_includes_undated() -> None:
+    past = _filters_sql(when="past")
+    assert "trips.end_date < CURRENT_DATE" in past
+    upcoming = _filters_sql(when="upcoming")
+    assert "trips.end_date IS NULL OR trips.end_date >= CURRENT_DATE" in upcoming
+    assert "CURRENT_DATE" not in _filters_sql()
+
+
+def test_status_filter_uses_the_callers_membership_row() -> None:
+    assert "trip_members.status = %(status_1)s" in _filters_sql(status="pending")
+
+
+@pytest.mark.parametrize("params", [{"when": "never"}, {"status": "maybe"}])
+def test_list_rejects_bad_when_and_status(
+    list_client: tuple[TestClient, AsyncMock], params: dict[str, str]
+) -> None:
+    client, listing = list_client
+    assert client.get(path("list_trips"), params=params).status_code == 422
+    listing.assert_not_awaited()
+
+
+def test_list_reads_when_and_status(
+    list_client: tuple[TestClient, AsyncMock],
+) -> None:
+    client, listing = list_client
+    response = client.get(
+        path("list_trips"), params={"when": "past", "status": "pending"}
+    )
+    assert response.status_code == 200
+    query = listing.await_args_list[0].args[2]
+    assert (query.when, query.status) == (TripWhen.PAST, MemberStatus.PENDING)
+
+
+def test_membership_routes_are_documented_with_the_409() -> None:
+    paths = create_app().openapi()["paths"]
+    leave = paths["/api/v1/trips/{trip_id}/membership/leave"]["post"]
+    assert leave["responses"]["409"]["description"].startswith("The host cannot")
+    assert leave["x-required-permission"] == "trips.members:WRITE"
+    confirm = paths["/api/v1/trips/{trip_id}/membership/confirm"]["post"]
+    assert confirm["x-required-permission"] == "trips.members:WRITE"
