@@ -17,11 +17,7 @@ from tuttitrip.planning.fairness.logic.violations import effective_floor
 from tuttitrip.planning.logic.domains import RequirementOutcome
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.reference import relative_satisfaction, solo_utility
-from tuttitrip.planning.logic.solver import (
-    DEFAULT_MAX_EVALUATIONS,
-    PlanResult,
-    solve,
-)
+from tuttitrip.planning.logic.solver import PlanResult, solve
 from tuttitrip.planning.schemas import DomainScores, LodgingStay, PlanningInput
 from tuttitrip.profiles.preferences.schemas import ImportanceDomain
 
@@ -76,7 +72,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
     alpha: float = 1.0,
     lodging: LodgingStay | None = None,
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
-    max_evaluations: int = DEFAULT_MAX_EVALUATIONS,
+    max_evaluations: int | None = None,
 ) -> GroupPlan:
     """Solo runs, floors, the group plan and the fairness measures.
 
@@ -86,7 +82,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         alpha: Fairness slider in 0 to 3.
         lodging: The lodging base, given exactly when the trip has nights.
         lodging_outcomes: The trip's lodging requirements checked against it.
-        max_evaluations: Work limit of every run (solo and group).
+        max_evaluations: Work limit of every run (solo and group); default scales with the instance.
 
     Returns:
         The plan, a ledger row per person (id order), ``min r`` and Jain's index.
