@@ -130,7 +130,8 @@ def evaluate_evidence(
         min_confidence: Threshold of a decisive assessment.
 
     Returns:
-        The check; ``met`` and ``unmet`` carry the most confident quote.
+        The check; ``met``, ``unmet`` and ``conflicting`` carry the most
+        confident quote (for a conflict, one side of it).
     """
     relevant = [q for q in quotes if q.verdict != "not_applicable"]
     judged = [q for q in relevant if q.verdict is not None]
@@ -139,7 +140,9 @@ def evaluate_evidence(
     ]
     statuses = {_DECISIVE[q.verdict] for q in confident if q.verdict in _DECISIVE}
     if len(statuses) > 1:
-        return _unconfirmed(requirement, UnconfirmedReason.CONFLICTING)
+        return _unconfirmed(
+            requirement, UnconfirmedReason.CONFLICTING, _best(confident)
+        )
     if statuses:
         best = _best(confident)
         return _check(

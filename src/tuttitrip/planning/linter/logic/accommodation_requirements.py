@@ -1,5 +1,8 @@
 """Rule ``accommodation_requirements``: every night has an offer meeting the hard ones.
 
+The check is deliberately per night: E2 assumes one lodging base for the whole
+trip (docs/algorytm.md, section 9), but a host may paste different offers for
+different nights, so every night is judged on its own.
 For each night the best offer covering it is taken (fewest hard requirements
 ``unmet``, then fewest ``unconfirmed``): one bed per night, so requirements are
 never mixed across offers. A hard ``unmet`` is a violation; a hard
@@ -14,6 +17,7 @@ from tuttitrip.accommodation.schemas import (
     RequirementCheck,
     RequirementStatus,
     UnconfirmedReason,
+    requirement_label,
 )
 from tuttitrip.planning.linter.logic.rule import Rule
 from tuttitrip.planning.linter.schemas import (
@@ -61,15 +65,16 @@ def _rank(checks: Sequence[RequirementCheck]) -> tuple[int, int]:
 
 
 def _finding(night: date, check: RequirementCheck) -> Finding | None:
+    name = requirement_label(check.feature)
     if check.status is RequirementStatus.UNMET:
         quote = f': "{check.quote}"' if check.quote else ""
-        message = f"Lodging does not meet the hard requirement {check.feature}{quote}"
+        message = f"Lodging does not meet the hard requirement {name}{quote}"
         return Finding(
             rule=CODE, severity=Severity.VIOLATION, message=message, day=night
         )
     if check.status is RequirementStatus.UNCONFIRMED:
         reason = REASONS[check.reason or UnconfirmedReason.NO_MENTION]
-        message = f"Hard requirement {check.feature} is unconfirmed: {reason}"
+        message = f"Hard requirement {name} is unconfirmed: {reason}"
         return Finding(rule=CODE, severity=Severity.WARNING, message=message, day=night)
     return None
 

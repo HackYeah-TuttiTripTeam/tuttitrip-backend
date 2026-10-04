@@ -107,5 +107,7 @@ class AccommodationOffer(Base):
     requested_keys: Mapped[list[str]] = mapped_column(ARRAY(String(64)))
     job_id: Mapped[str | None] = mapped_column(String(300))
     evidence: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    job_failed: Mapped[bool] = mapped_column(server_default=text("false"))
+    error_code: Mapped[str | None] = mapped_column(String(100))
     created_by: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

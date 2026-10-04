@@ -22,6 +22,7 @@ from tuttitrip.accommodation.schemas import (
     OfferRead,
     Requirement,
     RequirementsRead,
+    requirement_label,
 )
 from tuttitrip.accommodation.services import requirements_service
 from tuttitrip.planning.linter.schemas import DocumentKind
@@ -31,6 +32,7 @@ from tuttitrip.shared.jobs.contracts import (
     ExtractOfferEvidenceInput,
     ExtractOfferEvidenceOutput,
     RequirementEvidence,
+    RequirementLabel,
     Workflow,
     queue_for,
 )
@@ -118,6 +120,9 @@ async def create_offer(
             trip_id=membership.trip_id,
             document_id=data.document_id,
             requirement_keys=keys,
+            requirements=[
+                RequirementLabel(key=key, label=requirement_label(key)) for key in keys
+            ],
             provider=data.provider,
         )
         job_id = await queue.enqueue(
@@ -139,12 +144,13 @@ async def create_offer(
         requested_keys=keys,
         job_id=job_id,
         evidence=None,
+        job_failed=False,
+        error_code=None,
         created_by=membership.sub,
     )
     await db.insert_offer(session, row)
     await session.commit()
-    state = OfferCheckState.DONE if job_id is None else OfferCheckState.PENDING
-    return _read(row, current, state)
+    return _read(row, current, pending=job_id is not None)
 
 
 async def get_offer(
@@ -171,14 +177,19 @@ async def get_offer(
     row = await db.select_offer(session, membership.trip_id, offer_id)
     if row is None:
         raise OfferNotFoundError(str(offer_id))
-    state, error_code = OfferCheckState.DONE, None
-    if row.job_id is not None and row.evidence is None:
+    pending = False
+    if row.job_id is not None and row.evidence is None and not row.job_failed:
         state, error_code, evidence = await _job_result(queue, row.job_id)
-        if evidence is not None:
-            row.evidence = [item.model_dump(mode="json") for item in evidence]
+        if state is OfferCheckState.PENDING:
+            pending = True
+        else:
+            if evidence is not None:
+                row.evidence = [item.model_dump(mode="json") for item in evidence]
+            else:
+                row.job_failed, row.error_code = True, error_code
             await session.commit()
     current = await requirements_service.get_requirements(session, membership.trip_id)
-    return _read(row, current, state, error_code)
+    return _read(row, current, pending=pending)
 
 
 async def _job_result(
@@ -202,9 +213,15 @@ async def _job_result(
 def _read(
     row: AccommodationOffer,
     current: RequirementsRead,
-    state: OfferCheckState,
-    error_code: str | None = None,
+    *,
+    pending: bool,
 ) -> OfferRead:
+    if pending:
+        state = OfferCheckState.PENDING
+    elif row.job_failed:
+        state = OfferCheckState.FAILED
+    else:
+        state = OfferCheckState.DONE
     evidence: dict[str, list[EvidenceQuote]] | None = None
     if row.evidence is not None:
         items = [RequirementEvidence.model_validate(e) for e in row.evidence]
@@ -230,7 +247,7 @@ def _read(
         platform=row.platform,
         state=state,
         job_id=row.job_id,
-        error_code=error_code,
+        error_code=row.error_code,
         requirements_version=row.requirements_version,
         stale=row.requirements_version != current.version,
         checks=checks,

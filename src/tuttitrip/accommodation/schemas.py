@@ -12,6 +12,40 @@ from tuttitrip.accommodation.logic.search_links import PriceBasis
 from tuttitrip.shared.jobs.contracts import ProviderName
 from tuttitrip.shared.pagination.schemas import ListFilters, PageParams, SortDir
 
+LABELS: dict[str, str] = {
+    "pool": "pool",
+    "kitchen": "kitchen",
+    "parking": "parking",
+    "family_room": "family room",
+    "wifi": "Wi-Fi",
+    "air_conditioning": "air conditioning",
+    "breakfast": "breakfast",
+    "pets_allowed": "pets allowed",
+    "elevator": "elevator",
+    "wheelchair_accessible": "wheelchair access",
+    "washing_machine": "washing machine",
+    "balcony": "balcony",
+    "crib": "crib",
+    "playground": "playground",
+    "airbnb": "Airbnb",
+    "booking": "Booking.com",
+    "attractions": "distance to attractions",
+}
+"""Readable English name of every requirement key, for plan-check messages and
+for the worker's model (``RequirementLabel``); the client translates keys itself."""
+
+
+def requirement_label(key: str) -> str:
+    """Readable name of a requirement key.
+
+    Args:
+        key: Requirement key (amenity, platform or distance).
+
+    Returns:
+        The label, or the key with spaces for one outside the dictionary.
+    """
+    return LABELS.get(key, key.replace("_", " "))
+
 
 class RequirementStatus(StrEnum):
     """Whether an offer satisfies a requirement."""

@@ -1,7 +1,7 @@
 """Accommodation offers.
 
 Revision ID: 0f8ab2d0e440
-Revises: 9c1f5a7d3b20
+Revises: 28a40fb2f40e
 Create Date: 2026-10-04 00:59:35.183366
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0f8ab2d0e440"
-down_revision: str | None = "9c1f5a7d3b20"
+down_revision: str | None = "28a40fb2f40e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -34,6 +34,10 @@ def upgrade() -> None:
         ),
         sa.Column("job_id", sa.String(length=300), nullable=True),
         sa.Column("evidence", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "job_failed", sa.Boolean(), server_default=sa.text("false"), nullable=False
+        ),
+        sa.Column("error_code", sa.String(length=100), nullable=True),
         sa.Column("created_by", sa.String(length=255), nullable=False),
         sa.Column(
             "created_at",

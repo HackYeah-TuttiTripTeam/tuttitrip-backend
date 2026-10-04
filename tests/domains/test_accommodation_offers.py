@@ -12,16 +12,18 @@ from tests.shared.fakes import EVERYTHING, FakeJobQueue, authorize
 from tests.shared.paths import path
 from tuttitrip.accommodation import db
 from tuttitrip.accommodation.logic.contract import (
+    MIN_CONFIDENCE,
     RHO_UNC,
     OfferFacts,
     check_offer,
     evaluate_evidence,
     lodging_score,
 )
-from tuttitrip.accommodation.logic.keys import Platform, RequirementKind
+from tuttitrip.accommodation.logic.keys import KEYS, Platform, RequirementKind
 from tuttitrip.accommodation.logic.platforms import link_host, platform_of
 from tuttitrip.accommodation.models import AccommodationOffer
 from tuttitrip.accommodation.schemas import (
+    LABELS,
     OfferFeatures,
     Requirement,
     RequirementCheck,
@@ -29,6 +31,7 @@ from tuttitrip.accommodation.schemas import (
     RequirementsRead,
     RequirementStatus,
     UnconfirmedReason,
+    requirement_label,
 )
 from tuttitrip.accommodation.services import offer_service, requirements_service
 from tuttitrip.main import create_app
@@ -43,6 +46,8 @@ from tuttitrip.planning.linter.schemas import (
     Severity,
 )
 from tuttitrip.planning.linter.services import document_service
+from tuttitrip.planning.logic import domains
+from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.shared.jobs.api import get_job_queue
@@ -50,7 +55,10 @@ from tuttitrip.shared.jobs.contracts import (
     EvidenceQuote,
     ExtractOfferEvidenceInput,
     Queue,
+    RequirementLabel,
 )
+from tuttitrip.shared.jobs.services.job_queue import JobQueueUnavailableError
+from tuttitrip.shared.jobs.services.worker_liveness import WorkerUnavailableError
 from tuttitrip.shared.permissions.logic.resolution import Grant
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.schemas import TripMembership, TripRead, TripRole
@@ -112,6 +120,22 @@ def test_everything_else_is_unconfirmed(
     check = evaluate_evidence(POOL, quotes)
     assert check.status is RequirementStatus.UNCONFIRMED
     assert check.reason is reason
+
+
+def test_conflict_keeps_a_quote_to_show() -> None:
+    quotes = [quote(HAS_POOL, "present", 0.6), quote(NO_POOL, "absent", 0.9)]
+    check = evaluate_evidence(POOL, quotes)
+    assert check.reason is UnconfirmedReason.CONFLICTING
+    assert check.quote == NO_POOL
+    assert check.confidence is not None
+    assert check.confidence >= MIN_CONFIDENCE
+
+
+def test_every_requirement_key_has_a_label() -> None:
+    keys = {member.value for enum in KEYS.values() for member in enum}
+    assert set(LABELS) == keys
+    assert requirement_label("family_room") == "family room"
+    assert requirement_label("sauna_room") == "sauna room"
 
 
 def test_threshold_is_a_parameter() -> None:
@@ -203,6 +227,33 @@ def test_lodging_score_is_product_of_hard_times_mean_of_soft() -> None:
     assert lodging_score([_checked(RequirementStatus.UNMET, hard=True)]) == 0
 
 
+def test_unconfirmed_points_match_the_planning_parameter() -> None:
+    assert DEFAULT_PARAMS.uncertain_requirement == RHO_UNC
+
+
+@pytest.mark.parametrize(
+    "statuses",
+    [
+        [],
+        [("met", True), ("unconfirmed", True), ("met", False), ("unmet", False)],
+        [("unconfirmed", True), ("unconfirmed", False)],
+        [("unmet", True), ("met", False)],
+        [("met", False), ("unconfirmed", False), ("unconfirmed", False)],
+    ],
+)
+def test_offer_score_equals_the_planning_lodging_domain(
+    statuses: list[tuple[str, bool]],
+) -> None:
+    checks = [
+        _checked(RequirementStatus(status), hard=hard) for status, hard in statuses
+    ]
+    outcomes = [
+        domains.RequirementOutcome(hard=hard, status=RequirementStatus(status))
+        for status, hard in statuses
+    ]
+    assert 100 * lodging_score(checks) == pytest.approx(domains.lodging_score(outcomes))
+
+
 # --- lint rule ------------------------------------------------------------------
 
 N1, N2 = date(2026, 7, 1), date(2026, 7, 2)
@@ -228,6 +279,17 @@ def test_night_without_offer_is_a_warning_and_unmet_is_a_violation() -> None:
     ]
     assert NO_POOL in findings[0].message
     assert findings[1].message.endswith("no offer for this night")
+
+
+def test_messages_use_labels_not_keys() -> None:
+    family = RequirementItem(kind=RequirementKind.AMENITY, key="family_room", hard=True)
+    lodging = LintLodging(nights=[N1], requirements=[family], offers=[])
+    context = LintContext(
+        places=[], timezone="Europe/Warsaw", budget=0, lodging=lodging
+    )
+    [finding] = accommodation_requirements.check(LintPlan(days=[]), context)
+    assert "family room" in finding.message
+    assert "family_room" not in finding.message
 
 
 def test_every_reason_has_a_readable_text() -> None:
@@ -395,6 +457,7 @@ def test_post_enqueues_only_amenities_and_decides_the_platform_now(env: Env) -> 
     [payload] = env.queue.payloads.values()
     assert isinstance(payload, ExtractOfferEvidenceInput)
     assert payload.requirement_keys == ["pool"]
+    assert payload.requirements == [RequirementLabel(key="pool", label="pool")]
     assert env.queue.queues[body["job_id"]] is Queue.OPENROUTER
     env.worker.assert_awaited_once()
     assert env.session.commits == 1
@@ -470,11 +533,34 @@ def test_failed_job_makes_quoted_requirements_unconfirmed(env: Env) -> None:
         env.queue.jobs[job.workflow_id] = job.model_copy(
             update={"status": "ERROR", "error_code": "document_not_found"}
         )
-        body = client.get(
-            path("get_offer", trip_id=TRIP, offer_id=created["id"])
-        ).json()
+        url = path("get_offer", trip_id=TRIP, offer_id=created["id"])
+        body = client.get(url).json()
+        row = env.offers.rows[uuid.UUID(created["id"])]
+        assert (row.job_failed, row.error_code) == (True, "document_not_found")
+        env.queue.jobs.clear()  # settled: the next read does not poll the queue
+        again = client.get(url).json()
     assert (body["state"], body["error_code"]) == ("failed", "document_not_found")
+    assert again == body
     assert _status(body, "pool") == ("unconfirmed", "check_failed")
+
+
+@pytest.mark.parametrize("failure", ["worker", "queue"])
+def test_unavailable_worker_or_queue_is_503_and_stores_nothing(
+    env: Env, failure: str
+) -> None:
+    if failure == "worker":
+        env.worker.side_effect = WorkerUnavailableError("No worker")
+    else:
+        env.monkeypatch.setattr(
+            env.queue,
+            "enqueue",
+            AsyncMock(side_effect=JobQueueUnavailableError("down")),
+        )
+    with env.client() as client:
+        response = client.post(path("create_offer", trip_id=TRIP), json=BODY)
+    assert response.status_code == 503
+    assert env.offers.rows == {}
+    assert env.session.commits == 0
 
 
 @pytest.mark.parametrize(
