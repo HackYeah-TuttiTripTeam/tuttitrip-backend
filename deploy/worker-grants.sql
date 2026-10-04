@@ -26,7 +26,9 @@ GRANT UPDATE
     ON public.place_prices
     TO tuttitrip_worker;
 GRANT UPDATE (name, category, tags, lat, lon, wheelchair, indoor, cuisine,
-              diet_tags, amenities, opening_hours)
+              diet_tags, amenities, opening_hours, hours_source_url,
+              hours_checked_at, typical_visit_min, description, child_friendly,
+              enriched_at)
     ON public.places
     TO tuttitrip_worker;
 

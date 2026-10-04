@@ -325,6 +325,9 @@ def _post_client(
     monkeypatch.setattr(trip_service.db, "insert_trip", insert)
     monkeypatch.setattr(profile_service, "create_host_profile", host)
     monkeypatch.setattr(
+        trip_service.place_service, "find_city_slug", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
         parameters_service, "default_alpha", AsyncMock(return_value=DEFAULT_ALPHA)
     )
     app = create_app()

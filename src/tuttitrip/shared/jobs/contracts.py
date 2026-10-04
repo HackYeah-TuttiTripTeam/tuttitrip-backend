@@ -326,13 +326,16 @@ class FetchPlaceCandidatesOutput(ContractPayload):
     """Output of ``fetch_place_candidates`` (rows go to the places catalog).
 
     ``refreshed`` is ``False`` when the city already had candidates and nothing
-    was fetched (``stored`` is then 0).
+    was fetched (``stored`` is then 0). ``enriched`` counts the places this run
+    researched on the web (hours, prices and so on, always unverified); 0 when
+    enrichment is off, spent its cost limit at once, or everything is cached.
     """
 
     city_slug: str = Field(pattern=SLUG_PATTERN)
     source: Literal["osm"] = "osm"
     refreshed: bool
     stored: int = Field(ge=0)
+    enriched: int = Field(default=0, ge=0)
 
 
 # --- write_justifications ------------------------------------------------------------
