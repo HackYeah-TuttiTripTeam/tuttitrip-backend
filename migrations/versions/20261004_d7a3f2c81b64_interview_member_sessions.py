@@ -6,7 +6,7 @@ interests; the trip's interview (host and co-hosts) keeps
 profile for a member.
 
 Revision ID: d7a3f2c81b64
-Revises: c4d9e1f07a52
+Revises: b7c3e1f09a42
 Create Date: 2026-10-04 15:10:00.000000
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "d7a3f2c81b64"
-down_revision: str | None = "c4d9e1f07a52"
+down_revision: str | None = "b7c3e1f09a42"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
