@@ -1,7 +1,7 @@
 """Account blocks and city fetches.
 
 Revision ID: 477ae4f2a2d8
-Revises: 65807aa11765
+Revises: b28a37ba42ff
 Create Date: 2026-10-04 02:55:32.691298
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "477ae4f2a2d8"
-down_revision: str | None = "65807aa11765"
+down_revision: str | None = "b28a37ba42ff"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
