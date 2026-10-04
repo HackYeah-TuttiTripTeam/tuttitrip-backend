@@ -46,7 +46,10 @@ class TripInvalidError(Exception):
 def _read(trip: Trip, role: TripRole, status: MemberStatus) -> TripRead:
     details = TripDetails.model_validate(trip, from_attributes=True)
     return TripRead(
-        **details.model_dump(exclude={"kind"}), my_role=role, my_status=status
+        **details.model_dump(exclude={"kind"}),
+        my_role=role,
+        my_status=status,
+        is_sample=bool(trip.is_sample),  # None on a Trip not flushed yet
     )
 
 
@@ -69,6 +72,16 @@ async def create_trip(
     await profile_service.create_host_profile(session, trip.id, owner_sub)
     await session.commit()
     return _read(trip, TripRole.HOST, MemberStatus.CONFIRMED)
+
+
+async def mark_sample(session: AsyncSession, trip_id: UUID) -> None:
+    """Flag the trip as the sample trip, without committing.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: The trip just created for the sample.
+    """
+    await db.mark_sample(session, trip_id)
 
 
 async def list_trips(

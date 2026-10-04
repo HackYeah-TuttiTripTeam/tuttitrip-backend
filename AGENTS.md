@@ -593,6 +593,23 @@ adresu i wysyła token w ciele `POST /api/v1/auth/demo` (`public()`, `demo_login
   zapisuje do obu plików env (API i workera) jako `sha256("<sekret>:<env>")`, osobny dla każdego środowiska; wpis w `app.env` ma pierwszeństwo. Sekret ma co najmniej 24 znaki (walidator). Działający worker czyta env przy tworzeniu kontenera, więc po pierwszym wdrożeniu backendu trzeba go odtworzyć.
 - Wszyscy jurorzy dzielą jedno konto: zmiany jednego widzą inni do następnego resetu.
 
+### Wyjazd przykładowy (`demo/services/sample_trip_service.py`)
+
+- Każde konto dostaje raz wyjazd „Przykład: Warszawa z rodziną” (`is_sample` w `TripRead`):
+  lazy, przy pierwszym `GET /trips` (`ensure_sample_trip`), w jednej transakcji pod blokadą
+  per konto. Ma miasto z katalogu, daty (pierwszy piątek co najmniej 14 dni naprzód, więc
+  ten sam `plan_hash` dla kopii z jednego tygodnia), cztery osoby z preferencjami, oceny
+  miejsc, plan z solvera (bez LLM), trzy wydatki z rozliczeniem i powiadomienie. Treść PL/EN
+  wg `Accept-Language`.
+- Znacznik `sample_trip_grants` (jedna migracja) przeżywa usunięcie wyjazdu, więc skasowany
+  przykład nie wraca; rejestr `erasure` kasuje znacznik razem z kontem (wyjazd znika razem z
+  hostem).
+- Błąd kopiowania nie psuje listy (log, brak znacznika, kolejna lista próbuje znowu). Bez
+  miejsc miasta w katalogu nikt go nie dostaje. `TUTTITRIP_SAMPLE_TRIP__ENABLED=false`
+  wyłącza go, `TUTTITRIP_SAMPLE_TRIP__CITY_SLUG` zmienia miasto.
+- Reset konta demo dodaje ten sam wyjazd (najstarszy, żeby wyjazd „Warszawa z rodziną” demo
+  został na górze listy).
+
 ## Design system
 
 Skill `tuttitrip-design-system` (`.claude/skills/tuttitrip-design-system`) jest wspólny dla wszystkich
