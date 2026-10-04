@@ -1,7 +1,7 @@
 """Web research columns of places: description, child_friendly, enriched_at.
 
 Revision ID: 7c2e9b41d0a3
-Revises: 45f1174e4fc6
+Revises: ab1dd832af00
 Create Date: 2026-10-04 08:30:00.000000
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "7c2e9b41d0a3"
-down_revision: str | None = "45f1174e4fc6"
+down_revision: str | None = "ab1dd832af00"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
