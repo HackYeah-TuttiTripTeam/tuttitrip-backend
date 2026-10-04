@@ -201,6 +201,7 @@ async def preview(
         destination=found.destination,
         already_member=role is not None,
         claimable_profiles=claimable,
+        named_profile_id=named,
     )
 
 

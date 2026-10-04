@@ -365,6 +365,7 @@ def test_preview_shows_the_trip(guest: TestClient, world: World) -> None:
         "destination": "PL",
         "already_member": False,
         "claimable_profiles": [],
+        "named_profile_id": None,
     }
     assert response.headers["cache-control"] == "no-store"
     assert GUEST.sub not in world.roles
@@ -587,6 +588,19 @@ def test_a_named_invitation_hands_over_its_profile_without_a_choice(
     body = guest.post(path(ACCEPT), json=BODY).json()
     assert (body["profile_id"], body["profile_claimed"]) == (str(granny.id), True)
     assert granny.user_sub == GUEST.sub
+
+
+def test_preview_says_which_profile_a_named_invitation_is_for(
+    guest: TestClient, world: World
+) -> None:
+    granny = world.person("Babcia")
+    world.invite(profile_id=granny.id)
+    body = guest.post(path("preview_invitation"), json=BODY).json()
+    assert body["named_profile_id"] == str(granny.id)
+    granny.user_sub = "auth0|babcia"  # taken meanwhile: still named, nothing to claim
+    body = guest.post(path("preview_invitation"), json=BODY).json()
+    assert body["named_profile_id"] == str(granny.id)
+    assert body["claimable_profiles"] == []
 
 
 def test_a_named_invitation_refuses_a_different_profile(

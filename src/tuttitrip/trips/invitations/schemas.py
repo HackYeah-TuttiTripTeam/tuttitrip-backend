@@ -135,6 +135,14 @@ class InvitationPreview(BaseModel):
             "Empty when you are on the trip already."
         )
     )
+    named_profile_id: UUID | None = Field(
+        description=(
+            "The profile this invitation is made for, or null for an open "
+            "invitation. Set also when that profile is no longer free "
+            "(`claimable_profiles` is then empty) and when you are on the "
+            "trip already."
+        )
+    )
 
 
 class JoinResult(BaseModel):
