@@ -183,6 +183,34 @@ def is_open_on(place: PlaceRead, day: date, timezone: tzinfo) -> bool:
     return bool(_spans_on(hours, window))
 
 
+def fits_opening_hours(
+    place: PlaceRead, day: date, start: time, minutes: int, timezone: tzinfo
+) -> bool:
+    """Tell whether a visit lies inside one opening interval of its day.
+
+    The linter uses it (E0: opening hours), with the same intervals the
+    schedule builds, so the plan and the linter agree.
+
+    Args:
+        place: The place.
+        day: The local date of the arrival.
+        start: Local arrival time.
+        minutes: Length of the visit.
+        timezone: Zone of the city.
+
+    Returns:
+        Whether ``[start, start + minutes]`` fits inside an interval; False on
+        a closed day. Unknown hours fit anywhere (True), like in the schedule.
+    """
+    hours = place.hours.opening_hours
+    if hours is None:
+        return True
+    begin = _instant(day, start, timezone)
+    end = begin + timedelta(minutes=minutes)
+    window = DayWindow(day, timezone, time.min, time.max)
+    return any(s.start <= begin and end <= s.end for s in _spans_on(hours, window))
+
+
 def _nap_spans(people: Sequence[Person], window: DayWindow) -> list[_Span]:
     # Merged nap intervals of everybody, clipped to the day window.
     start, end = _day_start(window), _day_end(window)

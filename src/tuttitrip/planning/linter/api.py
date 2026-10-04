@@ -22,7 +22,7 @@ def check(request: LintRequest) -> LintReport:
     """Lint a plan.
 
     Args:
-        request: Plan and budget.
+        request: Plan and context.
 
     Returns:
         All violations.
