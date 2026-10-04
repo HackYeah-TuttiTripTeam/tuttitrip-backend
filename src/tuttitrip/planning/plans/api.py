@@ -14,6 +14,7 @@ from tuttitrip.planning.plans.schemas import (
     NotApprovedError,
     PlanCatalogMissing,
     PlanCreate,
+    PlanMissingInputs,
     PlanProgressRead,
     PlanRead,
     ReplanRead,
@@ -22,6 +23,7 @@ from tuttitrip.planning.plans.schemas import (
 from tuttitrip.planning.plans.services import plan_service, replan_service
 from tuttitrip.planning.plans.services.plan_service import (
     CatalogMissingError,
+    MissingInputsError,
     PlanInputError,
     PlanNotApprovedError,
     PlanNotFoundError,
@@ -92,7 +94,15 @@ def plan_examples() -> dict[str, dict[str, object]]:
             "description": "The trip's city has no places (`detail.code` is "
             "`catalog_missing`, `detail.job_id` the candidate fetch).",
         },
-        422: {"description": "The trip lacks dates, a city or people."},
+        422: {
+            "model": PlanMissingInputs,
+            "description": (
+                "The trip lacks a destination, dates or people: `detail.code` is "
+                "`plan.missing_inputs` and `detail.missing` lists every missing "
+                "field with the interview card that asks for it. A city outside "
+                "the catalog is not missing (see 409)."
+            ),
+        },
     },
     dependencies=[requires(Feature.PLANNING_PLANS, Access.WRITE)],
 )
@@ -134,6 +144,11 @@ async def create_plan(
         )
         raise HTTPException(
             status.HTTP_409_CONFLICT, detail.model_dump(mode="json")
+        ) from exc
+    except MissingInputsError as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            exc.detail.model_dump(mode="json"),
         ) from exc
     except PlanInputError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc

@@ -91,6 +91,7 @@ class Feature(StrEnum):
     ADMIN_PERMISSIONS = "admin.permissions"
     ADMIN_USERS = "admin.users"
     ADMIN_PLANNING_WEIGHTS = "admin.planning_weights"
+    ADMIN_DEMO = "admin.demo"
 
     TRIPS = "trips"
     TRIPS_CORE = "trips.core"
@@ -172,6 +173,7 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.ADMIN_PERMISSIONS: "Role, uprawnienia, ich przydział i dziennik zmian",
     Feature.ADMIN_USERS: "Zarządzanie kontami innych użytkowników",
     Feature.ADMIN_PLANNING_WEIGHTS: "Parametry algorytmu planowania",
+    Feature.ADMIN_DEMO: "Reset konta demo",
     Feature.TRIPS: "Wyjazdy",
     Feature.TRIPS_CORE: "Wyjazd: tworzenie, lista i dane podstawowe",
     Feature.TRIPS_MEMBERS: "Uczestnicy wyjazdu i ich role",

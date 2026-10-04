@@ -14,13 +14,14 @@ from typing import Annotated
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
-from tuttitrip.demo.logic.rate_limit import RateLimiter
 from tuttitrip.demo.logic.token import secret_matches, token_matches
 from tuttitrip.demo.schemas import DemoResetResult, DemoSession
 from tuttitrip.demo.services import auth0_login, reset_service
 from tuttitrip.demo.services.auth0_login import DemoLoginError
 from tuttitrip.shared.config.settings import get_settings
-from tuttitrip.shared.permissions.api import public
+from tuttitrip.shared.permissions.api import public, requires
+from tuttitrip.shared.permissions.registry import Access, Feature
+from tuttitrip.shared.rate_limit.limiter import RateLimiter
 
 router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[public()])
 # Not reachable from outside: the gateway answers 404 for /api/v1/internal/ and
@@ -28,6 +29,8 @@ router = APIRouter(prefix="/auth", tags=["auth"], dependencies=[public()])
 internal_router = APIRouter(
     prefix="/internal/demo", tags=["internal"], dependencies=[public()]
 )
+# Superadmins only (``admin.demo``): the same reset as the internal one, by hand.
+admin_router = APIRouter(prefix="/admin/demo", tags=["admin"])
 log = logging.getLogger(__name__)
 
 NO_STORE = {"Cache-Control": "no-store"}
@@ -200,6 +203,46 @@ async def reset_demo(
         log.warning("Demo reset failed: reason=%s", exc.reason)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Demo login unavailable", headers=NO_STORE
+        ) from None
+    if trips is None:
+        return DemoResetResult(status="disabled")
+    return DemoResetResult(status="reset", trips=trips)
+
+
+@admin_router.post(
+    "/reset",
+    summary="Reset the demo account to its sample trips",
+    description=(
+        "Deletes the trips the demo account owns and creates the sample set again, "
+        "with the computed plans and the pasted chatbot plan and offer. Atomic and "
+        "idempotent: the same data gives the same `plan_hash`. Only trips with the "
+        "demo account's own `sub` are touched."
+    ),
+    responses={
+        502: {"description": "Auth0 did not give a token for the demo account."}
+    },
+    dependencies=[requires(Feature.ADMIN_DEMO, Access.WRITE)],
+)
+async def admin_reset_demo(
+    new_client: Annotated[Callable[[], httpx.AsyncClient], Depends(get_client_factory)],
+) -> DemoResetResult:
+    """Reset the demo account's data on request of a superadmin.
+
+    Args:
+        new_client: Opens the HTTP client for Auth0.
+
+    Returns:
+        ``reset`` with the number of trips, or ``disabled`` when the demo is off.
+
+    Raises:
+        HTTPException: 502 when Auth0 fails.
+    """
+    try:
+        trips = await reset_service.reset_demo(get_settings(), new_client)
+    except DemoLoginError as exc:
+        log.warning("Demo reset failed: reason=%s", exc.reason)
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Demo login unavailable"
         ) from None
     if trips is None:
         return DemoResetResult(status="disabled")

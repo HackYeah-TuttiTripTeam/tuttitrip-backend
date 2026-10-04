@@ -195,6 +195,7 @@ class PlanErrorCode(StrEnum):
 
     NOT_APPROVED = "plan.not_approved"
     CATALOG_MISSING = "catalog_missing"
+    MISSING_INPUTS = "plan.missing_inputs"
 
 
 class NotApprovedDetail(BaseModel):
@@ -224,6 +225,62 @@ class PlanCatalogMissing(BaseModel):
             "worker could take it (ask `POST /trips/{id}/places/candidates`)."
         ),
     )
+
+
+@unique
+class MissingField(StrEnum):
+    """What a trip lacks before a plan can be computed (``QuestionField`` values)."""
+
+    DESTINATION = "destination"
+    DATES = "dates"
+    PEOPLE = "people"
+
+
+@unique
+class MissingCard(StrEnum):
+    """The interview card that asks for a missing field (a subset of ``CardKind``)."""
+
+    CITY = "city"
+    DATE_RANGE = "date_range"
+    FAMILY_BUILDER = "family_builder"
+
+
+MISSING_CARD: dict[MissingField, MissingCard] = {
+    MissingField.DESTINATION: MissingCard.CITY,
+    MissingField.DATES: MissingCard.DATE_RANGE,
+    MissingField.PEOPLE: MissingCard.FAMILY_BUILDER,
+}
+"""The card each missing field is asked on."""
+
+
+class MissingInput(BaseModel):
+    """One thing the plan needs and the card to ask for it."""
+
+    field: MissingField
+    person_id: UUID | None = Field(
+        default=None, description="The person it is about; null for the whole group."
+    )
+    kind: MissingCard = Field(description="The card the client renders for it.")
+    options: list[str] = Field(
+        default_factory=list, description="Choices on the card, if it has any."
+    )
+
+
+class PlanMissingInputsDetail(BaseModel):
+    """Why the plan cannot be computed yet; clients map by ``code`` and ``missing``."""
+
+    code: Literal[PlanErrorCode.MISSING_INPUTS] = PlanErrorCode.MISSING_INPUTS
+    message: str = Field(description="For developers; clients map by code.")
+    missing: list[MissingInput] = Field(
+        min_length=1,
+        description="Everything missing at once, in the order of the interview.",
+    )
+
+
+class PlanMissingInputs(BaseModel):
+    """422 body: the trip lacks data a plan needs."""
+
+    detail: PlanMissingInputsDetail
 
 
 class PlanCreate(BaseModel):
@@ -323,6 +380,11 @@ class PlanParams(BaseModel):
     draft: bool = Field(
         default=False,
         description="A preliminary plan made with assumptions during the interview.",
+    )
+    parameters_version: int = Field(
+        default=0,
+        ge=0,
+        description="Version of the admin parameters (0: the built-in defaults).",
     )
 
 
