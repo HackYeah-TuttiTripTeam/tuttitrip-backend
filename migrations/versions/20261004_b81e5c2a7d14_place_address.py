@@ -3,7 +3,7 @@
 Also merges the two heads on develop (mcp grant and interview sessions).
 
 Revision ID: b81e5c2a7d14
-Revises: a80c0de11b01
+Revises: 28a40fb2f40e
 Create Date: 2026-10-04 03:10:00.000000
 """
 
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b81e5c2a7d14"
-down_revision: str | Sequence[str] | None = "a80c0de11b01"
+down_revision: str | Sequence[str] | None = "28a40fb2f40e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
