@@ -22,7 +22,6 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.accommodation.services import requirements_service
-from tuttitrip.places.schemas import PlaceRead
 from tuttitrip.places.services import place_service
 from tuttitrip.planning.budget_approvals.services import approval_service
 from tuttitrip.planning.logic import what_if
@@ -406,7 +405,7 @@ async def _start_justifications(  # ruff: ignore[too-many-arguments, too-many-po
         log.info("justifications of plan %s not started: no worker", plan_id)
 
 
-async def generate_plan(
+async def generate_plan(  # ruff: ignore[too-many-locals] compute, lock, store, announce
     session: AsyncSession,
     membership: TripMembership,
     data: PlanCreate | None,
@@ -447,7 +446,7 @@ async def generate_plan(
     preset = knobs.weight_preset
     params = replace(DEFAULT_PARAMS, max_exceptional_nights=knobs.exceptional_nights)
     digest = input_hash(planning, alpha, preset.value, params, configured_solver().tag)
-    locale = (data or PlanCreate()).locale
+    locale = knobs.locale
 
     latest = await db.select_latest(session, membership.trip_id)
     if latest is not None and _is_current(latest, digest, draft=draft):
