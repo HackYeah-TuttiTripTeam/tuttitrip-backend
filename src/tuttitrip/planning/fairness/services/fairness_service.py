@@ -1,6 +1,6 @@
 """Score candidate plans."""
 
-from tuttitrip.planning.fairness.logic.welfare import weighted_log_welfare
+from tuttitrip.planning.fairness.logic.welfare import welfare
 from tuttitrip.planning.fairness.schemas import FairnessRequest, FairnessScore
 
 
@@ -14,5 +14,8 @@ def score_plan(request: FairnessRequest) -> FairnessScore:
         The objective value.
     """
     return FairnessScore(
-        score=weighted_log_welfare((p.utility, p.weight) for p in request.people)
+        score=welfare(
+            ((p.utility, p.weight) for p in request.people),
+            1.0 if request.alpha is None else request.alpha,
+        )
     )
