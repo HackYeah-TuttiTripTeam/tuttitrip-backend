@@ -84,6 +84,7 @@ def test_a_valid_token_gives_its_own_trip_and_profile(
 def test_no_header_is_401_and_needs_no_account(client: TestClient) -> None:
     response = client.get(path("read_vote_access"))
     assert response.status_code == 401
+    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.parametrize(
@@ -101,6 +102,7 @@ def test_unknown_expired_and_revoked_tokens_are_404(
     _stored(monkeypatch, row)
     response = client.get(path("read_vote_access"), headers=HEADERS)
     assert response.status_code == 404
+    assert response.headers["cache-control"] == "no-store"
     assert TOKEN not in response.text
 
 
@@ -150,6 +152,7 @@ def test_a_wrong_scope_token_is_404_and_leaves_no_trace(
     with pytest.raises(HTTPException) as caught:
         asyncio.run(requirement(access, session, Response()))
     assert caught.value.status_code == 404
+    assert caught.value.headers == {"Cache-Control": "no-store"}
     touch.assert_not_awaited()
 
 

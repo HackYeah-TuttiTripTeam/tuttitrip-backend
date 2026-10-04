@@ -1,7 +1,7 @@
 """MCP access for the default user role.
 
 Revision ID: 9c1f5a7d3b20
-Revises: 243e9787efa9
+Revises: a7bad57ce3b3
 Create Date: 2026-10-04 18:00:00.000000
 """
 
@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "9c1f5a7d3b20"
-down_revision: str | None = "243e9787efa9"
+down_revision: str | None = "a7bad57ce3b3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

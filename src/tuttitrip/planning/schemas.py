@@ -48,6 +48,7 @@ class PlanningPerson(_Frozen):
     """One person as the algorithm sees them (docs/algorytm.md, section 2)."""
 
     id: UUID
+    age: int = Field(ge=0, le=120, description="Picks the ticket category.")
     weight: float = Field(gt=0, description="w_i: child 2, adult 1.")
     interests: dict[PlaceTag, Annotated[float, Field(ge=0, le=1)]] = Field(
         default_factory=dict, description="Interest profile I_i; empty means unknown."
@@ -83,6 +84,7 @@ class PlanningTrip(_Frozen):
     has_lodging: bool = Field(
         description="Whether the lodging domain is active (there are nights)."
     )
+    currency: str = Field(default="PLN", description="ISO 4217; prices in it count.")
 
     @property
     def budget_max(self) -> Decimal:
@@ -133,3 +135,47 @@ class PlaceExplain(_Frozen):
     match: float = Field(ge=0, le=1, description="m_ip: fit to interests and vote.")
     effort: float = Field(ge=0, le=1, description="e_ip: distance, stairs, queue.")
     utility: float = Field(ge=0, le=100, description="u_ip, without cost.")
+
+
+class DayPlan(_Frozen):
+    """One day of a plan: the places and the quantities E2 "tempo" needs.
+
+    ``distance_km`` (``L_d``) and ``active_min`` (``A_d``) come from
+    ``schedule.schedule_day``; an empty day has zeros.
+    """
+
+    place_ids: tuple[UUID, ...] = ()
+    distance_km: float = Field(default=0, ge=0)
+    active_min: int = Field(default=0, ge=0)
+
+
+class LodgingStay(_Frozen):
+    """The one lodging base of the trip (docs/algorytm.md, section 9).
+
+    The night price is taken as given: E6 has no markup for lodging, so an
+    unverified night price is not raised by ``delta``.
+    """
+
+    nights: int = Field(gt=0)
+    price_per_night: Decimal = Field(ge=0)
+
+
+class DomainScores(_Frozen):
+    """Satisfaction ``q_ij`` of one person in the five domains and welfare ``u_i``.
+
+    A domain that does not apply (``lodging`` without nights) is None and the
+    pool ignores it. All values are rounded to four places.
+    """
+
+    person_id: UUID
+    lodging: float | None = Field(ge=0, le=100)
+    food: float = Field(ge=0, le=100)
+    attractions: float = Field(ge=0, le=100)
+    pace: float = Field(ge=0, le=100)
+    cost: float = Field(ge=0, le=100)
+    welfare: float = Field(ge=0, le=100, description="u_i of E3.")
+
+    @property
+    def lodging_applicable(self) -> bool:
+        """False when the trip has no nights ("nie dotyczy")."""
+        return self.lodging is not None
