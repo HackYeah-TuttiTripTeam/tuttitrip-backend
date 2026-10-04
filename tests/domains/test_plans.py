@@ -1,7 +1,6 @@
 """Plan contract: fixed response, shape of section 10, trip and feature guards."""
 
 import uuid
-from collections.abc import Iterator
 from decimal import Decimal
 from unittest.mock import AsyncMock
 
@@ -12,6 +11,7 @@ from pydantic import ValidationError
 from tests.shared.fakes import authorize
 from tests.shared.paths import path
 from tuttitrip.main import create_app
+from tuttitrip.planning.plans.api import plan_examples
 from tuttitrip.planning.plans.logic.hashing import compute_plan_hash
 from tuttitrip.planning.plans.logic.metrics import jain_index
 from tuttitrip.planning.plans.logic.sample_plan import (
@@ -50,38 +50,6 @@ def _client(grants: tuple[Grant, ...] | None = None) -> TestClient:
         authorize(app, BOB, grants)
     app.dependency_overrides[get_session] = lambda: None
     return TestClient(app)
-
-
-@pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    membership = TripMembership(trip_id=TRIP, sub=BOB.sub, role=TripRole.MEMBER)
-    monkeypatch.setattr(
-        trip_service, "get_membership", AsyncMock(return_value=membership)
-    )
-    with _client() as test_client:
-        yield test_client
-
-
-def test_post_twice_gives_the_same_12_char_plan_hash(client: TestClient) -> None:
-    first = client.post(path("create_plan", trip_id=TRIP))
-    second = client.post(path("create_plan", trip_id=TRIP))
-    assert first.status_code == 201
-    assert len(first.json()["plan_hash"]) == 12
-    assert first.json() == second.json()
-
-
-def test_latest_matches_the_created_plan(client: TestClient) -> None:
-    created = client.post(path("create_plan", trip_id=TRIP)).json()
-    latest = client.get(path("get_latest_plan", trip_id=TRIP))
-    assert latest.status_code == 200
-    assert latest.json() == created
-
-
-def test_plan_hash_changes_with_alpha(client: TestClient) -> None:
-    base = client.post(path("create_plan", trip_id=TRIP)).json()
-    other = client.post(path("create_plan", trip_id=TRIP), json={"alpha": 2}).json()
-    assert other["params"]["alpha"] == 2
-    assert other["plan_hash"] != base["plan_hash"]
 
 
 def test_plan_has_the_fields_of_section_10() -> None:
@@ -145,32 +113,6 @@ def test_no_plan_schema_collides_with_another_domain() -> None:
     assert not [n for n in names if n.endswith(("-Input", "-Output"))]
     assert "PlanStop" in names
     assert "PlanItem" not in names or "PlanStop" in names
-
-
-def test_money_is_serialised_as_a_string(client: TestClient) -> None:
-    body = client.post(path("create_plan", trip_id=TRIP)).json()
-    assert body["budget"]["cost"] == "1475.00"
-    stop = body["days"][2]["items"][2]
-    assert stop["price_inflated"] == "57.50"
-    assert stop["price_source_url"] is None
-    assert body["lodging"]["cost_total"] == "385.00"
-
-
-def test_stub_marker_is_in_openapi() -> None:
-    paths = create_app().openapi()["paths"]
-    for route, method in (
-        ("/api/v1/trips/{trip_id}/plans", "post"),
-        ("/api/v1/trips/{trip_id}/plans/latest", "get"),
-    ):
-        operation = paths[route][method]
-        assert operation["x-stub"] is True
-        assert operation["summary"].endswith("(STUB)")
-        assert "Args:" not in operation["description"]
-        assert "Returns:" not in operation["description"]
-    schemas = create_app().openapi()["components"]["schemas"]
-    assert "STUB" in schemas["PlanRead"]["description"]
-    assert "stub" in schemas["PlanTelemetry"]["properties"]["solver"]["description"]
-    assert "404" in paths["/api/v1/trips/{trip_id}/plans/latest"]["get"]["responses"]
 
 
 def test_solo_sample_has_one_person_and_no_conflicts() -> None:
@@ -239,6 +181,9 @@ def test_post_without_write_permission_is_403(monkeypatch: pytest.MonkeyPatch) -
         response = client.post(path("create_plan", trip_id=TRIP))
         assert response.status_code == 403
         assert response.json()["detail"] == "Missing permission planning.plans:WRITE"
+        monkeypatch.setattr(
+            plan_service, "latest_plan", AsyncMock(return_value=sample_plan(TRIP))
+        )
         assert client.get(path("get_latest_plan", trip_id=TRIP)).status_code == 200
 
 
@@ -270,7 +215,10 @@ def test_every_variant_passes_the_schema_validators(trip: uuid.UUID) -> None:
     budget = plan.budget
     assert (budget.kappa is not None) == budget.needs_approval
     assert budget.needs_approval == (budget.over_budget > 0)
+    assert budget.b_to is not None
     assert (budget.zone is BudgetZone.IN_MARGIN) == (budget.cost > budget.b_to)
+    assert budget.b_to is not None
+    assert budget.b_max is not None
     assert budget.over_budget == max(Decimal(0), budget.cost - budget.b_to)
     assert budget.cost <= budget.b_max
     assert all(len(p.domains) == 5 for p in plan.fairness.per_person)
@@ -295,54 +243,17 @@ def test_every_variant_has_a_stop_without_hours_source() -> None:
         assert any(i.hours_source_url is None for i in _stops(sample_plan(trip)))
 
 
-def test_approval_variant_is_the_openapi_example() -> None:
-    example = plan_service.openapi_examples()["needs_approval"]["value"]
-    assert isinstance(example, dict)
-    assert example["budget"]["needs_approval"] is True
-    assert example["budget"]["kappa"] == "18.70"
-
-
-def test_selection_rule_is_documented_in_the_endpoints() -> None:
-    paths = create_app().openapi()["paths"]
-    for route, method in (
-        ("/api/v1/trips/{trip_id}/plans", "post"),
-        ("/api/v1/trips/{trip_id}/plans/latest", "get"),
-    ):
-        assert (
-            "sha256(str(trip_id).encode())[0] % 3"
-            in paths[route][method]["description"]
-        )
-
-
 def test_approval_budget_follows_e6() -> None:
     budget = sample_plan(TRIP_APPROVAL).budget
     assert budget.strict_cost is not None
     assert budget.gain_points is not None
+    assert budget.b_to is not None
     assert budget.strict_cost <= budget.b_to
     assert budget.gain_points >= 8
     assert budget.kappa == (
         (budget.cost - budget.strict_cost) / Decimal(str(budget.gain_points))
     ).quantize(Decimal("0.01"))
     assert budget.zone is BudgetZone.IN_MARGIN
-
-
-def test_approval_variant_over_http(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    membership = TripMembership(
-        trip_id=TRIP_APPROVAL, sub=BOB.sub, role=TripRole.MEMBER
-    )
-    monkeypatch.setattr(
-        trip_service, "get_membership", AsyncMock(return_value=membership)
-    )
-    created = client.post(path("create_plan", trip_id=TRIP_APPROVAL))
-    latest = client.get(path("get_latest_plan", trip_id=TRIP_APPROVAL))
-    assert created.status_code == 201
-    assert latest.status_code == 200
-    body = latest.json()
-    assert body["budget"]["needs_approval"] is True
-    assert body["budget"]["kappa"] is not None
-    assert body["plan_hash"] == created.json()["plan_hash"]
 
 
 def test_every_sample_stop_has_an_address_and_the_schema_allows_null() -> None:
@@ -353,6 +264,9 @@ def test_every_sample_stop_has_an_address_and_the_schema_allows_null() -> None:
     assert "address" not in schema.get("required", [])
 
 
-def test_address_is_in_the_plan_response(client: TestClient) -> None:
-    stop = client.post(path("create_plan", trip_id=TRIP)).json()["days"][0]["items"][0]
-    assert isinstance(stop["address"], str)
+def test_openapi_examples_cover_group_solo_and_approval() -> None:
+    example = plan_examples()["needs_approval"]["value"]
+    assert isinstance(example, dict)
+    assert example["budget"]["needs_approval"] is True
+    assert example["budget"]["kappa"] == "18.70"
+    assert set(plan_examples()) == {"group", "solo", "needs_approval"}

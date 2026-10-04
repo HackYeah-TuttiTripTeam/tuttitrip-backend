@@ -17,7 +17,10 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pgvector>=0.5.0",
     "pydantic>=2.13.5",
-    "pydantic-ai>=2.54.0",
+    # The harness requires exactly this pydantic-ai-slim; pydantic-ai follows it.
+    "pydantic-ai==2.54.0",
+    "pydantic-ai-harness==0.54.0",
+    "pydantic-ai-slim[ag-ui,openai-realtime]==2.54.0",
     "pydantic-settings>=2.15.0",
     "pyjwt[crypto]>=2.15.1",
     "python-multipart>=0.0.32",

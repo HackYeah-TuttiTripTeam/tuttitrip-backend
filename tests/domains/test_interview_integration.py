@@ -3,12 +3,15 @@
 Needs the database of ``docker compose up -d db`` with ``alembic upgrade head``.
 """
 
+import asyncio
+import json
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic_ai.messages import (
+    ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
@@ -17,20 +20,31 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from sqlalchemy import select
+from pydantic_ai.models.function import AgentInfo
+from sqlalchemy import select, update
 
 from tests.shared.fakes import authorize
+from tests.shared.interview_world import model_of
 from tests.shared.paths import path
+from tuttitrip.interview import db as interview_db
 from tuttitrip.interview.models import InterviewSession
 from tuttitrip.interview.schemas import FieldRef, KnowledgeField
-from tuttitrip.interview.services import session_service
+from tuttitrip.interview.services import run_guard, session_service
+from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.main import create_app
+from tuttitrip.profiles.logic.age_defaults import DEFAULTS
+from tuttitrip.profiles.schemas import AgeGroup
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.session import get_sessionmaker
 from tuttitrip.trips.models import TripMember
 from tuttitrip.trips.schemas import TripMembership, TripRole
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.filterwarnings(
+        "ignore::pydantic_ai_harness.spend.UnpricedModelWarning"
+    ),
+]
 
 HOST = AuthenticatedUser(sub=f"auth0|host-{uuid.uuid4()}")
 OUTSIDER = AuthenticatedUser(sub=f"auth0|out-{uuid.uuid4()}")
@@ -208,3 +222,191 @@ def test_sessions_disappear_with_the_trip(client: TestClient) -> None:
             return len(rows.all())
 
     assert _run(client, count) == 0
+
+
+def test_a_turn_fills_the_trip_through_the_services_and_is_remembered(
+    client: TestClient,
+) -> None:
+    # The demo sentence, a scripted model and a real database: the tools write
+    # through the services, the stream carries the snapshots, the next turn
+    # starts from the stored history.
+    trip = _trip(client)
+    thread = client.post(path("start_session", trip_id=trip)).json()["id"]
+    seen: list[list[ModelMessage]] = []
+    moves = iter(
+        [
+            ToolCallPart(
+                "set_trip_basics",
+                {"city": "Gdańsk", "start_date": "2026-10-10", "days": 3},
+            ),
+            ToolCallPart("add_person", {"name": "Zosia", "age": 6}),
+            ToolCallPart("add_person", {"name": "Kuba", "age": 13}),
+            ToolCallPart("add_person", {"name": "Babcia", "age": 72}),
+            "Zapisałem Gdańsk i troje domowników.",
+            "Wszystko gra.",
+        ]
+    )
+
+    def respond(messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        seen.append(messages)
+        move = next(moves)
+        return ModelResponse(
+            parts=[TextPart(move)] if isinstance(move, str) else [move]
+        )
+
+    def turn(text: str) -> list[str]:
+        body = {
+            "threadId": thread,
+            "runId": uuid.uuid4().hex,
+            "state": {},
+            "messages": [{"id": "m", "role": "user", "content": text}],
+            "tools": [],
+            "context": [],
+            "forwardedProps": {},
+        }
+        response = client.post(path("run_turn", trip_id=trip), json=body)
+        assert response.status_code == 200, response.text
+        return [
+            json.loads(line.removeprefix("data: "))["type"]
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        ]
+
+    with interview_agent.override(model=model_of(respond)):
+        kinds = turn("Gdańsk, trzy dni, dzieci 6 i 13 lat, babcia")
+        turn("Dzięki")
+
+    assert kinds[0] == "RUN_STARTED"
+    assert kinds[-1] == "RUN_FINISHED"
+    assert kinds.count("STATE_SNAPSHOT") == 4
+
+    knowledge = client.get(path("get_knowledge", trip_id=trip)).json()
+    assert knowledge["trip"]["destination"] == "Gdańsk"
+    assert (knowledge["trip"]["start_date"], knowledge["trip"]["end_date"]) == (
+        "2026-10-10",
+        "2026-10-12",
+    )
+    assert len(knowledge["people"]) == 4
+    by_name = {p["display_name"]: p for p in knowledge["people"]}
+    assert by_name["Babcia"]["age_group"] == "senior"
+    assert by_name["Zosia"]["segment_km"] == DEFAULTS[AgeGroup.CHILD].segment_km
+    assert by_name["Babcia"]["segment_km"] == DEFAULTS[AgeGroup.SENIOR].segment_km
+    sources = {(s["field"], s["profile_id"]): s["source"] for s in knowledge["sources"]}
+    assert sources["destination", None] == "assistant"
+    assert sources["people", by_name["Zosia"]["id"]] == "assistant"
+
+    current = client.get(
+        path("get_current_session", trip_id=trip), params={"size": 50}
+    ).json()
+    assert [m["text"] for m in current["messages"]["items"]] == [
+        "Gdańsk, trzy dni, dzieci 6 i 13 lat, babcia",
+        "Zapisałem Gdańsk i troje domowników.",
+        "Dzięki",
+        "Wszystko gra.",
+    ]
+    second_turn = seen[-1]
+    assert any(
+        isinstance(part, UserPromptPart) and part.content == "Dzięki"
+        for message in second_turn
+        for part in message.parts
+    )
+    assert any(
+        isinstance(part, ToolCallPart) and part.tool_name == "add_person"
+        for message in second_turn
+        for part in message.parts
+    )
+
+
+# --- the run guard on a real database ---------------------------------------
+
+
+def _claims(client: TestClient) -> tuple[str, str, TripMembership]:
+    trip = _trip(client)
+    session_id = str(client.post(path("start_session", trip_id=trip)).json()["id"])
+    membership = TripMembership(
+        trip_id=uuid.UUID(trip), sub=HOST.sub, role=TripRole.HOST
+    )
+    return trip, session_id, membership
+
+
+def test_two_claims_at_once_give_exactly_one_winner(client: TestClient) -> None:
+    _, session_id, membership = _claims(client)
+
+    async def race() -> list[object]:
+        sessions = get_sessionmaker()
+        return await asyncio.gather(
+            *(
+                run_guard.acquire(
+                    sessions, membership, uuid.UUID(session_id), limit_seconds=60
+                )
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+
+    results = _run(client, race)
+    assert sum(isinstance(r, run_guard.Claim) for r in results) == 1
+    assert sum(isinstance(r, run_guard.SessionBusyError) for r in results) == 7
+
+
+def test_the_claim_is_released_expires_and_is_bound_to_the_trip(
+    client: TestClient,
+) -> None:
+    _, session_id, membership = _claims(client)
+    sid = uuid.UUID(session_id)
+    sessions = get_sessionmaker()
+
+    async def flow() -> None:
+        stale = await run_guard.acquire(sessions, membership, sid, limit_seconds=-30)
+        fresh = await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(stale)  # late release of an expired claim
+        with pytest.raises(run_guard.SessionBusyError):
+            await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(fresh)
+        again = await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(again)
+        elsewhere = membership.model_copy(update={"trip_id": uuid.uuid4()})
+        with pytest.raises(session_service.SessionNotFoundError):
+            await run_guard.acquire(sessions, elsewhere, sid, limit_seconds=60)
+
+    _run(client, flow)
+
+
+def test_voice_time_is_booked_limited_and_excludes_text(client: TestClient) -> None:
+    _, session_id, membership = _claims(client)
+    sid = uuid.UUID(session_id)
+    sessions = get_sessionmaker()
+
+    async def flow() -> None:
+        call = await run_guard.acquire(
+            sessions, membership, sid, limit_seconds=60, voice_limit=5
+        )
+        with pytest.raises(run_guard.SessionBusyError):  # a text turn meanwhile
+            await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await asyncio.sleep(1.1)
+        await run_guard.release(call, voice=True)
+        async with sessions() as session:
+            row = await interview_db.select_session(session, membership.trip_id, sid)
+        assert row is not None
+        assert row.voice_seconds >= 2
+        await run_guard.release(
+            await run_guard.acquire(
+                sessions, membership, sid, limit_seconds=60, voice_limit=5
+            ),
+            voice=True,
+        )
+        async with sessions() as session:
+            await session.execute(
+                update(InterviewSession)
+                .where(InterviewSession.id == sid)
+                .values(voice_seconds=5)
+            )
+            await session.commit()
+        with pytest.raises(run_guard.VoiceBudgetError):
+            await run_guard.acquire(
+                sessions, membership, sid, limit_seconds=60, voice_limit=5
+            )
+        text = await run_guard.acquire(sessions, membership, sid, limit_seconds=60)
+        await run_guard.release(text)  # text turns are not limited by voice time
+
+    _run(client, flow)

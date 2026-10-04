@@ -373,7 +373,10 @@ def sample_plan(
         input_hash=hashlib.sha256(f"{trip_id}|{scenario.value}".encode()).hexdigest(),
         plan_hash=compute_plan_hash(content),
         created_at=CREATED_AT,
-        params=PlanParams(alpha=params.alpha, weight_preset=params.weight_preset),
+        params=PlanParams(
+            alpha=1.0 if params.alpha is None else params.alpha,
+            weight_preset=params.weight_preset,
+        ),
         days=days,
         lodging=PlanLodging(
             name="Apartament z basenem",

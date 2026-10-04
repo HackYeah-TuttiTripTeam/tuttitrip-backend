@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Enum, ForeignKey, Index, String, func, text
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +46,11 @@ class InterviewSession(Base):
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now()
     )
+    # One run (text turn or voice call) at a time: set while it runs, to the moment
+    # after which the marker counts as abandoned. See `db.try_start_run`.
+    running_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Seconds of voice calls already used on this interview (the trip's voice budget).
+    voice_seconds: Mapped[int] = mapped_column(server_default=text("0"))
     # `ModelMessagesTypeAdapter.dump_python(..., mode="json")` of the whole run.
     history: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb")

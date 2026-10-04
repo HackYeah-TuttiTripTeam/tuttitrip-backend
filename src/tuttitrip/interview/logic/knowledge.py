@@ -138,3 +138,23 @@ def sources(
         for ref, value in current.items()
         if value.filled
     ]
+
+
+def host_set(
+    sources_of_values: list[FieldSource], refs: list[FieldRef]
+) -> list[FieldRef]:
+    """Pick the refs whose stored value the host set or corrected.
+
+    Args:
+        sources_of_values: ``KnowledgeRead.sources``.
+        refs: The values an agent tool is about to write.
+
+    Returns:
+        The refs the assistant must not overwrite without asking.
+    """
+    by_host = {
+        FieldRef(field=s.field, profile_id=s.profile_id)
+        for s in sources_of_values
+        if s.source is ValueSource.HOST
+    }
+    return [ref for ref in refs if ref in by_host]
