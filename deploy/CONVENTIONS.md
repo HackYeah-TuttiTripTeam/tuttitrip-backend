@@ -212,8 +212,10 @@ domain tables such as `embeddings`. The backend reads those.
   answers 503 `degraded`.
 - A heartbeat that cannot be read (database error) is logged and answered as
   503 `degraded` / `database: unavailable`, never as `worker: missing`. The
-  worker beats once right after launch, and `deploy.sh` fails the deploy when
-  `/health` does not show `worker: ok` within about two minutes of the ping.
+  worker beats once right after launch, and `deploy.sh` logs a WARNING and a
+  GitHub `::warning::` annotation (it does not fail the deploy, the worker ships
+  from its own repo) when `/health` does not show `worker: ok` within about two
+  minutes of the ping.
 - Enqueue endpoints answer 503 with a readable message while the worker is
   `missing` or incompatible.
 
