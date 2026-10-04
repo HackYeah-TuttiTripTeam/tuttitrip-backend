@@ -41,6 +41,7 @@ ELEVEN = ("o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11")
 def test_model_ids_use_the_shared_prefix() -> None:
     assert [model_id(key) for key in ModelKey] == [
         "tuttitrip:agent",
+        "tuttitrip:interview",
         "tuttitrip:chat",
         "tuttitrip:decide",
         "tuttitrip:decide-laya",
