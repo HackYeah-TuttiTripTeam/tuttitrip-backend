@@ -135,7 +135,16 @@ def min_tag_count(
     return 1 + math.floor((share - theta) / (1 - theta) * _TAG_POINTS_PER_EXTRA)
 
 
-def _carries(place: PlaceRead, minimum: MinTag) -> bool:
+def carries_tag(place: PlaceRead, minimum: MinTag) -> bool:
+    """Whether a place carries a tag minimum's tag (a cuisine for food).
+
+    Args:
+        place: The place.
+        minimum: The tag minimum.
+
+    Returns:
+        True when the place counts towards the minimum.
+    """
     if minimum.domain is MinTagDomain.FOOD:
         return place.cuisine is not None and place.cuisine.value == minimum.tag
     return minimum.tag in {t.value for t in place.tags}
@@ -195,7 +204,7 @@ def tag_requirements(
     result: list[TagRequirement] = []
     for minimum in person.min_tags:
         points = pool.food if minimum.domain is MinTagDomain.FOOD else pool.attractions
-        available = sum(_carries(p, minimum) for p in candidates)
+        available = sum(carries_tag(p, minimum) for p in candidates)
         required = min(min_tag_count(points, total, params), available)
         if required >= 1:
             result.append(TagRequirement(minimum, required))
@@ -220,7 +229,7 @@ def tag_shortfalls(
     chosen = {pid: places[pid] for day in days for pid in day.place_ids}
     return tuple(
         TagShortfall(
-            r.tag, r.required, sum(_carries(p, r.tag) for p in chosen.values())
+            r.tag, r.required, sum(carries_tag(p, r.tag) for p in chosen.values())
         )
         for r in requirements
     )

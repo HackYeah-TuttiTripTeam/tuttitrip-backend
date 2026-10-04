@@ -18,7 +18,7 @@ from tuttitrip.planning.fairness.logic.violations import effective_floor
 from tuttitrip.planning.logic.domains import RequirementOutcome
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.reference import relative_satisfaction, solo_utility
-from tuttitrip.planning.logic.solver import PlanResult, solve
+from tuttitrip.planning.logic.solver import PlanResult, Solver, solve
 from tuttitrip.planning.schemas import DomainScores, LodgingStay, PlanningInput
 from tuttitrip.profiles.preferences.schemas import ImportanceDomain
 
@@ -76,6 +76,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
     max_evaluations: int | None = None,
     cost_cap: Decimal | None = None,
     u_star: Mapping[UUID, float] | None = None,
+    solver: Solver = solve,
 ) -> GroupPlan:
     """Solo runs, floors, the group plan and the fairness measures.
 
@@ -91,6 +92,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         u_star: ``u*`` per person to reuse (the solo runs are then skipped); the
             budget consent (E6) compares three group plans against the same
             reference points.
+        solver: The solver of every run (default: the local search).
 
     Returns:
         The plan, a ledger row per person (id order), ``min r`` and Jain's index.
@@ -110,6 +112,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
                 lodging=lodging,
                 lodging_outcomes=lodging_outcomes,
                 max_evaluations=max_evaluations,
+                solver=solver,
             )
             reference[person.id] = run.scores[0].welfare
     solo_ms = int((time.perf_counter() - started) * 1000)
@@ -117,7 +120,7 @@ def plan_group(  # ruff: ignore[too-many-arguments] the whole input of a group p
         p.id: 0.0 if alone else effective_floor(p.floor, reference[p.id], params)
         for p in people
     }
-    plan = solve(
+    plan = solver(
         data,
         params,
         alpha=alpha,

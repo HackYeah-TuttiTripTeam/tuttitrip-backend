@@ -19,25 +19,43 @@ import anyio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tuttitrip.interview import constants, db
-from tuttitrip.interview.services.session_service import SessionNotFoundError
+from tuttitrip.interview.services.session_service import (
+    SessionNotFoundError,
+    busy_kind,
+)
+from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.trips.schemas import TripMembership
 
 
 class SessionBusyError(Exception):
     """Another run (a text turn or a voice call) holds this session."""
 
+    def __init__(self, session_id: str, kind: str | None = None) -> None:
+        """Remember what holds the session.
+
+        Args:
+            session_id: The busy session.
+            kind: ``text`` or ``voice``, when known.
+        """
+        super().__init__(session_id)
+        self.kind = kind
+
 
 class VoiceBudgetError(Exception):
     """The interview has used all the voice time its trip may use."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class Claim:
-    """A held session; give it back with ``release``."""
+    """A held session; give it back with ``release``.
+
+    ``token`` changes when the claim is extended (``touch``).
+    """
 
     session_id: UUID
     token: datetime
     sessions: async_sessionmaker[AsyncSession]
+    ttl_seconds: float = 0.0
     started: float = field(default_factory=time.monotonic)
 
 
@@ -66,20 +84,28 @@ async def acquire(
         SessionBusyError: A run holds it.
         VoiceBudgetError: A voice call, but the voice time is used up.
     """
-    ttl = limit_seconds + constants.GUARD_MARGIN_SECONDS
+    # A voice call lives on a short claim that its heartbeat keeps alive, so a dead
+    # call frees the session fast; a text turn lives for its time limit plus a margin.
+    ttl = (
+        get_settings().interview.voice_claim_ttl_seconds
+        if voice_limit is not None
+        else limit_seconds + constants.GUARD_MARGIN_SECONDS
+    )
     async with sessions() as session:
         token = await db.try_start_run(
             session, membership.trip_id, session_id, ttl, voice_limit
         )
     if token is not None:
-        return Claim(session_id=session_id, token=token, sessions=sessions)
+        return Claim(
+            session_id=session_id, token=token, sessions=sessions, ttl_seconds=ttl
+        )
     async with sessions() as session:
         row = await db.select_session(session, membership.trip_id, session_id)
     if row is None:
         raise SessionNotFoundError(str(session_id))
     if voice_limit is not None and row.voice_seconds >= voice_limit:
         raise VoiceBudgetError(str(session_id))
-    raise SessionBusyError(str(session_id))
+    raise SessionBusyError(str(session_id), busy_kind(row))
 
 
 async def release(claim: Claim, *, voice: bool = False) -> None:
@@ -93,3 +119,42 @@ async def release(claim: Claim, *, voice: bool = False) -> None:
     with anyio.CancelScope(shield=True):
         async with claim.sessions() as session:
             await db.end_run(session, claim.session_id, claim.token, seconds)
+
+
+async def touch(claim: Claim) -> bool:
+    """Extend the claim of a live run; the heartbeat of a voice call.
+
+    Args:
+        claim: What ``acquire`` returned.
+
+    Returns:
+        False when the claim is gone (expired and taken, or released), so the
+        run should stop.
+    """
+    async with claim.sessions() as session:
+        token = await db.extend_run(
+            session, claim.session_id, claim.token, claim.ttl_seconds
+        )
+    if token is None:
+        return False
+    claim.token = token
+    return True
+
+
+async def release_voice(
+    sessions: async_sessionmaker[AsyncSession],
+    membership: TripMembership,
+    session_id: UUID,
+) -> bool:
+    """Free a session a voice call holds, whichever process holds the call.
+
+    Args:
+        sessions: Session factory.
+        membership: The caller's checked membership (binds the session to the trip).
+        session_id: The interview session.
+
+    Returns:
+        Whether a voice claim was cleared.
+    """
+    async with sessions() as session:
+        return await db.clear_voice_run(session, membership.trip_id, session_id)

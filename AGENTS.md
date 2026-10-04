@@ -60,6 +60,8 @@ src/tuttitrip/
   interview/           AI interview: AG-UI endpoint, tools, question order, voice
   planning/            planner agent; subdomains fairness/ and linter/
                        algorithm spec (canonical for planning/**/logic): docs/algorytm.md
+                       solvers: logic/solver.py (local search, default) and logic/cpsat.py
+                       (OR-Tools CP-SAT, `TUTTITRIP_PLANNING__SOLVER=cp_sat`), one `Solver` interface
   accommodation/       requirements contract (met/unmet/unconfirmed)
   expenses/            expenses; subdomain settlement/
   search/              pgvector embeddings (written by the worker)
@@ -476,6 +478,14 @@ stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
   (`history_repair.settle`). Voice time per trip is limited
   (`interview.voice_trip_seconds`, booked in `voice_seconds`, 429). Run errors are a Polish `RUN_ERROR`
   with a `code` (`spend_limit`, `timeout`, `unavailable`, `error`).
+  A voice call holds the session on a short claim (`interview.voice_claim_ttl_seconds`) that the
+  call's heartbeat (`voice_heartbeat_seconds`) keeps alive, so a dead call frees the interview by
+  itself; `running_kind` (`text` or `voice`) is `SessionRead.running` and picks the 409 text;
+  `POST .../voice/release` ends a call that runs elsewhere (transcript stored, claim cleared) and
+  leaves a text turn alone; a call whose claim is gone ends itself. When a call ends its
+  transcript is stored and one run of the interview agent over it saves what is still missing
+  (`voice_service._extract`, not stored in the history, idempotent). The transcription language is
+  pinned to the offer's `locale` (`LocalizedRealtimeModel`).
 - The adapter subclass lives in `services`, so `api.py` imports no `pydantic_ai`
   and the architecture rules need no exception.
 - The next question is `interview/logic/next_question.py` (pure, explicit

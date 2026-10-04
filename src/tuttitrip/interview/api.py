@@ -48,9 +48,23 @@ class EventStreamResponse(StreamingResponse):
 
 router = APIRouter(prefix="/trips/{trip_id}/interview", tags=["interview"])
 
+
+def busy_detail(error: run_guard.SessionBusyError) -> str:
+    """The 409 text for a busy session: it says whether a call or a turn holds it.
+
+    Args:
+        error: What the guard raised.
+
+    Returns:
+        The detail of the 409.
+    """
+    return BUSY_VOICE if error.kind == constants.RUN_VOICE else BUSY
+
+
 NO_SESSION = "The trip has no open interview session"
 NO_PROFILE = "You have no profile on this trip"
 BUSY = "Another turn of this interview is still running"
+BUSY_VOICE = "A voice call of this interview is still running"
 VOICE_BUDGET = "The voice time of this trip's interview is used up"
 VOICE_UNAVAILABLE = "The voice assistant is not available"
 NO_CALL = "No such call on this trip"
@@ -207,7 +221,7 @@ async def run_turn(
     except HistoryIncompatibleError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except run_guard.SessionBusyError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from exc
+        raise HTTPException(status.HTTP_409_CONFLICT, busy_detail(exc)) from exc
     return EventStreamResponse(
         stream.body,
         media_type=stream.media_type,
@@ -244,9 +258,9 @@ async def voice_offer(body: VoiceOffer, membership: TripCoHost) -> VoiceAnswer:
         The SDP answer and the call id.
     """
     try:
-        return await voice_service.answer_offer(membership, body.sdp)
+        return await voice_service.answer_offer(membership, body.sdp, body.locale)
     except run_guard.SessionBusyError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from exc
+        raise HTTPException(status.HTTP_409_CONFLICT, busy_detail(exc)) from exc
     except run_guard.VoiceBudgetError as exc:
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, VOICE_BUDGET) from exc
     except SessionNotFoundError as exc:
@@ -276,6 +290,30 @@ async def voice_hangup(call_id: str, membership: TripCoHost) -> None:
         await voice_service.hang_up(membership, call_id)
     except voice_service.CallNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, NO_CALL) from exc
+
+
+@router.post(
+    "/voice/release",
+    status_code=status.HTTP_204_NO_CONTENT,
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "The trip has no interview."}
+    },
+    dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
+)
+async def voice_release(membership: TripCoHost) -> None:
+    """End the voice call of this trip's interview, wherever it runs.
+
+    For a call left on another device or by a tab that never hung up. The
+    transcript is stored and the session is free when this returns. Does
+    nothing when no call runs; a text turn is left to finish.
+
+    Args:
+        membership: The caller's membership (co-host or above).
+    """
+    try:
+        await voice_service.release(membership)
+    except SessionNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SESSION) from exc
 
 
 @router.post(

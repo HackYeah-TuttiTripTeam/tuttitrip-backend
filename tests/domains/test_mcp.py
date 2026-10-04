@@ -63,6 +63,7 @@ def trip_read() -> TripRead:
         day_end=time(19),
         budget_flex_pct=0,
         fairness_alpha=1.0,
+        propose_cheaper_alternatives=True,
     )
     details = TripDetails.model_validate(trip, from_attributes=True)
     return TripRead(

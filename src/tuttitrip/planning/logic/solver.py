@@ -47,6 +47,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from itertools import combinations
+from typing import Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -135,6 +136,8 @@ class Telemetry:
     elapsed_ms: int
     exhausted: bool = False
     """The work limit ended the search: a local state, not an optimum."""
+    status: str | None = None
+    """Solver status when it has one (CP-SAT: ``OPTIMAL``, ``FEASIBLE``, ...)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,6 +421,18 @@ class PlanEvaluator:
             )
         return self._schedule_cache[key]
 
+    def day_feasible(self, day: int, place_ids: Sequence[UUID]) -> bool:
+        """Whether the places can make one day (hours, window, daily distance).
+
+        Args:
+            day: Index of the day in date order.
+            place_ids: The candidate places of the day.
+
+        Returns:
+            False when ``schedule_day`` rejects them.
+        """
+        return self._schedule(day, sorted_ids(place_ids)) is not None
+
     def evaluate(self, assignment: Assignment) -> Evaluation | None:
         """Check the hard constraints and compute ``J``.
 
@@ -639,6 +654,7 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
     lodging_outcomes: Sequence[RequirementOutcome] | None = None,
     floors: Mapping[UUID, float] | None = None,
     max_evaluations: int | None = None,
+    start: Assignment | None = None,
 ) -> PlanResult:
     """Compute the plan that maximises ``J`` under the hard constraints.
 
@@ -652,6 +668,9 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
         floors: ``f_i^eff`` by person id (E4); default each person's ``f_i``.
         max_evaluations: Work limit in evaluated plans; default scales with
             candidates x days (never below ``DEFAULT_MAX_EVALUATIONS``).
+        start: A feasible plan to improve instead of the empty one (the CP-SAT
+            solver passes its choice here to polish it); ignored when it is
+            infeasible for the hard constraints.
 
     Returns:
         A plan; never "no plan". Misses of the soft guarantees are in
@@ -675,7 +694,7 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
         DEFAULT_MAX_EVALUATIONS,
         EVALUATIONS_PER_SLOT * len(evaluator.candidates) * len(evaluator.windows),
     )
-    best, steps, exhausted = _search_with_lodging(evaluator, must, limit)
+    best, steps, exhausted = _search_with_lodging(evaluator, must, limit, start)
     if evaluator.over_cap[best.lodging_index]:
         conflicts.append((SolverConflict.LODGING_OVER_CAP, None))
     placed = {i for ids in best.assignment for i in ids}
@@ -687,7 +706,10 @@ def solve(  # ruff: ignore[too-many-arguments] the whole input of the search
 
 
 def _search_with_lodging(
-    evaluator: PlanEvaluator, must: Sequence[UUID], max_evaluations: int
+    evaluator: PlanEvaluator,
+    must: Sequence[UUID],
+    max_evaluations: int,
+    given: Assignment | None = None,
 ) -> tuple[Evaluation, int, bool]:
     """Search the places for every lodging plan and keep the best.
 
@@ -700,6 +722,8 @@ def _search_with_lodging(
         evaluator: The evaluator.
         must: The "must" places that passed E0.
         max_evaluations: Work limit of each search.
+        given: A feasible plan to improve instead of the empty one (tried with
+            every lodging plan it is feasible for).
 
     Returns:
         The best evaluation (it knows its lodging plan), the improving steps and
@@ -713,7 +737,7 @@ def _search_with_lodging(
     for index in fitting or indices:
         evaluator.choose_lodging(index)
         found, more, hit = _search(
-            evaluator, must, evaluator.evaluations + max_evaluations
+            evaluator, must, evaluator.evaluations + max_evaluations, given
         )
         steps += more
         exhausted = exhausted or hit
@@ -725,7 +749,10 @@ def _search_with_lodging(
 
 
 def _search(
-    evaluator: PlanEvaluator, must: Sequence[UUID], max_evaluations: int
+    evaluator: PlanEvaluator,
+    must: Sequence[UUID],
+    max_evaluations: int,
+    given: Assignment | None = None,
 ) -> tuple[Evaluation, int, bool]:
     # Must places first, then adds only, then the whole neighbourhood until stuck.
     empty: Assignment = tuple(() for _ in evaluator.windows)
@@ -733,7 +760,8 @@ def _search(
     if start is None:  # pragma: no cover - an empty plan has no hard constraint
         msg = "The empty plan must be feasible"
         raise RuntimeError(msg)
-    current = _place_musts(evaluator, start, must)
+    improved = None if given is None else evaluator.evaluate(given)
+    current = improved or _place_musts(evaluator, start, must)
     must_set = frozenset(must)
     steps = 0
     phase_adds = True
@@ -846,6 +874,25 @@ def _delta(evaluator: PlanEvaluator, best: Evaluation) -> LodgingDelta | None:
     )
 
 
+class Solver(Protocol):
+    """The interface of every solver: ``solve`` and the CP-SAT solver both fit."""
+
+    def __call__(  # ruff: ignore[too-many-arguments] the whole input of the search
+        self,
+        data: PlanningInput,
+        params: AlgorithmParams = DEFAULT_PARAMS,
+        *,
+        alpha: float = 1.0,
+        cost_cap: Decimal | None = None,
+        lodging: LodgingStay | None = None,
+        lodging_outcomes: Sequence[RequirementOutcome] | None = None,
+        floors: Mapping[UUID, float] | None = None,
+        max_evaluations: int | None = None,
+    ) -> PlanResult:
+        """Compute the plan that maximises ``J`` under the hard constraints."""
+        ...
+
+
 __all__ = [
     "DEFAULT_MAX_EVALUATIONS",
     "SOLVER_NAME",
@@ -854,6 +901,7 @@ __all__ = [
     "PlanEvaluator",
     "PlanResult",
     "PlannedDay",
+    "Solver",
     "SolverConflict",
     "Telemetry",
     "solve",
