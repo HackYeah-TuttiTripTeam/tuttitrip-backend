@@ -34,8 +34,10 @@ def get_management_client() -> ManagementClient:
     "",
     dependencies=[requires(Feature.ADMIN_USERS, Access.READ)],
     responses={
-        502: {"description": "Auth0 did not answer correctly."},
-        503: {"description": "The Management API credentials are not configured."},
+        status.HTTP_502_BAD_GATEWAY: {"description": "Auth0 did not answer correctly."},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "The Management API credentials are not configured."
+        },
     },
 )
 async def list_auth0_users(

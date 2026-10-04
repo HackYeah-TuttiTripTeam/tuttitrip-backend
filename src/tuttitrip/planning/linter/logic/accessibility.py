@@ -2,9 +2,10 @@
 
 from tuttitrip.planning.linter.logic.rule import Rule, stops_by_day
 from tuttitrip.planning.linter.schemas import Finding, LintContext, LintPlan, Severity
+from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 
 CODE = "accessibility"
-STAIRS_LIMIT = 0.9
+STAIRS_LIMIT = DEFAULT_PARAMS.stairs_limit
 """E0: a place is out when ``stairs_p * sensitivity_i`` reaches this."""
 
 

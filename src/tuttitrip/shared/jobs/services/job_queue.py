@@ -6,6 +6,7 @@ database, where the worker (application ``tuttitrip-worker``) dequeues them.
 
 import hashlib
 import json
+from collections.abc import Callable
 from typing import Protocol
 
 from dbos import (
@@ -17,6 +18,8 @@ from dbos import (
 from dbos import error as dbos_error
 from sqlalchemy.exc import SQLAlchemyError
 
+from tuttitrip.shared.config.settings import JobsSettings, get_settings
+from tuttitrip.shared.jobs.constants import WORKFLOW_ID_DIGEST_CHARS
 from tuttitrip.shared.jobs.contracts import (
     PROGRESS_EVENT,
     WORKFLOWS,
@@ -28,16 +31,30 @@ from tuttitrip.shared.jobs.contracts import (
 )
 from tuttitrip.shared.jobs.schemas import JobState
 
-# Start-to-close limits; DBOS cancels a workflow that runs longer.
-TIMEOUT_SECONDS: dict[Workflow, float] = {
-    Workflow.GENERATE_TRIP_PLAN: 900.0,
-    Workflow.EMBED_TEXTS: 300.0,
-    Workflow.PING: 60.0,
-    Workflow.PARSE_PASTED_PLAN: 600.0,
-    Workflow.EXTRACT_OFFER_EVIDENCE: 600.0,
-    Workflow.FETCH_PLACE_CANDIDATES: 900.0,
-    Workflow.WRITE_JUSTIFICATIONS: 600.0,
+# Start-to-close limits (from `jobs.*_timeout_seconds`); DBOS cancels a workflow
+# that runs longer.
+_TIMEOUTS: dict[Workflow, Callable[[JobsSettings], float]] = {
+    Workflow.GENERATE_TRIP_PLAN: lambda jobs: jobs.plan_timeout_seconds,
+    Workflow.EMBED_TEXTS: lambda jobs: jobs.embedding_timeout_seconds,
+    Workflow.PING: lambda jobs: jobs.ping_timeout_seconds,
+    Workflow.PARSE_PASTED_PLAN: lambda jobs: jobs.llm_timeout_seconds,
+    Workflow.EXTRACT_OFFER_EVIDENCE: lambda jobs: jobs.llm_timeout_seconds,
+    Workflow.FETCH_PLACE_CANDIDATES: lambda jobs: jobs.plan_timeout_seconds,
+    Workflow.WRITE_JUSTIFICATIONS: lambda jobs: jobs.llm_timeout_seconds,
 }
+
+
+def timeout_seconds(workflow: Workflow) -> float:
+    """Start-to-close limit of a workflow.
+
+    Args:
+        workflow: Workflow to run.
+
+    Returns:
+        Seconds after which DBOS cancels it.
+    """
+    return _TIMEOUTS[workflow](get_settings().jobs)
+
 
 NOT_IMPLEMENTED_MESSAGE = "Jeszcze niedostępne"
 
@@ -102,7 +119,7 @@ def workflow_id_for(workflow: Workflow, key: str, payload: ContractPayload) -> s
         ``<workflow>-<key>-<16 hex chars>``.
     """
     canonical = json.dumps(payload.model_dump(mode="json"), sort_keys=True)
-    digest = hashlib.sha256(canonical.encode()).hexdigest()[:16]
+    digest = hashlib.sha256(canonical.encode()).hexdigest()[:WORKFLOW_ID_DIGEST_CHARS]
     return f"{workflow.value}-{key}-{digest}"
 
 
@@ -175,7 +192,7 @@ class DbosJobQueue:
             "app_version": self._version,
             # Pickle (the default) would require the worker to have our classes.
             "serialization_type": WorkflowSerializationFormat.PORTABLE,
-            "workflow_timeout": TIMEOUT_SECONDS[workflow],
+            "workflow_timeout": timeout_seconds(workflow),
             "authenticated_user": user,
         }
         try:

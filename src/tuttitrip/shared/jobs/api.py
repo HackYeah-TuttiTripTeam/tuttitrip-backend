@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from tuttitrip.shared.auth.api import CurrentUser
 from tuttitrip.shared.config.settings import get_settings
+from tuttitrip.shared.jobs.constants import PING_MESSAGE_BYTES
 from tuttitrip.shared.jobs.contracts import PingInput, Workflow
 from tuttitrip.shared.jobs.schemas import JobAccepted, JobState
 from tuttitrip.shared.jobs.services.job_queue import (
@@ -68,7 +69,7 @@ async def ping(queue: JobQueueDep) -> JobAccepted:
     Returns:
         The workflow id to poll at ``GET /jobs/ping/{id}``.
     """
-    payload = PingInput(message=secrets.token_hex(8))
+    payload = PingInput(message=secrets.token_hex(PING_MESSAGE_BYTES))
     try:
         workflow_id = await queue.enqueue(
             Workflow.PING, payload, user=SMOKE_USER, key="smoke"

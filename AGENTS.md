@@ -80,6 +80,7 @@ tests/architecture/    structure + dependency rules (pytest-archon)
 | `services/` | yes | `__init__.py` + one module per service; orchestration, agents. |
 | `models.py` | if it persists | SQLAlchemy ORM models on `shared.db.base.Base`. |
 | `db.py` | iff `models.py` | Queries for this domain's tables only. |
+| `constants.py` | optional | Fixed values with docstrings (see "Magic values"). Pure. |
 | `logic/` | optional | Pure logic (solver, rules, math). See below. |
 | `<subdomain>/` | optional | Same layout, nested. |
 
@@ -201,6 +202,40 @@ How:
   through the 422 model of `POST`/`PATCH /trips`. Clients map errors by `type`,
   never by `msg`. New rule = new enum member plus a test. `POST /trips` takes
   the same fields as `PATCH` and validates them with `check_trip(complete=True)`.
+
+## Magic values
+
+No magic strings or numbers in code: a bare literal that carries meaning (a threshold, a
+limit, a header name, a status or error code repeated in places, a regex, a spec constant)
+gets a name. Obvious values stay inline: `0`, `1`, `-1`, `""`, `True`/`False`, list
+indices, `status.HTTP_*`, and literals in tests.
+
+- **Fixed values** (spec constants from `docs/algorytm.md`, HTTP header names, error codes,
+  enum-like literals, regexes, limits that are part of the contract) go to the slice's
+  `constants.py` (`shared/constants.py` when several slices use them). Each one is a typed
+  `Final` constant with a docstring that says what it is and, for spec values, the section.
+  Tunable algorithm parameters stay in `planning/logic/params.py` (`AlgorithmParams`).
+- **Deployment-tunable values** (timeouts, upload and rate limits, retry counts, TTLs, cron
+  schedules, URLs, model names) are `pydantic-settings` fields with a default and
+  `Field(description=...)` in `shared/config/settings.py`, and a line in `.env.example`.
+- `constants.py` is pure like `schemas.py` (no framework imports) and may be imported by
+  the slice's own `schemas.py`, `logic/`, `services/` and `api.py`; other domains still go
+  through `services` or `schemas`.
+- Ruff enforces the comparison part (`PLR2004`, strings included; off in tests). The rest
+  is code review.
+
+```python
+# planning/constants.py
+BURDEN_DISTANCE_SHARE: Final = 0.6
+"""E1: share of the walking segment in the burden ``e_ip``."""
+
+
+# shared/config/settings.py
+class Auth0Settings(BaseModel):
+    http_timeout_seconds: float = Field(
+        default=10.0, gt=0, description="Timeout of every call to Auth0."
+    )
+```
 
 ## Settings and secrets
 

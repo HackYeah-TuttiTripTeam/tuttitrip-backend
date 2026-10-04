@@ -29,7 +29,9 @@ from tuttitrip.trips.api import TripCoHost, TripHost, TripMember
 router = APIRouter(prefix="/trips/{trip_id}/accommodation", tags=["accommodation"])
 
 NOT_FOUND: dict[int | str, dict[str, Any]] = {
-    404: {"description": "Trip not found, or the caller is not on it."}
+    status.HTTP_404_NOT_FOUND: {
+        "description": "Trip not found, or the caller is not on it."
+    }
 }
 
 

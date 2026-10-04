@@ -19,11 +19,15 @@ from tuttitrip.shared.admin_users.schemas import (
     UserFilters,
     UserQuery,
 )
-from tuttitrip.shared.config.settings import Auth0Settings
+from tuttitrip.shared.config.settings import Auth0Settings, get_settings
+from tuttitrip.shared.constants import (
+    AUTHORIZATION_HEADER,
+    BEARER_SCHEME,
+    OUTBOUND_USER_AGENT,
+    USER_AGENT_HEADER,
+)
 from tuttitrip.shared.pagination.schemas import Page, SortDir
 
-USER_AGENT = "TuttiTripBackend/1.0 (+https://tuttitrip.gburek.app)"
-TIMEOUT_SECONDS = 10.0
 SEARCH_WINDOW = 1000
 TOKEN_MARGIN_SECONDS = 60
 _LUCENE_SPECIAL = re.compile(r'([+\-&|!(){}\[\]^"~*?:\\/])')
@@ -55,7 +59,8 @@ def build_client() -> httpx.AsyncClient:
         A client with the project's user agent and a timeout.
     """
     return httpx.AsyncClient(
-        timeout=TIMEOUT_SECONDS, headers={"User-Agent": USER_AGENT}
+        timeout=get_settings().auth0.http_timeout_seconds,
+        headers={USER_AGENT_HEADER: OUTBOUND_USER_AGENT},
     )
 
 
@@ -162,7 +167,7 @@ class ManagementClient:
         params: dict[str, str | int] | None = None,
         token: str | None = None,
     ) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        headers = {AUTHORIZATION_HEADER: f"{BEARER_SCHEME} {token}"} if token else {}
         try:
             response = await self._http.request(
                 method, url, json=json, params=params, headers=headers

@@ -50,7 +50,7 @@ from tuttitrip.profiles.preferences.schemas import PreferencesRead
 from tuttitrip.profiles.preferences.services import preference_service
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
-from tuttitrip.shared.pagination.schemas import Page
+from tuttitrip.shared.pagination.schemas import Page, SortDir
 from tuttitrip.trips.schemas import TripMembership, TripRead
 from tuttitrip.trips.services import trip_service
 
@@ -167,7 +167,7 @@ async def get_current(
         raise SessionNotFoundError(str(membership.trip_id))
     shown = _display(_history(row))
     wanted = [m for m in shown if query.role in {None, m.role}]
-    if query.dir == "desc":
+    if query.dir == SortDir.DESC:
         wanted.reverse()
     page = Page[DisplayMessage].of(
         wanted[query.offset : query.offset + query.size], len(wanted), query

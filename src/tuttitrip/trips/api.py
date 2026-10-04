@@ -82,7 +82,10 @@ TripHost = Annotated[TripMembership, Depends(TripAccess(TripRole.HOST))]
 
 
 INVALID_TRIP: dict[int | str, dict[str, Any]] = {
-    422: {"model": TripValidationErrors, "description": "A trip rule is broken."}
+    status.HTTP_422_UNPROCESSABLE_CONTENT: {
+        "model": TripValidationErrors,
+        "description": "A trip rule is broken.",
+    }
 }
 
 

@@ -31,7 +31,13 @@ from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute, RouteContext, iter_route_contexts
 
 from tuttitrip.shared.auth.api import CurrentUser
+from tuttitrip.shared.constants import (
+    CACHE_CONTROL_HEADER,
+    NO_STORE,
+    NO_STORE_HEADERS,
+)
 from tuttitrip.shared.db.api import SessionDep
+from tuttitrip.shared.permissions.constants import AUDIT_DEFAULT_LIMIT, AUDIT_MAX_LIMIT
 from tuttitrip.shared.permissions.logic.resolution import (
     EffectivePermissions,
     Grant,
@@ -179,8 +185,6 @@ async def get_token_access(
 
 
 TokenAccessDep = Annotated[TokenAccess, Depends(get_token_access)]
-NO_STORE = "no-store"
-NO_STORE_HEADERS = {"Cache-Control": NO_STORE}
 TOKEN_NOT_FOUND = "Not found"  # ruff: ignore[hardcoded-password-string] a message, not a secret
 
 
@@ -208,7 +212,7 @@ class TokenRequirement:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND, headers=NO_STORE_HEADERS
             )
-        response.headers["Cache-Control"] = NO_STORE
+        response.headers[CACHE_CONTROL_HEADER] = NO_STORE
         await token_service.touch(session, access.token_id)
 
 
@@ -239,7 +243,7 @@ def public() -> params.Depends:
 
 
 def _set_no_store(response: Response) -> None:
-    response.headers["Cache-Control"] = NO_STORE
+    response.headers[CACHE_CONTROL_HEADER] = NO_STORE
 
 
 def no_store() -> params.Depends:
@@ -653,7 +657,7 @@ async def revoke_grant(
 async def list_audit(
     session: SessionDep,
     sub: Annotated[str | None, Query(description="Only changes for this user.")] = None,
-    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    limit: Annotated[int, Query(ge=1, le=AUDIT_MAX_LIMIT)] = AUDIT_DEFAULT_LIMIT,
 ) -> list[AuditEntryRead]:
     """Recent changes of roles and grants, newest first.
 

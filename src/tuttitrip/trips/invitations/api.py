@@ -13,6 +13,7 @@ from tuttitrip.profiles.services.profile_service import (
     ProfileNotFoundError,
 )
 from tuttitrip.shared.auth.api import CurrentUser
+from tuttitrip.shared.constants import NO_STORE_HEADERS
 from tuttitrip.shared.db.api import SessionDep
 from tuttitrip.shared.permissions.api import no_store, requires
 from tuttitrip.shared.permissions.registry import Access, Feature
@@ -36,22 +37,23 @@ from tuttitrip.trips.invitations.services.invitation_service import (
 router = APIRouter(tags=["invitations"])
 
 NOT_FOUND = "Invitation not found"
-NO_STORE = {"Cache-Control": "no-store"}
 INVITATION_NOT_FOUND: dict[int | str, dict[str, str]] = {
-    404: {"description": "Unknown, expired, revoked or used-up invitation."}
+    status.HTTP_404_NOT_FOUND: {
+        "description": "Unknown, expired, revoked or used-up invitation."
+    }
 }
 PROFILE_NOT_FOUND = "Profile not found"
 PROFILE_CLAIMED = "Profile already has an account"
 PROFILE_MISMATCH = "This invitation is for a different profile"
 ACCEPT_ERRORS: dict[int | str, dict[str, str]] = {
-    404: {
+    status.HTTP_404_NOT_FOUND: {
         "description": (
             "Unknown, expired, revoked or used-up invitation (`Invitation not "
             "found`), or `profile_id` is not on the invitation's trip "
             "(`Profile not found`)."
         )
     },
-    409: {
+    status.HTTP_409_CONFLICT: {
         "description": (
             "The profile already has an account or another person took it a "
             "moment ago, or a named invitation is for a different profile. "
@@ -65,8 +67,10 @@ ACCEPT_ERRORS: dict[int | str, dict[str, str]] = {
     "/trips/{trip_id}/invitations",  # ruff: ignore[fast-api-unused-path-parameter]
     status_code=status.HTTP_201_CREATED,
     responses={
-        404: {"description": "`profile_id` is not a profile of this trip."},
-        409: {
+        status.HTTP_404_NOT_FOUND: {
+            "description": "`profile_id` is not a profile of this trip."
+        },
+        status.HTTP_409_CONFLICT: {
             "description": (
                 "20 working invitations already, or `profile_id` has an account."
             )
@@ -175,7 +179,7 @@ async def preview_invitation(
         return await invitation_service.preview(session, user.sub, body)
     except InvitationNotFoundError as exc:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, NOT_FOUND, headers=NO_STORE
+            status.HTTP_404_NOT_FOUND, NOT_FOUND, headers=NO_STORE_HEADERS
         ) from exc
 
 
@@ -208,17 +212,17 @@ async def accept_invitation(
         return await invitation_service.accept(session, user.sub, body)
     except InvitationNotFoundError as exc:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, NOT_FOUND, headers=NO_STORE
+            status.HTTP_404_NOT_FOUND, NOT_FOUND, headers=NO_STORE_HEADERS
         ) from exc
     except ProfileNotFoundError as exc:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND, headers=NO_STORE
+            status.HTTP_404_NOT_FOUND, PROFILE_NOT_FOUND, headers=NO_STORE_HEADERS
         ) from exc
     except ProfileClaimedError as exc:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, PROFILE_CLAIMED, headers=NO_STORE
+            status.HTTP_409_CONFLICT, PROFILE_CLAIMED, headers=NO_STORE_HEADERS
         ) from exc
     except InvitationProfileMismatchError as exc:
         raise HTTPException(
-            status.HTTP_409_CONFLICT, PROFILE_MISMATCH, headers=NO_STORE
+            status.HTTP_409_CONFLICT, PROFILE_MISMATCH, headers=NO_STORE_HEADERS
         ) from exc

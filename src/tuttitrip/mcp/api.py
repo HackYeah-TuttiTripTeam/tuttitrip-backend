@@ -42,7 +42,7 @@ from tuttitrip.shared.auth.services.token_verifier import (
     TokenVerifier as Auth0TokenVerifier,
 )
 from tuttitrip.shared.config.settings import Settings
-from tuttitrip.shared.pagination.schemas import MAX_SIZE, Page, PageParams
+from tuttitrip.shared.pagination.schemas import DEFAULT_SIZE, MAX_SIZE, Page, PageParams
 from tuttitrip.shared.permissions.logic.resolution import EffectivePermissions
 from tuttitrip.shared.permissions.registry import Access, Feature
 from tuttitrip.trips.schemas import TripRead
@@ -214,7 +214,7 @@ def create_mcp(
     @server.tool(auth=mcp_requires(Feature.TRIPS_CORE, Access.READ))
     async def list_trips(
         page: Annotated[int, Field(ge=1, description="Page number, from 1.")] = 1,
-        size: Annotated[int, Field(ge=1, le=MAX_SIZE)] = 20,
+        size: Annotated[int, Field(ge=1, le=MAX_SIZE)] = DEFAULT_SIZE,
     ) -> Page[TripRead]:
         """List the signed-in user's trips, newest first, with their role on each.
 

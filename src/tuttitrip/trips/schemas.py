@@ -3,7 +3,7 @@
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import StrEnum, unique
-from typing import Annotated, Literal, Self, override
+from typing import Annotated, Final, Literal, Self, override
 from uuid import UUID
 
 from pydantic import (
@@ -55,6 +55,10 @@ FLEX = (
     "Flex of E6 in percent (0-50), the solver divides it by 100: "
     "B_max = B_do * (1 + flex_pct / 100)."
 )
+TRIP: Final = "trip"
+"""``TripRead.kind`` of a stay with several days."""
+OUTING: Final = "outing"
+"""``TripRead.kind`` of a single day without a stay."""
 ALPHA = "Group goal alpha of E5 (0-3); 1 balances fairness and total utility."
 Money = Annotated[Decimal, Field(ge=0, max_digits=12, decimal_places=2)]
 
@@ -242,7 +246,7 @@ class TripDetails(BaseModel):
             The kind derived from the dates.
         """
         same_day = self.start_date is not None and self.start_date == self.end_date
-        return "outing" if same_day else "trip"
+        return OUTING if same_day else TRIP
 
 
 class TripRead(TripDetails):

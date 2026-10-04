@@ -8,11 +8,10 @@ Python user agent, hence the explicit ``User-Agent``.
 import httpx
 
 from tuttitrip.demo.schemas import DemoSession
-from tuttitrip.shared.config.settings import Auth0Settings, DemoSettings
+from tuttitrip.shared.config.settings import Auth0Settings, DemoSettings, get_settings
+from tuttitrip.shared.constants import OUTBOUND_USER_AGENT, USER_AGENT_HEADER
 
 PASSWORD_REALM = "http://auth0.com/oauth/grant-type/password-realm"  # ruff: ignore[hardcoded-password-string]  # grant type URI
-USER_AGENT = "TuttiTripBackend/1.0 (+https://tuttitrip.gburek.app)"
-TIMEOUT_SECONDS = 10.0
 TIMEOUT, NETWORK, BAD_BODY = "timeout", "network", "bad_body"
 
 
@@ -40,7 +39,8 @@ def build_client() -> httpx.AsyncClient:
         A client with the project's user agent and a timeout.
     """
     return httpx.AsyncClient(
-        timeout=TIMEOUT_SECONDS, headers={"User-Agent": USER_AGENT}
+        timeout=get_settings().auth0.http_timeout_seconds,
+        headers={USER_AGENT_HEADER: OUTBOUND_USER_AGENT},
     )
 
 

@@ -19,11 +19,14 @@ from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.db.base import Base
 from tuttitrip.shared.db.session import database_url
 
+MODELS_MODULE = "models"
+"""Last segment of the module names whose tables join ``Base.metadata``."""
+
 
 def import_all_models() -> None:
     """Import every ``models`` module so its tables join ``Base.metadata``."""
     for module in pkgutil.walk_packages(tuttitrip.__path__, prefix="tuttitrip."):
-        if module.name.rsplit(".", 1)[-1] == "models":
+        if module.name.rsplit(".", 1)[-1] == MODELS_MODULE:
             importlib.import_module(module.name)
 
 

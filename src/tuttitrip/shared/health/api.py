@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Response, status
 
+from tuttitrip.shared.health.constants import STATUS_OK
 from tuttitrip.shared.health.schemas import HealthResponse, LiveResponse
 from tuttitrip.shared.health.services.health_check import check_health
 from tuttitrip.shared.permissions.api import public
@@ -20,7 +21,7 @@ async def health(response: Response) -> HealthResponse:
         The health report.
     """
     report = await check_health()
-    if report.status != "ok":
+    if report.status != STATUS_OK:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return report
 

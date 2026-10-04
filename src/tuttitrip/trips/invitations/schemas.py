@@ -20,6 +20,7 @@ MAX_TTL_DAYS = 30
 DEFAULT_MAX_USES = 10
 MAX_MAX_USES = 100
 MAX_ACTIVE_PER_TRIP = 20
+MAX_USES_FIELD = "max_uses"
 PLACEHOLDER_NAME = "Uczestnik"
 
 DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -54,7 +55,7 @@ class InvitationCreate(BaseModel):
     @model_validator(mode="after")
     def _named_is_single_use(self) -> Self:
         if self.profile_id is not None and self.max_uses != 1:
-            if "max_uses" in self.model_fields_set:
+            if MAX_USES_FIELD in self.model_fields_set:
                 msg = "A named invitation works once: omit max_uses or send 1"
                 raise ValueError(msg)
             self.max_uses = 1

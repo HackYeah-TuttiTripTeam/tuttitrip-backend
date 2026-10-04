@@ -3,11 +3,12 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from tuttitrip.search import db
+from tuttitrip.search.constants import DEFAULT_NEAREST_LIMIT
 from tuttitrip.search.schemas import EmbeddingHit
 
 
 async def nearest(
-    session: AsyncSession, vector: list[float], limit: int = 10
+    session: AsyncSession, vector: list[float], limit: int = DEFAULT_NEAREST_LIMIT
 ) -> list[EmbeddingHit]:
     """Find the closest stored content.
 

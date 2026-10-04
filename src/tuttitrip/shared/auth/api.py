@@ -15,6 +15,7 @@ from tuttitrip.shared.auth.services.token_verifier import (
     TokenVerifier,
 )
 from tuttitrip.shared.config.settings import get_settings
+from tuttitrip.shared.constants import BEARER_SCHEME, WWW_AUTHENTICATE_HEADER
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -29,7 +30,7 @@ class UnauthorizedError(HTTPException):
         super().__init__(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=detail,
-            headers={"WWW-Authenticate": "Bearer"},
+            headers={WWW_AUTHENTICATE_HEADER: BEARER_SCHEME},
         )
 
 

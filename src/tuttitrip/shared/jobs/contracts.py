@@ -17,6 +17,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from tuttitrip.shared.jobs.constants import LOCAL_PROVIDER
+
 CONTRACT_VERSION = 1
 WORKER_APPLICATION_NAME = "tuttitrip-worker"
 PROGRESS_EVENT = "progress"
@@ -418,7 +420,7 @@ def queue_for(provider: ProviderName) -> Queue:
     Returns:
         ``local_llm`` for the local GPU model, ``openrouter`` otherwise.
     """
-    return Queue.LOCAL_LLM if provider == "local" else Queue.OPENROUTER
+    return Queue.LOCAL_LLM if provider == LOCAL_PROVIDER else Queue.OPENROUTER
 
 
 type JSON = dict[str, JSON] | list[JSON] | str | int | float | bool | None

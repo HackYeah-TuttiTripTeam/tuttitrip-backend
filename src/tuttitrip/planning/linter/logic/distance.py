@@ -2,9 +2,10 @@
 
 from tuttitrip.planning.linter.logic.rule import Rule, stops_by_day
 from tuttitrip.planning.linter.schemas import Finding, LintContext, LintPlan, Severity
+from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 
 CODE = "distance"
-SEGMENT_KM_FACTOR = 1.5
+SEGMENT_KM_FACTOR = DEFAULT_PARAMS.segment_factor
 """E0: a segment over this many times ``s_i`` is out; up to ``s_i`` is free."""
 
 _EPS = 1e-9
