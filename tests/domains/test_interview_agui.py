@@ -36,6 +36,7 @@ from tuttitrip.interview.services import interview_agent as interview_agent_modu
 from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.main import create_app
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
+from tuttitrip.shared.config.settings import get_settings
 from tuttitrip.shared.db.api import get_session
 from tuttitrip.trips.schemas import TripMembership, TripRole
 from tuttitrip.trips.services import trip_service
@@ -182,6 +183,42 @@ def test_stream_follows_the_ag_ui_lifecycle_and_snapshots_after_tools(
     assert snapshot["snapshot"]["knowledge"]["trip"]["destination"] == "Gdańsk"
     assert kinds.index("STATE_SNAPSHOT") > kinds.index("TOOL_CALL_END")
     assert world.trip.destination == "Gdańsk"
+
+
+def test_a_question_typed_without_a_card_still_ends_with_the_card_on_the_stream(
+    client: TestClient,
+    world: World,
+    store: Store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = get_settings()
+    interview = settings.interview.model_copy(update={"card_nudges": 1})
+    monkeypatch.setattr(
+        interview_agent_module,
+        "get_settings",
+        lambda: settings.model_copy(update={"interview": interview}),
+    )
+    model = scripted(
+        "Dokąd jedziecie?",
+        ToolCallPart(
+            "show_card",
+            {"kind": "choice", "question": "Dokąd jedziecie?", "field": "destination"},
+        ),
+        "Wybierz miasto.",
+    )
+    with interview_agent.override(model=model):
+        stream = events(turn(client, world, "Cześć"))
+
+    card = next(e for e in stream if e["type"] == "STATE_SNAPSHOT")["snapshot"]["card"]
+    assert card == {
+        "kind": "city",
+        "question": "Dokąd jedziecie?",
+        "field": "destination",
+        "person_id": None,
+        "options": [],
+    }
+    assert types(stream)[-1] == "RUN_FINISHED"
+    assert len(store.appended) == 1
 
 
 def test_the_turn_is_stored_and_the_next_turn_gets_it_as_history(

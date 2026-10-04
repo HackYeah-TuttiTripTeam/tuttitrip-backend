@@ -32,7 +32,15 @@ _MISSING_KNOWLEDGE = {
 }
 
 
-def _options(field: QuestionField) -> list[str]:
+def options_for(field: QuestionField) -> list[str]:
+    """The choices the server fixes for a question; empty when the answer is free.
+
+    Args:
+        field: What the question is about.
+
+    Returns:
+        The option values (the card shows them as they are).
+    """
     match field:
         case QuestionField.IMPORTANCE:
             return [d.value for d in ImportanceDomain]
@@ -63,7 +71,7 @@ def _question(field: QuestionField, person: ProfileRead | None) -> NextQuestion:
         field=field,
         card_kind=constants.CARD_OF_FIELD[field],
         person_id=person.id if person else None,
-        options=_options(field),
+        options=options_for(field),
     )
 
 
