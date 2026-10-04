@@ -199,6 +199,8 @@ class PhotoSettings(BaseModel):
     max_thumbnail_bytes: int = Field(default=60_000, ge=1)
     # Photos one trip may hold (database and backup size).
     max_per_trip: int = Field(default=200, ge=1)
+
+
 class LocationSettings(BaseModel):
     """Trip location sharing: how long a shared position stays valid."""
 

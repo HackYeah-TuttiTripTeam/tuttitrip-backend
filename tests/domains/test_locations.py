@@ -236,7 +236,7 @@ def test_removed_member_loses_consent_and_position(
     client.put(_p("set_my_consent"), json={})
     client.put(_p("update_my_position"), json=POSITION)
     assert state.rows
-    asyncio.run(member_service.member_left(AsyncMock(), TRIP, MY_PROFILE))
+    asyncio.run(member_service.member_left(AsyncMock(), TRIP, MY_PROFILE, ME.sub))
     assert state.consent is None
     assert not state.rows
 
