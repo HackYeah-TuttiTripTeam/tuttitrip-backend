@@ -63,6 +63,8 @@ class PlanningPerson(_Frozen):
         description="Effective sensitivity (1.0 with the stairs or wheelchair limit).",
     )
     queue_patience_min: int = Field(ge=0, description="Queue the person tolerates.")
+    nap_start: time | None = Field(default=None, description="Fixed break for the day.")
+    nap_minutes: int = Field(default=0, ge=0)
     floor: float = Field(ge=0, le=100, description="f_i: minimum welfare.")
     votes: dict[UUID, Vote] = Field(
         default_factory=dict, description="v_ip by place id."
