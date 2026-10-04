@@ -321,7 +321,9 @@ class PlanEvaluator:
         )
         objective = group_objective(
             [
-                PersonOutcome(person, s.welfare, self.floors.get(person.id, person.floor))
+                PersonOutcome(
+                    person, s.welfare, self.floors.get(person.id, person.floor)
+                )
                 for person, s in zip(self.people, scores, strict=True)
             ],
             days=days,
