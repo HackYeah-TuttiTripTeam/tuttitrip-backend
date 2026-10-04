@@ -17,10 +17,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions import db
 from tuttitrip.shared.permissions.models import AccessToken
 from tuttitrip.shared.permissions.schemas import (
     AccessTokenCreated,
+    AccessTokenQuery,
     AccessTokenRead,
     TokenAccess,
     TokenScope,
@@ -60,6 +62,8 @@ class NewToken:
     profile_id: UUID
     created_by: str
     ttl: timedelta
+    replace_existing: bool = False
+    """Revoke the profile's working tokens of this scope in the same transaction."""
 
 
 async def create_token(session: AsyncSession, new: NewToken) -> AccessTokenCreated:
@@ -76,7 +80,9 @@ async def create_token(session: AsyncSession, new: NewToken) -> AccessTokenCreat
         TooManyTokensError: The profile already has 5 active tokens.
     """
     now = datetime.now(UTC)
-    if await db.count_active_access_tokens(session, new.profile_id, now) >= (
+    if new.replace_existing:
+        await db.revoke_active_tokens(session, new.profile_id, new.scope, now)
+    if await db.count_active_access_tokens(session, new.profile_id, new.scope, now) >= (
         MAX_ACTIVE_PER_PROFILE
     ):
         raise TooManyTokensError
@@ -188,6 +194,59 @@ async def revoke_token(
         TokenNotFoundError: No such token on this profile.
     """
     row = await db.select_access_token(session, token_id, trip_id, profile_id)
+    if row is None:
+        raise TokenNotFoundError
+    if row.revoked_at is None:
+        row.revoked_at = datetime.now(UTC)
+        await session.commit()
+    return AccessTokenRead.model_validate(row)
+
+
+async def list_trip_tokens(
+    session: AsyncSession,
+    trip_id: UUID,
+    scope: TokenScope,
+    query: AccessTokenQuery,
+) -> Page[AccessTokenRead]:
+    """One page of a trip's tokens of one scope (never the secret).
+
+    Args:
+        session: Open session.
+        trip_id: Trip the caller was checked for.
+        scope: Token scope.
+        query: Page, sort, direction and filters.
+
+    Returns:
+        The page.
+    """
+    page = await db.select_trip_tokens_page(
+        session, trip_id, scope, query, datetime.now(UTC)
+    )
+    return Page[AccessTokenRead].of(
+        [AccessTokenRead.model_validate(row) for row in page.items],
+        page.total,
+        query,
+    )
+
+
+async def revoke_trip_token(
+    session: AsyncSession, token_id: UUID, trip_id: UUID, scope: TokenScope
+) -> AccessTokenRead:
+    """Revoke a token of one scope on a trip (idempotent).
+
+    Args:
+        session: Open session.
+        token_id: Token id.
+        trip_id: Trip the caller was checked for.
+        scope: Token scope.
+
+    Returns:
+        The token's data.
+
+    Raises:
+        TokenNotFoundError: No such token on this trip and scope.
+    """
+    row = await db.select_trip_token(session, token_id, trip_id, scope)
     if row is None:
         raise TokenNotFoundError
     if row.revoked_at is None:

@@ -287,6 +287,7 @@ def test_me_returns_identity_and_flattened_permissions(client: TestClient) -> No
             "trips.core": "WRITE",
             "trips.members": "WRITE",
             "trips.invitations": "WRITE",
+            "trips.vote_links": "WRITE",
         },
     }
 
@@ -328,6 +329,7 @@ def test_feature_tree_for_admins(client: TestClient) -> None:
         "trips.core",
         "trips.members",
         "trips.invitations",
+        "trips.vote_links",
     ]
     assert trips["description"] == "Wyjazdy"
 

@@ -96,6 +96,7 @@ class Feature(StrEnum):
     TRIPS_CORE = "trips.core"
     TRIPS_MEMBERS = "trips.members"
     TRIPS_INVITATIONS = "trips.invitations"
+    TRIPS_VOTE_LINKS = "trips.vote_links"
 
     PROFILES = "profiles"
     PROFILES_CORE = "profiles.core"
@@ -173,6 +174,7 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.TRIPS_CORE: "Wyjazd: tworzenie, lista i dane podstawowe",
     Feature.TRIPS_MEMBERS: "Uczestnicy wyjazdu i ich role",
     Feature.TRIPS_INVITATIONS: "Zaproszenia na wyjazd",
+    Feature.TRIPS_VOTE_LINKS: "Linki głosowe dla osób bez konta i wynik głosowania",
     Feature.PROFILES: "Profile osób na wyjeździe",
     Feature.PROFILES_CORE: "Profile: osoby, wagi, grupy wiekowe",
     Feature.PROFILES_PREFERENCES: "Preferencje uczestników",

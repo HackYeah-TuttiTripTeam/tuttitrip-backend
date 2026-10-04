@@ -165,15 +165,22 @@ async def get_token_access(
             validation error would echo the secret back.
     """
     if not token:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing access token")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Missing access token",
+            headers=NO_STORE_HEADERS,
+        )
     try:
         return await token_service.authenticate(session, token)
     except token_service.InvalidTokenError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND) from None
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND, headers=NO_STORE_HEADERS
+        ) from None
 
 
 TokenAccessDep = Annotated[TokenAccess, Depends(get_token_access)]
 NO_STORE = "no-store"
+NO_STORE_HEADERS = {"Cache-Control": NO_STORE}
 TOKEN_NOT_FOUND = "Not found"  # ruff: ignore[hardcoded-password-string] a message, not a secret
 
 
@@ -198,7 +205,9 @@ class TokenRequirement:
             response: The response (gets ``Cache-Control: no-store``).
         """
         if access.scope != self.scope:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND)
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, TOKEN_NOT_FOUND, headers=NO_STORE_HEADERS
+            )
         response.headers["Cache-Control"] = NO_STORE
         await token_service.touch(session, access.token_id)
 
