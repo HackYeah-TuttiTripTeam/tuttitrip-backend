@@ -18,7 +18,9 @@ PACKAGE = "tuttitrip"
 PACKAGE_ROOT = Path(tuttitrip.__file__).parent
 SHARED = "shared"
 LAYER_PACKAGES = frozenset({"services", "logic"})
-DOMAIN_FILES = frozenset({"__init__.py", "api.py", "schemas.py", "models.py", "db.py"})
+DOMAIN_FILES = frozenset(
+    {"__init__.py", "api.py", "schemas.py", "models.py", "db.py", "constants.py"}
+)
 REQUIRED_DOMAIN_FILES = ("__init__.py", "api.py", "schemas.py", "services/__init__.py")
 
 

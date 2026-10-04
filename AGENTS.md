@@ -57,7 +57,7 @@ src/tuttitrip/
   trips/               reference slice: api -> services -> db -> models; TripAccess
   profiles/            people on a trip (weights, age groups)
   voting/              vote links for people without an account, host's vote summary
-  interview/           AI interview agent (AG-UI endpoint goes here)
+  interview/           AI interview: AG-UI endpoint, tools, question order, voice
   planning/            planner agent; subdomains fairness/ and linter/
                        algorithm spec (canonical for planning/**/logic): docs/algorytm.md
   accommodation/       requirements contract (met/unmet/unconfirmed)
@@ -454,6 +454,30 @@ stdio (FastMCP pomija tam `auth`). Konfiguracja Auth0 jest w README.
 - Nowy zasób z właścicielem (inny niż wyjazd): ten sam wzorzec w jego domenie,
   czyli tabela członkostwa albo `owner_sub`, serwis z `get_membership`
   i zależność w `api.py`. Bez ogólnych ACL per obiekt.
+
+## Interview (`interview/`)
+
+- The agent runs on Qwen (`tuttitrip:agent`, then OpenRouter) in this backend,
+  not as a worker job, because the host waits for it (decision D2). It only
+  drafts: tools write through `trips` and `profiles` services with the
+  membership from `deps` (`InterviewDeps`), never from tool arguments, and call
+  `mark_assistant_values` after every write so "who set this" stays right.
+- `POST /trips/{trip_id}/interview/agui` speaks AG-UI 1.0 through
+  `AGUIAdapter`, subclassed in `services/agui_service.py`. The **only** client
+  input used is the text of the last user message (the `user_prompt` of the run);
+  the stored session history is the `message_history`, `result.new_messages()` is
+  appended on completion, and the client's `messages`, `state`, `tools` and
+  `resume` are ignored. One run per session (`run_guard`, 409), at most
+  `interview.run_timeout_seconds` long. Run errors are a Polish `RUN_ERROR`
+  with a `code` (`spend_limit`, `timeout`, `unavailable`, `error`).
+- The adapter subclass lives in `services`, so `api.py` imports no `pydantic_ai`
+  and the architecture rules need no exception.
+- The next question is `interview/logic/next_question.py` (pure, explicit
+  table in `constants.py`); the model only words it and shows it with the
+  `show_card` tool. The host's answer to a card is the text of their next message.
+- Tests: `FunctionModel` through `tests/shared/interview_world.py` (real
+  services over an in-memory trip). Voice: `services/voice_service.py`, tested
+  with the realtime session replaced; the real session is checked on a deployment.
 
 ## Wejście jury jednym linkiem (domena `demo`)
 

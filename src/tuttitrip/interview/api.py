@@ -1,11 +1,13 @@
 """Interview endpoints: the session of a trip and its "What we already know" view.
 
-The AG-UI endpoint (issue #56) uses the session id as ``threadId``.
+``POST .../agui`` is the AG-UI endpoint of the text interview; the session id is
+its ``threadId``.
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 
 from tuttitrip.interview.schemas import (
     InterviewSessionRead,
@@ -13,7 +15,7 @@ from tuttitrip.interview.schemas import (
     MessagesQuery,
     SessionRead,
 )
-from tuttitrip.interview.services import session_service
+from tuttitrip.interview.services import agui_service, run_guard, session_service
 from tuttitrip.interview.services.session_service import (
     HistoryIncompatibleError,
     SessionNotFoundError,
@@ -27,6 +29,7 @@ from tuttitrip.trips.services.trip_service import TripNotFoundError
 router = APIRouter(prefix="/trips/{trip_id}/interview", tags=["interview"])
 
 NO_SESSION = "The trip has no open interview session"
+BUSY = "Another turn of this interview is still running"
 
 
 @router.post(
@@ -106,3 +109,66 @@ async def get_knowledge(membership: TripCoHost, session: SessionDep) -> Knowledg
         return await session_service.get_knowledge(session, membership)
     except TripNotFoundError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, TRIP_NOT_FOUND) from exc
+
+
+@router.post(
+    "/agui",
+    response_class=StreamingResponse,
+    responses={
+        status.HTTP_200_OK: {
+            "content": {"text/event-stream": {}},
+            "description": "AG-UI 1.0 events (SSE) of one turn.",
+        },
+        status.HTTP_404_NOT_FOUND: {"description": "No such session on this trip."},
+        status.HTTP_409_CONFLICT: {
+            "description": "A turn is running, or the history is unreadable."
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "Not a RunAgentInput, bad threadId, or no user text."
+        },
+    },
+    dependencies=[requires(Feature.INTERVIEW, Access.WRITE)],
+)
+async def run_turn(
+    request: Request, membership: TripCoHost, session: SessionDep
+) -> StreamingResponse:
+    """Run one turn of the text interview and stream it as AG-UI events (SSE).
+
+    Body: AG-UI `RunAgentInput` with `threadId` = the session id from
+    `POST .../sessions`. Only the text of the **last user message** is used:
+    the server keeps the history, the tools and the state, and ignores the
+    client's `state`, `tools`, `resume` and earlier messages. The answer to a
+    card is that text too. Events: `RUN_STARTED`, `TEXT_MESSAGE_*`,
+    `TOOL_CALL_*`, `STATE_SNAPSHOT` (`InterviewState`) after every tool that
+    changes the panel or the card, and `RUN_FINISHED` or `RUN_ERROR` (Polish
+    `message`, `code`: `spend_limit`, `timeout`, `unavailable`, `error`). One
+    turn per session at a time.
+
+    Args:
+        request: The AG-UI request.
+        membership: The caller's membership (co-host or above).
+        session: Database session (history is read before the stream starts).
+
+    Returns:
+        The SSE stream.
+    """
+    try:
+        parsed = agui_service.read_request(await request.body())
+        history = await session_service.load_history(
+            session, membership, parsed.thread_id
+        )
+        deps = agui_service.new_deps(membership, parsed.thread_id)
+        stream = agui_service.start(
+            parsed, request.headers.get("accept"), deps, history
+        )
+    except agui_service.PromptError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except SessionNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, NO_SESSION) from exc
+    except HistoryIncompatibleError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except run_guard.SessionBusyError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, BUSY) from exc
+    return StreamingResponse(
+        stream.body, media_type=stream.media_type, headers=dict(stream.headers or {})
+    )
