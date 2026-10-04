@@ -320,6 +320,9 @@ def _post_client(
     host = AsyncMock()
     monkeypatch.setattr(trip_service.db, "insert_trip", insert)
     monkeypatch.setattr(profile_service, "create_host_profile", host)
+    monkeypatch.setattr(
+        trip_service.place_service, "find_city_slug", AsyncMock(return_value=None)
+    )
     app = create_app()
     authorize(app, BOB)
     app.dependency_overrides[get_session] = lambda: session
