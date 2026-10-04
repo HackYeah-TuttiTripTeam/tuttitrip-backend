@@ -1,6 +1,7 @@
 """Expense queries on PostgreSQL."""
 
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import Select, delete, exists, func, select
@@ -329,4 +330,7 @@ async def select_day_totals(
         .order_by(Expense.spent_on, Expense.category)
     )
     rows = (await session.execute(stmt)).all()
-    return [ExpenseDayTotal(spent_on=d, category=c, amount=a) for d, c, a in rows]
+    return [
+        ExpenseDayTotal(spent_on=d, category=c, amount=a or Decimal(0))
+        for d, c, a in rows
+    ]

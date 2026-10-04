@@ -21,6 +21,7 @@ from tuttitrip.expenses.models import Expense, ExpenseShare
 from tuttitrip.expenses.schemas import (
     ExchangeRateRead,
     ExpenseCreate,
+    ExpenseDayTotal,
     ExpenseErrorCode,
     ExpenseQuery,
     ExpenseRead,

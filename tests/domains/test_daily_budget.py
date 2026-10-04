@@ -1,13 +1,19 @@
 """Budget of each day, the overrun and the proposal for the rest (backend#89)."""
 
+import asyncio
 import datetime as dt
 from decimal import Decimal
+from typing import Any
+from uuid import uuid4
 
 import pytest
+from sqlalchemy import Select
+from sqlalchemy.dialects import postgresql
 
 from tests.domains.test_planning_properties import assignment_of
 from tests.fixtures.planning import planning_input
 from tests.fixtures.scenarios import reference
+from tuttitrip.expenses.db import select_day_totals
 from tuttitrip.expenses.schemas import ExpenseCategory, ExpenseDayTotal
 from tuttitrip.planning.budget.logic.daily_budget import (
     DayBudget,
@@ -214,3 +220,23 @@ def test_a_proposal_never_goes_over_the_budget_of_the_rest(amount: int) -> None:
     found = propose_rest(rest, DEFAULT_PARAMS, alpha=1.0, assignment=previous)
     if found is not None:
         assert found.decision.chosen.plan.cost.total <= rest.trip.budget_max
+
+
+class _Capture:
+    def __init__(self) -> None:
+        self.sql = ""
+        self.rows: list[Any] = []
+
+    async def execute(self, statement: Select[Any]) -> _Capture:
+        self.sql = str(statement.compile(dialect=postgresql.dialect()))
+        return self
+
+    def all(self) -> list[Any]:
+        return self.rows
+
+
+def test_day_totals_sum_confirmed_expenses_in_the_trip_currency_only() -> None:
+    session = _Capture()
+    assert asyncio.run(select_day_totals(session, uuid4())) == []  # ty: ignore[invalid-argument-type]
+    assert "expenses.status =" in session.sql  # drafts do not count
+    assert "sum(expenses.trip_amount)" in session.sql
