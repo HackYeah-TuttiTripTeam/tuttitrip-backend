@@ -228,7 +228,10 @@ def test_a_user_sees_the_tools(client: TestClient) -> None:
 def test_without_planning_fairness_the_ledger_tool_is_hidden(
     client: TestClient, grants: AsyncMock
 ) -> None:
-    grants.return_value = [g for g in USER_GRANTS if g.feature != "planning.fairness"]
+    grants.return_value = (
+        [g for g in USER_GRANTS if g.feature != "planning.fairness"],
+        False,
+    )
     assert "get_fairness" not in tool_names(client)
     assert "get_plan" in tool_names(client)
 
@@ -271,7 +274,7 @@ def test_grants_are_loaded_once_per_request(
 def test_a_superadmin_claim_needs_no_stored_grants(
     client: TestClient, grants: AsyncMock
 ) -> None:
-    grants.return_value = []
+    grants.return_value = ([], False)
     names = tool_names(client, token(**{ROLES_CLAIM: ["admin"]}))
     assert names == ALL_TOOLS
     grants.assert_not_awaited()

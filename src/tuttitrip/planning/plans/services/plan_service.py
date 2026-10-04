@@ -414,8 +414,9 @@ async def measure_impacts(
         PlanInputError: The trip cannot be planned (no city, unknown city).
     """
     planning, _names, alpha = await gather_input(session, membership, assumptions)
+    version, params = await parameters_service.current(session)
     await session.rollback()  # do not hold a transaction while computing
-    key = (input_hash(planning, alpha, "impact", DEFAULT_PARAMS), targets)
+    key = (input_hash(planning, alpha, "impact", params, version), targets)
     if (cached := impact_cache.get(key)) is not None:
         return cached
     scores = await anyio.to_thread.run_sync(
@@ -423,7 +424,7 @@ async def measure_impacts(
             what_if.impacts,
             planning,
             targets,
-            DEFAULT_PARAMS,
+            params,
             alpha=alpha,
             budget_seconds=budget_seconds,
         )
