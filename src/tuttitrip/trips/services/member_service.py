@@ -153,3 +153,17 @@ async def remove_member(
     await profile_service.unlink_account(session, membership, profile_id)
     await member_left(session, membership.trip_id, profile_id)
     await session.commit()
+
+
+async def organizer_subs(session: AsyncSession, trip_id: UUID) -> list[str]:
+    """Accounts of the host and the co-hosts: who gets organizer notifications.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+
+    Returns:
+        Auth0 subjects of everyone with at least the co-host role.
+    """
+    roles = await db.select_member_roles(session, trip_id)
+    return [sub for sub, role in roles.items() if role.satisfies(TripRole.CO_HOST)]
