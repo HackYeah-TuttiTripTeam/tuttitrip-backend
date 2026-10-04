@@ -37,7 +37,6 @@ from tests.shared.interview_world import World
 from tests.shared.paths import path
 from tuttitrip.interview.schemas import SessionStatus
 from tuttitrip.interview.services import session_service, voice_service
-from tuttitrip.interview.services.interview_agent import interview_agent
 from tuttitrip.main import create_app
 from tuttitrip.shared.auth.schemas import AuthenticatedUser
 from tuttitrip.shared.db.api import get_session
@@ -413,4 +412,3 @@ def test_the_interview_agent_resolves_its_tools_and_instructions_for_realtime(
     )
     assert model.instructions is not None
     assert "voice call" in model.instructions
-    assert interview_agent is not None

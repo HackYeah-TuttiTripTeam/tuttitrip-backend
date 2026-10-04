@@ -49,8 +49,6 @@ MAX_FREE_TEXT: Final = 300
 TOKENS_PER_PRICE_UNIT: Final = 1_000_000
 """Token prices are given per million tokens."""
 
-SSE_MEDIA_TYPE: Final = "text/event-stream"
-"""Media type of the AG-UI stream."""
 
 MAX_TRIP_DAYS: Final = 60
 """Longest trip the assistant plans in one go."""
