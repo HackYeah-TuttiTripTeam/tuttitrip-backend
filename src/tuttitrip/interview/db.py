@@ -1,8 +1,9 @@
 """Interview queries on PostgreSQL."""
 
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -119,3 +120,76 @@ async def upsert_assistant_digest(
             set_={"digest": digest, "updated_at": func.now()},
         )
     )
+
+
+async def try_start_run(
+    session: AsyncSession,
+    trip_id: UUID,
+    session_id: UUID,
+    ttl_seconds: float,
+    voice_limit: int | None,
+) -> datetime | None:
+    """Claim the session for one run; atomic, so two callers cannot both win.
+
+    Args:
+        session: Open session (the claim is committed).
+        trip_id: Trip id (a session of another trip does not match).
+        session_id: Session id.
+        ttl_seconds: After this long the claim counts as abandoned.
+        voice_limit: For a voice call, the seconds the interview may use in all.
+
+    Returns:
+        The claim's expiry (the token for ``end_run``), or None when the session
+        is missing, busy or out of voice time.
+    """
+    now = func.now()
+    free = or_(
+        InterviewSession.running_until.is_(None), InterviewSession.running_until < now
+    )
+    conditions = [
+        InterviewSession.id == session_id,
+        InterviewSession.trip_id == trip_id,
+        free,
+    ]
+    if voice_limit is not None:
+        conditions.append(InterviewSession.voice_seconds < voice_limit)
+    stmt = (
+        update(InterviewSession)
+        .where(*conditions)
+        .values(running_until=now + func.make_interval(0, 0, 0, 0, 0, 0, ttl_seconds))
+        .returning(InterviewSession.running_until)
+    )
+    claimed = await session.scalar(stmt)
+    await session.commit()
+    return claimed
+
+
+async def end_run(
+    session: AsyncSession, session_id: UUID, token: datetime, voice_seconds: int
+) -> None:
+    """Release a claim and book the voice time it used.
+
+    The release is skipped when the claim expired and someone else took the
+    session since; the voice time is booked either way.
+
+    Args:
+        session: Open session (committed).
+        session_id: Session id.
+        token: The expiry ``try_start_run`` returned.
+        voice_seconds: Seconds of voice to add (0 for a text turn).
+    """
+    await session.execute(
+        update(InterviewSession)
+        .where(
+            InterviewSession.id == session_id,
+            InterviewSession.running_until == token,
+        )
+        .values(running_until=None)
+    )
+    if voice_seconds:
+        await session.execute(
+            update(InterviewSession)
+            .where(InterviewSession.id == session_id)
+            .values(voice_seconds=InterviewSession.voice_seconds + voice_seconds)
+        )
+    await session.commit()

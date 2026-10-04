@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Final
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,22 +12,79 @@ from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.shared.pagination.schemas import ListFilters, Page, PageParams
 from tuttitrip.trips.schemas import TripRead
 
+MAX_SDP_CHARS: Final = 100_000
+"""Longest SDP offer the voice endpoint accepts, in characters."""
+
 
 class CardKind(StrEnum):
-    """UI card the web client renders for a question."""
+    """UI card the web client renders for a question (the cards of plan.md)."""
 
-    CHOICE = "choice"
+    FAMILY_BUILDER = "family_builder"
     SLIDER = "slider"
+    REQUIREMENT_TOGGLES = "requirement_toggles"
+    SWIPE = "swipe"
     DOT_POOL = "dot_pool"
-    TEXT = "text"
+    BUDGET_RANGE = "budget_range"
+    CHOICE = "choice"
+    CONFIRM = "confirm"
 
 
-class InterviewCard(BaseModel):
-    """Next question to ask the organizer."""
+class QuestionField(StrEnum):
+    """What a question is about; finer than ``KnowledgeField``."""
+
+    DESTINATION = "destination"
+    DATES = "dates"
+    PEOPLE = "people"
+    BUDGET = "budget"
+    PACE = "pace"
+    IMPORTANCE = "importance"
+    REQUIREMENTS = "requirements"
+    INTERESTS = "interests"
+    DIET = "diet"
+
+
+class QuestionKey(BaseModel):
+    """One question to one person, or to the group when ``person_id`` is empty."""
+
+    model_config = ConfigDict(frozen=True)
+
+    field: QuestionField
+    person_id: UUID | None = None
+
+
+class NextQuestion(QuestionKey):
+    """The next thing to ask, chosen by code from the missing data.
+
+    ``options`` come from the logic or the catalog, never from the model. An empty
+    list on a ``choice`` card means a free answer.
+    """
+
+    card_kind: CardKind
+    options: list[str] = Field(default_factory=list)
+
+
+class ShownCard(BaseModel):
+    """The card the assistant put on screen (``show_card`` of the AG-UI state).
+
+    The host's answer is not a tool result: the client sends it as the text of
+    the next user message (a JSON object is fine; the assistant reads it).
+    """
 
     kind: CardKind
     question: str = Field(min_length=1)
+    field: QuestionField | None = None
+    person_id: UUID | None = None
     options: list[str] = Field(default_factory=list)
+
+
+class ConstraintKind(StrEnum):
+    """Yes/no access limits of a person (the flags of ``Constraints``)."""
+
+    WHEELCHAIR = "wheelchair"
+    STAIRS = "stairs"
+    HEAT = "heat"
+    COLD = "cold"
+    AUDIO_DESCRIPTION = "audio_description"
 
 
 class SessionStatus(StrEnum):
@@ -147,3 +205,29 @@ class KnowledgeRead(BaseModel):
     sources: list[FieldSource] = Field(
         description="Who set each filled value; a value the host changed is `host`."
     )
+
+
+class InterviewState(BaseModel):
+    """The AG-UI shared state, sent as ``STATE_SNAPSHOT`` after the tools.
+
+    Built by the server on every turn. The ``state`` of a client request is
+    ignored.
+    """
+
+    knowledge: KnowledgeRead | None = Field(
+        default=None, description='The "What we already know" panel.'
+    )
+    card: ShownCard | None = Field(default=None, description="The card to render.")
+
+
+class VoiceOffer(BaseModel):
+    """The browser's WebRTC offer."""
+
+    sdp: str = Field(min_length=1, max_length=MAX_SDP_CHARS, description="SDP offer.")
+
+
+class VoiceAnswer(BaseModel):
+    """The provider's answer; the server's sideband is already attached."""
+
+    sdp: str = Field(description="SDP answer: set it as the remote description.")
+    call_id: str = Field(description="Use it to hang up.")

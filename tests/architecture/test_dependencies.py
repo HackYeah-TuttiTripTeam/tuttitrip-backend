@@ -132,7 +132,7 @@ def test_pure_modules_do_not_reach_frameworks(framework: str) -> None:
     # Pure = every `logic` package and every `schemas.py` (transitive check).
     (
         archrule("pure logic and DTOs are framework-free", use_regex=True)
-        .match(r"\.logic(\.|$)", r"\.schemas$")
+        .match(r"\.logic(\.|$)", r"\.schemas$", r"\.constants$")
         .should_not_import(rf"^{framework}(\.|$)")
         .check(PACKAGE)
     )
