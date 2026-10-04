@@ -1,7 +1,7 @@
 """Trip member participation status (pending, confirmed).
 
 Revision ID: b9e249a27e27
-Revises: b81e5c2a7d14
+Revises: 477ae4f2a2d8
 Create Date: 2026-10-04 02:10:59.884386
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b9e249a27e27"
-down_revision: str | None = "b81e5c2a7d14"
+down_revision: str | None = "477ae4f2a2d8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
