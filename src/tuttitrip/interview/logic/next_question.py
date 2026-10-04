@@ -67,14 +67,54 @@ def _question(field: QuestionField, person: ProfileRead | None) -> NextQuestion:
     )
 
 
-def next_question(
+def open_questions(
     knowledge: KnowledgeRead, asked: Collection[QuestionKey] = frozenset()
-) -> NextQuestion | None:
-    """Pick the next question, or none when there is nothing left to ask.
+) -> list[NextQuestion]:
+    """The next question of every field that still has one, in the fixed order.
 
     A trip-level field is asked until it is filled, including a value the host
     set or corrected. A question about a person is asked once, and never for a
-    person whose preferences the host filled in themselves.
+    person whose preferences the host filled in themselves. Of a person field
+    the first person who has not been asked is the candidate.
+
+    Args:
+        knowledge: The "What we already know" view.
+        asked: Questions the assistant already put on screen.
+
+    Returns:
+        At most one question per field: the group fields in table order, then
+        the person fields in table order.
+    """
+    missing = set(knowledge.missing)
+    found = [
+        _question(field, None)
+        for field in constants.GROUP_FIELDS
+        if _MISSING_KNOWLEDGE[field] in missing
+    ]
+    by_host = _host_filled(knowledge)
+    people = [p for p in _slowest_first(knowledge.people) if p.id not in by_host]
+    for field in constants.PERSON_FIELDS:
+        targets = people[:1] if field in constants.SLOWEST_ONLY else people
+        person = next(
+            (
+                p
+                for p in targets
+                if QuestionKey(field=field, person_id=p.id) not in asked
+            ),
+            None,
+        )
+        if person is not None:
+            found.append(_question(field, person))
+    return found
+
+
+def next_question(
+    knowledge: KnowledgeRead, asked: Collection[QuestionKey] = frozenset()
+) -> NextQuestion | None:
+    """Pick the next question by the fixed table, or none when nothing is left.
+
+    This is the order used when the impact on the plan cannot be measured
+    (``informativeness.pick`` otherwise chooses among ``open_questions``).
 
     Args:
         knowledge: The "What we already know" view.
@@ -83,15 +123,32 @@ def next_question(
     Returns:
         The question with the card to show, or ``None``.
     """
-    missing = set(knowledge.missing)
-    for field in constants.GROUP_FIELDS:
-        if _MISSING_KNOWLEDGE[field] in missing:
-            return _question(field, None)
-    by_host = _host_filled(knowledge)
-    people = [p for p in _slowest_first(knowledge.people) if p.id not in by_host]
-    for field in constants.PERSON_FIELDS:
-        targets = people[:1] if field in constants.SLOWEST_ONLY else people
-        for person in targets:
-            if QuestionKey(field=field, person_id=person.id) not in asked:
-                return _question(field, person)
-    return None
+    return next(iter(open_questions(knowledge, asked)), None)
+
+
+def member_question(
+    knowledge: KnowledgeRead, asked: Collection[QuestionKey] = frozenset()
+) -> NextQuestion | None:
+    """The next question for a member about themselves, or none when done.
+
+    The member is asked about their interests, limits, diet and priorities, in
+    that order, once each. Never about the trip's budget, dates or other people.
+
+    Args:
+        knowledge: The member's panel (only themselves).
+        asked: Questions the assistant already put on screen.
+
+    Returns:
+        The question with the card to show, or ``None``.
+    """
+    me = next(iter(knowledge.people), None)
+    if me is None:
+        return None
+    return next(
+        (
+            _question(field, me)
+            for field in constants.MEMBER_FIELDS
+            if QuestionKey(field=field, person_id=me.id) not in asked
+        ),
+        None,
+    )

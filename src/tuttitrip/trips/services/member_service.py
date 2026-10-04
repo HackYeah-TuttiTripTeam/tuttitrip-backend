@@ -16,6 +16,7 @@ from tuttitrip.profiles.services.profile_service import ProfileNotFoundError
 from tuttitrip.trips import db
 from tuttitrip.trips.checkins.services import checkin_service
 from tuttitrip.trips.logic import member_rules
+from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.schemas import MemberRead, MemberStatus, TripMembership, TripRole
 
 
@@ -69,7 +70,9 @@ async def _target(
     return profile, sub, *found
 
 
-async def member_left(session: AsyncSession, trip_id: UUID, profile_id: UUID) -> None:
+async def member_left(
+    session: AsyncSession, trip_id: UUID, profile_id: UUID, sub: str
+) -> None:
     """Clear what only members may keep on a trip, when one stops being a member.
 
     The single place for this cleanup: the removal route calls it, and so must
@@ -79,8 +82,10 @@ async def member_left(session: AsyncSession, trip_id: UUID, profile_id: UUID) ->
         session: Open session.
         trip_id: The trip.
         profile_id: Profile of the person who left (it stays on the trip).
+        sub: Auth0 subject of the account that left.
     """
     await checkin_service.clear_profile(session, trip_id, profile_id)
+    await photo_service.author_left(session, trip_id, sub)
 
 
 async def list_members(
@@ -143,7 +148,7 @@ async def remove_member(
 
     The account loses access (the trip is a 404 for it). The profile stays on
     the trip without an account, so the person still counts in the plan. Their
-    check-in (room number) is deleted.
+    check-in (room number) is deleted and their photos stay, unattributed.
 
     Args:
         session: Open session.
@@ -160,7 +165,7 @@ async def remove_member(
         raise MemberForbiddenError(msg)
     await db.delete_member(session, membership.trip_id, sub)
     await profile_service.unlink_account(session, membership, profile_id)
-    await member_left(session, membership.trip_id, profile_id)
+    await member_left(session, membership.trip_id, profile_id, sub)
     await session.commit()
 
 
@@ -212,6 +217,7 @@ async def leave(session: AsyncSession, membership: TripMembership) -> None:
     await db.delete_member(session, membership.trip_id, membership.sub)
     if profile_id is not None:
         await profile_service.unlink_account(session, membership, profile_id)
+        await member_left(session, membership.trip_id, profile_id, membership.sub)
     await session.commit()
 
 
@@ -242,3 +248,19 @@ async def transfer_host(
     )
     await session.commit()
     return _read(profile, TripRole.HOST, status, membership.sub)
+
+
+async def organizer_subs(session: AsyncSession, trip_id: UUID) -> list[str]:
+    """Accounts of the host and the co-hosts: who gets organizer notifications.
+
+    Args:
+        session: Open session.
+        trip_id: The trip.
+
+    Returns:
+        Auth0 subjects of everyone with at least the co-host role.
+    """
+    members = await db.select_members(session, trip_id)
+    return [
+        sub for sub, (role, _) in members.items() if role.satisfies(TripRole.CO_HOST)
+    ]

@@ -6,6 +6,7 @@ Run with ``uvicorn tuttitrip.main:app``.
 """
 
 import logging
+import re
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -21,6 +22,8 @@ from tuttitrip.expenses.api import router as expenses_router
 from tuttitrip.expenses.settlement.api import router as settlement_router
 from tuttitrip.interview.api import router as interview_router
 from tuttitrip.mcp.api import create_mcp_app
+from tuttitrip.notifications.api import router as notifications_router
+from tuttitrip.notifications.services import notification_service
 from tuttitrip.places.api import router as places_router
 from tuttitrip.planning.api import router as planning_router
 from tuttitrip.planning.fairness.api import router as fairness_router
@@ -33,6 +36,7 @@ from tuttitrip.profiles.preferences.api import router as preferences_router
 from tuttitrip.search.api import router as search_router
 from tuttitrip.shared.admin_users.api import router as admin_users_router
 from tuttitrip.shared.admin_users.services import erasure
+from tuttitrip.shared.bodylimit.api import BodyLimit, BodyLimitMiddleware
 from tuttitrip.shared.config.settings import Settings, get_settings
 from tuttitrip.shared.db.session import dispose_engine
 from tuttitrip.shared.errors.api import register_error_handlers
@@ -44,12 +48,16 @@ from tuttitrip.trips.api import router as trips_router
 from tuttitrip.trips.checkins.api import router as checkins_router
 from tuttitrip.trips.invitations.api import router as invitations_router
 from tuttitrip.trips.invitations.services import invitation_service
+from tuttitrip.trips.photos.api import router as photos_router
+from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.services import trip_service
 from tuttitrip.voting.api import router as voting_router
 
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
 API_PREFIX = f"/api/{API_VERSION}"
+# Room for the multipart boundaries and part headers around the two photo files.
+MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +74,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     invitations_router,
     checkins_router,
     voting_router,
+    photos_router,
     profiles_router,
     feedback_router,
     preferences_router,
@@ -80,19 +89,22 @@ ROUTERS: tuple[APIRouter, ...] = (
     settlement_router,
     search_router,
     places_router,
+    notifications_router,
 )
 
 # Domain data cleared when an administrator deletes an account.
 erasure.register(trip_service.erase_account)
 erasure.register(invitation_service.erase_account)
+erasure.register(notification_service.erase_account)
+erasure.register(photo_service.erase_account)
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
-    """Release database connections on shutdown.
+async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    """Close the notification streams and release database connections on shutdown.
 
     Args:
-        _app: The application (unused).
+        app: The application.
 
     Yields:
         Control while the app is running.
@@ -105,6 +117,9 @@ async def lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     try:
         yield
     finally:
+        hub = getattr(app.state, "notification_hub", None)
+        if hub is not None:
+            await hub.stop()
         await dispose_engine()
 
 
@@ -129,6 +144,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         redoc_url=f"{API_PREFIX}/redoc",
         swagger_ui_oauth2_redirect_url=f"{API_PREFIX}/docs/oauth2-redirect",
         lifespan=combine_lifespans(lifespan, mcp_app.lifespan) if mcp_app else lifespan,
+    )
+    photos = settings.photos
+    app.add_middleware(
+        BodyLimitMiddleware,
+        limits=[
+            BodyLimit(
+                "POST",
+                re.compile(rf"{re.escape(API_PREFIX)}/trips/[^/]+/photos"),
+                photos.max_image_bytes
+                + photos.max_thumbnail_bytes
+                + MULTIPART_OVERHEAD_BYTES,
+            )
+        ],
     )
     app.add_middleware(
         CORSMiddleware,

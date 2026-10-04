@@ -137,6 +137,14 @@ class InterviewSettings(BaseModel):
         le=1,
         description="Below this confidence a decision model's pick is only asked back.",
     )
+    impact_budget_seconds: float = Field(
+        default=3.0,
+        gt=0,
+        description=(
+            "Time the solver may spend measuring which question changes the plan "
+            "most (once per turn); past it the fixed question order is used."
+        ),
+    )
     voice_model: str = Field(
         default="openai:gpt-realtime-2.1-mini",
         description="Pydantic AI realtime model of the voice interview.",
@@ -176,6 +184,21 @@ class JobsSettings(BaseModel):
 
     worker_stale_after_seconds: int = Field(default=90, ge=1)
     worker_missing_after_seconds: int = Field(default=600, ge=1)
+
+
+class PhotoSettings(BaseModel):
+    """Limits of trip photos, which live in Postgres (``bytea``).
+
+    The browser shrinks the image and makes the thumbnail before uploading
+    (that also strips EXIF), so the limits are small on purpose.
+    """
+
+    # Largest accepted photo, bytes (after the browser's resize).
+    max_image_bytes: int = Field(default=2_000_000, ge=1)
+    # Largest accepted thumbnail, bytes; it is also inlined in the list.
+    max_thumbnail_bytes: int = Field(default=60_000, ge=1)
+    # Photos one trip may hold (database and backup size).
+    max_per_trip: int = Field(default=200, ge=1)
 
 
 class DemoSettings(BaseModel):
@@ -279,6 +302,7 @@ class Settings(BaseSettings):
     jobs: JobsSettings = Field(default_factory=JobsSettings)
     demo: DemoSettings = Field(default_factory=DemoSettings)
     mcp: McpSettings = Field(default_factory=McpSettings)
+    photos: PhotoSettings = Field(default_factory=PhotoSettings)
 
     cities: CitiesSettings = Field(default_factory=CitiesSettings)
 

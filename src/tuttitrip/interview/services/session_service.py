@@ -34,13 +34,14 @@ from pydantic_ai.messages import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tuttitrip.interview import db
+from tuttitrip.interview import constants, db
 from tuttitrip.interview.logic import knowledge
 from tuttitrip.interview.models import InterviewSession
 from tuttitrip.interview.schemas import (
     DisplayMessage,
     FieldRef,
     InterviewSessionRead,
+    KnowledgeField,
     KnowledgeRead,
     MessageRole,
     MessagesQuery,
@@ -51,7 +52,7 @@ from tuttitrip.profiles.preferences.services import preference_service
 from tuttitrip.profiles.schemas import ProfileRead
 from tuttitrip.profiles.services import profile_service
 from tuttitrip.shared.pagination.schemas import Page
-from tuttitrip.trips.schemas import TripMembership, TripRead
+from tuttitrip.trips.schemas import TripMembership, TripRead, TripRole
 from tuttitrip.trips.services import trip_service
 
 
@@ -63,8 +64,41 @@ class HistoryIncompatibleError(Exception):
     """The stored history no longer validates (e.g. after a pydantic-ai upgrade)."""
 
 
+class NoProfileError(Exception):
+    """A member has no profile on this trip, so there is nobody to interview."""
+
+
 class UnknownFieldError(Exception):
     """A value cannot be marked: it is not filled or not on this trip."""
+
+
+async def owner_profile(
+    session: AsyncSession, membership: TripMembership
+) -> UUID | None:
+    """Whose interview this is: the trip's (co-host and above) or a member's own.
+
+    The role decides, not anything the client says. A co-host or host talks about
+    the whole trip; a member talks only about themselves, through their own
+    session that nobody else can read.
+
+    Args:
+        session: Open session.
+        membership: The caller's checked membership of the trip.
+
+    Returns:
+        None for the trip's interview, else the member's profile id.
+
+    Raises:
+        NoProfileError: A member without a profile on this trip.
+    """
+    if membership.role.satisfies(TripRole.CO_HOST):
+        return None
+    profile_id = await profile_service.find_account_profile(
+        session, membership.trip_id, membership.sub
+    )
+    if profile_id is None:
+        raise NoProfileError(membership.sub)
+    return profile_id
 
 
 def _display(history: Sequence[ModelMessage]) -> list[DisplayMessage]:
@@ -136,10 +170,15 @@ async def open_session(
     Returns:
         The session and whether this call created it.
     """
-    row = await db.insert_open_session(session, membership.trip_id, membership.sub)
+    owner = await owner_profile(session, membership)
+    row = await db.insert_open_session(
+        session, membership.trip_id, membership.sub, owner
+    )
     created = row is not None
     if row is None:
-        row = await db.select_open_session(session, membership.trip_id)
+        row = await db.select_open_session(
+            session, membership.trip_id, profile_id=owner
+        )
     if row is None:  # closed between the two statements; vanishingly rare
         raise SessionNotFoundError(str(membership.trip_id))
     await session.commit()
@@ -162,7 +201,8 @@ async def get_current(
     Raises:
         SessionNotFoundError: The trip has no open session.
     """
-    row = await db.select_open_session(session, membership.trip_id)
+    owner = await owner_profile(session, membership)
+    row = await db.select_open_session(session, membership.trip_id, profile_id=owner)
     if row is None:
         raise SessionNotFoundError(str(membership.trip_id))
     shown = _display(_history(row))
@@ -173,6 +213,30 @@ async def get_current(
         wanted[query.offset : query.offset + query.size], len(wanted), query
     )
     return InterviewSessionRead(**_read(row, len(shown)).model_dump(), messages=page)
+
+
+async def check_owned(
+    session: AsyncSession, membership: TripMembership, session_id: UUID
+) -> UUID | None:
+    """Check that the session is the caller's before anything is claimed or read.
+
+    Args:
+        session: Open session.
+        membership: The caller's checked membership of the trip.
+        session_id: The AG-UI ``threadId``.
+
+    Returns:
+        The member's profile id for a member's session, None for the trip's.
+
+    Raises:
+        SessionNotFoundError: No such session of the caller on this trip.
+        NoProfileError: A member without a profile on this trip.
+    """
+    owner = await owner_profile(session, membership)
+    row = await db.select_session(session, membership.trip_id, session_id)
+    if row is None or row.profile_id != owner:
+        raise SessionNotFoundError(str(session_id))
+    return owner
 
 
 async def load_history(
@@ -192,8 +256,9 @@ async def load_history(
         SessionNotFoundError: No such session on this trip.
         HistoryIncompatibleError: The stored history no longer validates.
     """
+    owner = await owner_profile(session, membership)
     row = await db.select_session(session, membership.trip_id, session_id)
-    if row is None:
+    if row is None or row.profile_id != owner:
         raise SessionNotFoundError(str(session_id))
     return _history(row)
 
@@ -220,8 +285,9 @@ async def append_messages(
     Raises:
         SessionNotFoundError: No such session on this trip.
     """
+    owner = await owner_profile(session, membership)
     row = await db.select_session(session, membership.trip_id, session_id, lock=True)
-    if row is None:
+    if row is None or row.profile_id != owner:
         raise SessionNotFoundError(str(session_id))
     row.history = [
         *row.history,
@@ -243,14 +309,34 @@ async def get_knowledge(
         The data, what is missing and who set each value.
     """
     trip, people, preferences = await _domain_data(session, membership)
+    owner = await owner_profile(session, membership)
+    if owner is not None:
+        trip, people, preferences = _own_view(trip, people, preferences, owner)
     current = knowledge.values(trip, people, preferences)
     stored = await db.select_assistant_digests(session, membership.trip_id)
+    missing = knowledge.missing(current)
+    if owner is not None:  # the trip's data is the host's to collect
+        missing = [ref for ref in missing if ref.field is KnowledgeField.PREFERENCES]
     return KnowledgeRead(
         trip=trip,
         people=people,
         preferences=preferences,
-        missing=knowledge.missing(current),
+        missing=missing,
         sources=knowledge.sources(current, stored),
+    )
+
+
+def _own_view(
+    trip: TripRead,
+    people: list[ProfileRead],
+    preferences: list[PreferencesRead],
+    owner: UUID,
+) -> tuple[TripRead, list[ProfileRead], list[PreferencesRead]]:
+    # What a member's panel shows: the trip without its budget, and only themselves.
+    return (
+        trip.model_copy(update=dict.fromkeys(constants.TRIP_BUDGET_FIELDS)),
+        [p for p in people if p.id == owner],
+        [p for p in preferences if p.profile_id == owner],
     )
 
 

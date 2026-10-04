@@ -2,6 +2,7 @@
 
 from datetime import date, time
 from decimal import Decimal
+from enum import StrEnum, unique
 from typing import Annotated, Literal, Self
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -188,3 +189,23 @@ class DomainScores(_Frozen):
     def lodging_applicable(self) -> bool:
         """False when the trip has no nights ("nie dotyczy")."""
         return self.lodging is not None
+
+
+@unique
+class WhatIfField(StrEnum):
+    """An answer of the interview whose effect on the plan can be measured."""
+
+    DATES = "dates"
+    PEOPLE = "people"
+    BUDGET = "budget"
+    PACE = "pace"
+    IMPORTANCE = "importance"
+    REQUIREMENTS = "requirements"
+    INTERESTS = "interests"
+
+
+class WhatIfTarget(_Frozen):
+    """One question to measure: a field, and a person for the personal ones."""
+
+    field: WhatIfField
+    person_id: UUID | None = None
