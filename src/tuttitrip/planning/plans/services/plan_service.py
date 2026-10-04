@@ -491,3 +491,25 @@ async def export_calendar(
         ),
         filename=f"{FILE_PREFIX}-v{row.version}-{row.plan_hash}.ics",
     )
+
+
+async def latest_place_ids(session: AsyncSession, trip_id: UUID) -> list[UUID]:
+    """Places of the trip's newest plan, in visiting order, without repeats.
+
+    For callers that already checked access (the voting link), and read no plan
+    content other than which places it has.
+
+    Args:
+        session: Open session.
+        trip_id: Trip id.
+
+    Returns:
+        Place ids; empty when the trip has no plan yet.
+    """
+    row = await db.select_latest(session, trip_id)
+    if row is None:
+        return []
+    found = (
+        UUID(item["place_id"]) for day in row.result["days"] for item in day["items"]
+    )
+    return list(dict.fromkeys(found))

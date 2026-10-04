@@ -60,6 +60,7 @@ from tuttitrip.trips.photos.api import router as photos_router
 from tuttitrip.trips.photos.services import photo_service
 from tuttitrip.trips.services import trip_service
 from tuttitrip.voting.api import router as voting_router
+from tuttitrip.voting.link.api import router as vote_link_router
 
 # Bump the version only for a breaking change that needs both APIs side by side.
 API_VERSION = "v1"
@@ -85,6 +86,7 @@ ROUTERS: tuple[APIRouter, ...] = (
     locations_router,
     voting_router,
     photos_router,
+    vote_link_router,
     profiles_router,
     feedback_router,
     preferences_router,
