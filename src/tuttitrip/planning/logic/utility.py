@@ -21,6 +21,7 @@ from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.schemas import PlaceExplain, PlanningPerson
 from tuttitrip.profiles.preferences.schemas import ImportanceDomain
 
+# Nightlife is not food: bars are attractions in the pool (spec has two place domains).
 _FOOD = frozenset({PlaceCategory.RESTAURANT, PlaceCategory.CAFE})
 _MAX_UTILITY = 100.0
 
@@ -54,7 +55,8 @@ def interest_cosine(person: PlanningPerson, place: PlaceRead) -> float | None:
     if not tags or norm == 0:
         return None
     dot = math.fsum(person.interests.get(tag, 0.0) for tag in tags)
-    return dot / (norm * math.sqrt(len(tags)))
+    # Rounding can push the ratio a hair above 1 (six tags at 0.1).
+    return min(1.0, dot / (norm * math.sqrt(len(tags))))
 
 
 def match(
@@ -135,6 +137,7 @@ def exponents(
         ImportanceDomain.COST: pool.cost,
     }
     total = sum(points.values())
+    # total is 0 when the whole pool sits on a lodging domain that is not active.
     share = {d: (p / total if total else 0.0) for d, p in points.items()}
     lam_m = share[place_domain(place)] + params.lambda_floor
     lam_e = share[ImportanceDomain.PACE] + params.lambda_floor
@@ -160,7 +163,22 @@ def utility(
     Returns:
         ``min(100, 100 * (m + eps)^lambda_m * (1 - e + eps)^lambda_e)``.
     """
-    return explain(person, place, has_lodging=has_lodging, params=params).utility
+    return _scores(person, place, has_lodging, params)[2]
+
+
+def _scores(
+    person: PlanningPerson,
+    place: PlaceRead,
+    has_lodging: bool,  # ruff: ignore[boolean-type-hint-positional-argument] hot-loop helper, called positionally
+    params: AlgorithmParams,
+) -> tuple[float, float, float]:
+    # (m, e, u) in one pass for the solver's hot loop; explain() wraps it.
+    m = match(person, place, params)
+    e = effort(person, place)
+    lam_m, lam_e = exponents(person, place, has_lodging=has_lodging, params=params)
+    eps = params.epsilon
+    u = _MAX_UTILITY * math.pow(m + eps, lam_m) * math.pow(1 - e + eps, lam_e)
+    return m, e, min(_MAX_UTILITY, u)
 
 
 def explain(
@@ -181,15 +199,11 @@ def explain(
     Returns:
         Match, effort and utility of the place for the person.
     """
-    m = match(person, place, params)
-    e = effort(person, place)
-    lam_m, lam_e = exponents(person, place, has_lodging=has_lodging, params=params)
-    eps = params.epsilon
-    u = _MAX_UTILITY * (m + eps) ** lam_m * (1 - e + eps) ** lam_e
+    m, e, u = _scores(person, place, has_lodging, params)
     return PlaceExplain(
         person_id=person.id,
         place_id=place.id,
         match=m,
         effort=e,
-        utility=min(_MAX_UTILITY, u),
+        utility=u,
     )

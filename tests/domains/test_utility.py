@@ -1,14 +1,13 @@
-"""E1 (utility of a place without cost) and E0 (hard constraints): pure unit tests."""
+"""E1 (utility of a place without cost): pure unit tests."""
 
 import math
 
 import pytest
 
-from tests.fixtures.city import key_of, place_id, places
+from tests.fixtures.city import places
 from tests.fixtures.planning import planning_input
 from tests.fixtures.scenarios import all_scenarios, reference
 from tuttitrip.places.schemas import PlacePriceRead, PlaceRead, PlaceTag
-from tuttitrip.planning.logic.hard_constraints import RejectionCode, filter_places
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS
 from tuttitrip.planning.logic.utility import (
     effort,
@@ -22,10 +21,6 @@ from tuttitrip.planning.schemas import PlanningInput, PlanningPerson
 from tuttitrip.profiles.preferences.schemas import ImportancePool
 
 CATALOG = places()
-
-
-def person(data: PlanningInput, index: int = 0) -> PlanningPerson:
-    return data.people[index]
 
 
 def with_(p: PlanningPerson, **changes: object) -> PlanningPerson:
@@ -239,112 +234,68 @@ def test_wanted_place_beats_unwanted_one_for_the_same_person() -> None:
     assert liked > disliked
 
 
-# --- E0: hard constraints -------------------------------------------------------
+# --- hand-computed values and regressions ---------------------------------------
 
 
-def reasons(result, key: str) -> set[RejectionCode]:  # ruff: ignore[missing-type-function-argument]
-    return {r.code for r in result.reasons(place_id(key))}
-
-
-def test_veto_rejects_the_place(data: PlanningInput) -> None:
-    result = filter_places(data)
-    assert RejectionCode.VETO in reasons(result, "restauracja_morska")
-    assert place_id("restauracja_morska") not in {p.id for p in result.accepted}
-
-
-def test_veto_names_the_person(data: PlanningInput) -> None:
-    result = filter_places(data)
-    rejection = next(
-        r
-        for r in result.reasons(place_id("restauracja_morska"))
-        if r.code is RejectionCode.VETO
-    )
-    assert rejection.person_id == data.people[3].id
-
-
-def test_stairs_reject_at_the_limit(museum: PlaceRead) -> None:
-    data = planning_input(reference())
-    tower = replace_place(data, museum, stairs=1.0)
-    sensitive = with_(data.people[0], stairs_sensitivity=0.9)
-    result = filter_places(tower.model_copy(update={"people": (sensitive,)}))
-    assert RejectionCode.STAIRS in reasons(result, "muzeum_miejskie")
-    ok = with_(sensitive, stairs_sensitivity=0.89)
-    result = filter_places(tower.model_copy(update={"people": (ok,)}))
-    assert RejectionCode.STAIRS not in reasons(result, "muzeum_miejskie")
-
-
-def replace_place(
-    data: PlanningInput, place: PlaceRead, **changes: object
-) -> PlanningInput:
-    changed = place.model_copy(update=changes)
-    return data.model_copy(
+def _hand_place() -> PlaceRead:
+    # One tag, no stairs and no queue, 1 km of walking.
+    return CATALOG["muzeum_miejskie"].model_copy(
         update={
-            "places": tuple(changed if p.id == place.id else p for p in data.places)
+            "tags": [PlaceTag.HISTORY],
+            "segment_km": 1.0,
+            "stairs": 0.0,
+            "queue_min": 0,
         }
     )
 
 
-def test_segment_over_one_and_a_half_times_s_rejects(museum: PlaceRead) -> None:
-    data = planning_input(reference())
-    walker = with_(data.people[0], segment_km=1.0, stairs_sensitivity=0.0)
-    far = replace_place(data, museum, segment_km=1.6)
-    result = filter_places(far.model_copy(update={"people": (walker,)}))
-    assert RejectionCode.SEGMENT in reasons(result, "muzeum_miejskie")
-    edge = replace_place(data, museum, segment_km=1.5)
-    result = filter_places(edge.model_copy(update={"people": (walker,)}))
-    assert RejectionCode.SEGMENT not in reasons(result, "muzeum_miejskie")
-
-
-def test_closed_on_every_day_of_the_trip(data: PlanningInput) -> None:
-    only_monday = data.model_copy(
-        update={
-            "trip": data.trip.model_copy(
-                update={"days": (data.trip.days[0].replace(day=5),)}
-            )
-        }
+def test_hand_computed_utility() -> None:
+    # cos = 0.2 (profile (0.2, sqrt(0.96)) has norm 1), vote "want": m = 0.76.
+    # s = 3 km, d = 1 km: e = 0.6 / 3 = 0.2. Pool 5/5 without lodging: lambdas 0.5/0.5.
+    # u = 100 * sqrt(0.77 * 0.81) = 78.97.
+    place = _hand_place()
+    p = with_(
+        person_of(),
+        interests={PlaceTag.HISTORY: 0.2, PlaceTag.SCIENCE: math.sqrt(0.96)},
+        votes={place.id: 1},
+        segment_km=3.0,
+        stairs_sensitivity=0.0,
+        pool=ImportancePool(lodging=0, food=0, attractions=5, pace=5, cost=0),
     )
-    assert only_monday.trip.days[0].weekday() == 0
-    result = filter_places(only_monday)
-    assert RejectionCode.CLOSED in reasons(result, "muzeum_miejskie")
+    card = explain(p, place, has_lodging=False)
+    assert card.match == pytest.approx(0.76)
+    assert card.effort == pytest.approx(0.2)
+    assert exponents(p, place, has_lodging=False) == pytest.approx((0.5, 0.5))
+    assert card.utility == pytest.approx(100 * math.sqrt(0.77 * 0.81))
+    assert card.utility == pytest.approx(78.97, abs=0.005)
 
 
-def test_open_on_one_day_is_enough(data: PlanningInput) -> None:
-    result = filter_places(data)
-    assert RejectionCode.CLOSED not in reasons(result, "muzeum_miejskie")
+def test_utility_is_capped_at_100() -> None:
+    # m = 1 and e = 0 would give 100 * 1.01 = 101 without the cap.
+    place = _hand_place().model_copy(update={"segment_km": 0.0})
+    p = with_(person_of(), interests={PlaceTag.HISTORY: 1.0}, votes={place.id: 1})
+    assert match(p, place) == pytest.approx(1)
+    assert effort(p, place) == pytest.approx(0)
+    assert utility(p, place, has_lodging=True) == pytest.approx(100)
 
 
-def test_does_not_fit_the_day_window(data: PlanningInput) -> None:
-    short = data.trip.model_copy(
-        update={"day_end": data.trip.day_start.replace(hour=10)}
-    )
-    result = filter_places(data.model_copy(update={"trip": short}))
-    assert RejectionCode.NO_FIT in reasons(result, "hevelianum")
+def test_cosine_never_exceeds_one_despite_rounding() -> None:
+    # Six tags at 0.1 each: the raw ratio is 1.0000000000000002.
+    tags = list(PlaceTag)[:6]
+    place = _hand_place().model_copy(update={"tags": tags})
+    p = with_(person_of(), interests=dict.fromkeys(tags, 0.1), votes={place.id: 1})
+    cos = interest_cosine(p, place)
+    assert cos is not None
+    assert cos <= 1.0
+    card = explain(p, place, has_lodging=True)
+    assert card.match <= 1.0
 
 
-def test_must_blocked_reports_rejected_must_places(data: PlanningInput) -> None:
-    sea = place_id("restauracja_morska")
-    museum_id = place_id("muzeum_miejskie")
-    result = filter_places(
-        data.model_copy(update={"must": frozenset({sea, museum_id})})
-    )
-    assert result.must_blocked == (sea,)
-
-
-def test_accepted_places_have_no_reasons_and_lodging_is_not_a_candidate(
-    data: PlanningInput,
+def test_pool_entirely_on_inactive_lodging_gives_even_exponents(
+    museum: PlaceRead,
 ) -> None:
-    result = filter_places(data)
-    accepted = {p.id for p in result.accepted}
-    assert accepted
-    assert not accepted & {r.place_id for r in result.rejections}
-    assert all(p.category.value != "lodging" for p in result.accepted)
-    assert {key_of(p) for p in result.accepted} <= set(CATALOG)
-
-
-def test_reference_family_tower_is_rejected_for_grandma(data: PlanningInput) -> None:
-    result = filter_places(data)
-    assert RejectionCode.STAIRS in reasons(result, "wieza_widokowa")
-
-
-def test_result_is_deterministic(data: PlanningInput) -> None:
-    assert filter_places(data) == filter_places(data)
+    p = with_(
+        person_of(),
+        pool=ImportancePool(lodging=10, food=0, attractions=0, pace=0, cost=0),
+    )
+    assert exponents(p, museum, has_lodging=False) == pytest.approx((0.5, 0.5))

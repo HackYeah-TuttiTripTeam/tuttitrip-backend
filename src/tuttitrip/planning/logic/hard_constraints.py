@@ -54,8 +54,9 @@ class Candidates:
     """Result of E0 on the places.
 
     ``rejections`` holds every reason of every rejected place, sorted by place
-    id, code and person. ``must_blocked`` lists the "must" places that were
-    rejected: no plan can satisfy them, so the caller must report a conflict.
+    id, code and person. ``must_blocked`` lists the "must" ids that are not
+    accepted (rejected, unknown or lodging): no plan can satisfy them, so the
+    caller must report a conflict.
     """
 
     accepted: tuple[PlaceRead, ...]
@@ -80,6 +81,8 @@ def _person_rejections(
     found: list[Rejection] = []
     if place.id in person.vetoes:
         found.append(Rejection(place.id, RejectionCode.VETO, person.id))
+    # Separate from schedule.DAILY_KM_FACTOR: this is the per-place segment
+    # (s_i), that one is the whole day's distance (D_i).
     if place.segment_km > params.segment_factor * person.segment_km + _EPS:
         found.append(Rejection(place.id, RejectionCode.SEGMENT, person.id))
     if place.stairs * person.stairs_sensitivity >= params.stairs_limit - _EPS:
@@ -87,9 +90,11 @@ def _person_rejections(
     return found
 
 
-def _time_rejection(place: PlaceRead, trip: PlanningTrip) -> Rejection | None:
-    # Open and fitting on at least one day of the trip, else the commonest cause.
-    zone = ZoneInfo(trip.timezone)
+def _time_rejection(
+    place: PlaceRead, trip: PlanningTrip, zone: ZoneInfo
+) -> Rejection | None:
+    # Open and fitting on at least one day of the trip. NO_FIT wins over CLOSED:
+    # a place that fits no window on a day it is open is the more telling reason.
     codes = set()
     for day in trip.days:
         window = DayWindow(day, zone, trip.day_start, trip.day_end)
@@ -120,6 +125,7 @@ def filter_places(
     Returns:
         Accepted places in input order and all rejection reasons.
     """
+    zone = ZoneInfo(data.trip.timezone)
     accepted: list[PlaceRead] = []
     rejections: list[Rejection] = []
     for place in data.places:
@@ -130,7 +136,7 @@ def filter_places(
             for person in data.people
             for r in _person_rejections(person, place, params)
         ]
-        time_reason = _time_rejection(place, data.trip)
+        time_reason = _time_rejection(place, data.trip, zone)
         if time_reason is not None:
             found.append(time_reason)
         if found:
@@ -141,9 +147,10 @@ def filter_places(
         rejections,
         key=lambda r: (str(r.place_id), r.code.value, str(r.person_id or "")),
     )
-    rejected_ids = {r.place_id for r in ordered}
+    # A "must" id that is rejected, unknown or a lodging cannot be satisfied.
+    usable = {p.id for p in accepted}
     return Candidates(
         accepted=tuple(accepted),
         rejections=tuple(ordered),
-        must_blocked=tuple(sorted(data.must & rejected_ids, key=str)),
+        must_blocked=tuple(sorted(data.must - usable, key=str)),
     )

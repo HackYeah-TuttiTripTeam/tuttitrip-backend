@@ -4,12 +4,16 @@ from datetime import date, time
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from tuttitrip.places.schemas import PlaceRead, PlaceTag
 from tuttitrip.profiles.preferences.schemas import ImportancePool, MinTag
 from tuttitrip.shared.jobs.contracts import ProviderName
+
+MAX_WEIGHT_RATIO = 3
+"""Section 2: ``max w / min w`` is at most 3."""
 
 Vote = Literal[-1, 0, 1]
 """``v_ip``: -1 do not want, 0 neutral, +1 want. A missing key means no vote."""
@@ -86,10 +90,18 @@ class PlanningTrip(_Frozen):
         return self.budget_to * (100 + self.flex_pct) / 100
 
     @model_validator(mode="after")
-    def _budget_order(self) -> Self:
+    def _consistent(self) -> Self:
         if self.budget_from > self.budget_to:
             msg = "budget_from must not exceed budget_to"
             raise ValueError(msg)
+        if self.day_start >= self.day_end:
+            msg = "day_start must be before day_end"
+            raise ValueError(msg)
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            msg = f"Unknown time zone: {self.timezone}"
+            raise ValueError(msg) from error
         return self
 
 
@@ -102,9 +114,13 @@ class PlanningInput(_Frozen):
     must: frozenset[UUID] = frozenset()
 
     @model_validator(mode="after")
-    def _unique_people(self) -> Self:
+    def _valid_people(self) -> Self:
         if len({p.id for p in self.people}) != len(self.people):
             msg = "People must have unique ids"
+            raise ValueError(msg)
+        weights = [p.weight for p in self.people]
+        if max(weights) > MAX_WEIGHT_RATIO * min(weights):
+            msg = f"Weights may differ at most {MAX_WEIGHT_RATIO} times"
             raise ValueError(msg)
         return self
 
