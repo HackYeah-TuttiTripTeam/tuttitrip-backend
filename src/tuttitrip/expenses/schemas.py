@@ -246,3 +246,51 @@ class ExpenseQuery(PageParams, ExpenseFilters):
 
     sort: ExpenseSort = ExpenseSort.SPENT_ON
     dir: SortDir = SortDir.DESC
+
+
+class ExpenseTextRequest(BaseModel):
+    """POST payload: one sentence describing an expense."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(
+        min_length=1,
+        max_length=500,
+        description='E.g. "obiad 142 zł, płaciła Kasia, bez Ani".',
+    )
+
+
+class DraftIssueRead(BaseModel):
+    """Something in a draft the person must confirm."""
+
+    code: Literal[
+        "name_not_on_trip",
+        "name_ambiguous",
+        "payer_missing",
+        "participants_empty",
+        "low_confidence",
+    ]
+    name: str | None = Field(description="The name as written, if it is about one.")
+    candidates: list[UUID] = Field(description="Profiles the name might mean.")
+
+
+class ExpenseDraft(BaseModel):
+    """An expense read from a text, for the form; nothing is saved."""
+
+    amount: Decimal
+    currency: str
+    description: str
+    spent_on: date = Field(description="Today unless the text says otherwise.")
+    payer_profile_id: UUID | None
+    participants: list[UUID]
+    needs_confirmation: bool = Field(
+        description="True when `issues` is not empty: ask the person to confirm."
+    )
+    issues: list[DraftIssueRead]
+
+
+class ExpenseDraftState(BaseModel):
+    """Progress of reading a text; `draft` is set once `status` is `ready`."""
+
+    status: Literal["pending", "ready", "failed"]
+    draft: ExpenseDraft | None

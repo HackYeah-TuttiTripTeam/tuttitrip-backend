@@ -7,12 +7,14 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from tuttitrip.expenses.schemas import (
     ExpenseCreate,
+    ExpenseDraftState,
     ExpenseQuery,
     ExpenseRead,
+    ExpenseTextRequest,
     ExpenseUpdate,
     ExpenseValidationErrors,
 )
-from tuttitrip.expenses.services import expense_service
+from tuttitrip.expenses.services import expense_draft_service, expense_service
 from tuttitrip.expenses.services.expense_service import (
     ExpenseForbiddenError,
     ExpenseInvalidError,
@@ -22,6 +24,10 @@ from tuttitrip.expenses.settlement.services.settlement_service import (
     SettlementClosedError,
 )
 from tuttitrip.shared.db.api import SessionDep
+from tuttitrip.shared.jobs.api import JobQueueDep
+from tuttitrip.shared.jobs.schemas import JobAccepted
+from tuttitrip.shared.jobs.services.job_queue import JobQueueUnavailableError
+from tuttitrip.shared.jobs.services.worker_liveness import WorkerUnavailableError
 from tuttitrip.shared.pagination.schemas import Page
 from tuttitrip.shared.permissions.api import requires
 from tuttitrip.shared.permissions.registry import Access, Feature
@@ -169,3 +175,75 @@ async def delete_expense(
     except SettlementClosedError as exc:
         raise _closed(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _unavailable(
+    exc: WorkerUnavailableError | JobQueueUnavailableError,
+) -> HTTPException:
+    return HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
+
+
+@router.post(
+    "/draft",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={503: {"description": "No worker or job queue available."}},
+    dependencies=[requires(Feature.EXPENSES_CORE, Access.WRITE)],
+)
+async def start_expense_draft(
+    data: ExpenseTextRequest,
+    membership: TripMember,
+    session: SessionDep,
+    queue: JobQueueDep,
+) -> JobAccepted:
+    """Start reading a typed sentence into an expense draft; nothing is saved.
+
+    Poll `GET /trips/{trip_id}/expenses/draft/{workflow_id}` for the draft. The
+    text is untrusted; the model only extracts fields.
+
+    Args:
+        data: The sentence, e.g. "obiad 142 zł, płaciła Kasia, bez Ani".
+        membership: The caller's membership of ``{trip_id}``.
+        session: Database session.
+        queue: Job queue.
+
+    Returns:
+        The workflow id to poll.
+    """
+    try:
+        workflow_id = await expense_draft_service.start_draft(
+            session, queue, membership, data
+        )
+    except (WorkerUnavailableError, JobQueueUnavailableError) as exc:
+        raise _unavailable(exc) from exc
+    return JobAccepted(workflow_id=workflow_id)
+
+
+@router.get(
+    "/draft/{workflow_id}",
+    dependencies=[requires(Feature.EXPENSES_CORE, Access.READ)],
+)
+async def get_expense_draft(
+    workflow_id: str, membership: TripMember, session: SessionDep, queue: JobQueueDep
+) -> ExpenseDraftState:
+    """The draft read from a sentence: payer and participants are trip profiles.
+
+    `needs_confirmation` is true (with `issues`) when a name is not on the trip
+    or is ambiguous, there is no payer or the reader was unsure.
+
+    Args:
+        workflow_id: Id from `POST .../draft`.
+        membership: The caller's membership of ``{trip_id}``.
+        session: Database session.
+        queue: Job queue.
+
+    Returns:
+        `pending`, `failed` or `ready` with the draft.
+    """
+    try:
+        return await expense_draft_service.get_draft(
+            session, queue, membership, workflow_id
+        )
+    except expense_draft_service.DraftNotFoundError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Draft not found") from exc
+    except JobQueueUnavailableError as exc:
+        raise _unavailable(exc) from exc
