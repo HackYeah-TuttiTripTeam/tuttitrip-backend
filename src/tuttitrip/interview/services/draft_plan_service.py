@@ -23,7 +23,6 @@ from tuttitrip.planning.plans.schemas import (
 )
 from tuttitrip.planning.plans.services import plan_service
 from tuttitrip.planning.plans.services.plan_service import (
-    CatalogEmptyError,
     MissingInputsError,
     PlanInputError,
 )
@@ -31,7 +30,6 @@ from tuttitrip.trips.schemas import TripMembership
 
 __all__ = [
     "MISSING_CITY",
-    "CatalogEmptyError",
     "MissingCityError",
     "MissingInputsError",
     "PlanInputError",

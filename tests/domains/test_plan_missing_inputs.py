@@ -9,8 +9,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.fixtures.city import city
-from tests.fixtures.planning import planning_input
-from tests.fixtures.scenarios import reference
 from tests.shared.fakes import authorize
 from tests.shared.interview_world import World
 from tests.shared.paths import path
@@ -19,7 +17,6 @@ from tuttitrip.interview.services import draft_plan_service
 from tuttitrip.main import create_app
 from tuttitrip.places.services import place_service
 from tuttitrip.planning.plans.logic.input_builder import (
-    CatalogEmptyError,
     MissingInputsError,
     PlanInputError,
     build_input,
@@ -150,13 +147,16 @@ def test_gathering_reports_every_gap_not_only_the_first(
     assert "destination, dates, people" in caught.value.message
 
 
-def test_a_city_outside_the_catalog_is_a_missing_destination(
+def test_a_city_the_catalog_lacks_is_not_a_missing_destination(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Any city is a destination: its places are fetched, it is never asked for again.
     with pytest.raises(MissingInputsError) as caught:
-        asyncio.run(gather(world, monkeypatch, city_slug="atlantis"))
-    assert caught.value.missing[0].field is MissingField.DESTINATION
-    assert caught.value.message == "Unknown city 'atlantis'"
+        asyncio.run(gather(world, monkeypatch, destination="Atlantis"))
+    assert [m.field for m in caught.value.missing] == [
+        MissingField.DATES,
+        MissingField.PEOPLE,
+    ]
 
 
 def test_a_known_city_with_no_dates_does_not_blame_the_city(
@@ -168,7 +168,7 @@ def test_a_known_city_with_no_dates_does_not_blame_the_city(
         MissingField.DATES,
         MissingField.PEOPLE,
     ]
-    assert "Unknown city" not in caught.value.message
+    assert "destination" not in caught.value.message
 
 
 def test_a_draft_assumes_dates_and_people_so_only_the_city_can_be_missing(
@@ -194,17 +194,6 @@ def test_a_draft_assumes_dates_and_people_so_only_the_city_can_be_missing(
     assert [m.field for m in caught.value.missing] == [MissingField.DESTINATION]
 
 
-def test_a_city_without_places_is_not_planned(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    empty = planning_input(reference(), lodging=False).model_copy(update={"places": ()})
-    monkeypatch.setattr(
-        plan_service, "gather_input", AsyncMock(return_value=(empty, {}, 1.0))
-    )
-    with pytest.raises(CatalogEmptyError):
-        asyncio.run(plan_service.generate_plan(world.session, world.membership, None))
-
-
 # --- the answers ---------------------------------------------------------------
 
 
@@ -221,17 +210,6 @@ def test_post_plans_answers_422_with_the_list_of_missing_fields(
     assert "destination" in detail["message"]
 
 
-def test_post_plans_answers_409_for_a_city_without_places(
-    client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(
-        plan_service, "generate_plan", AsyncMock(side_effect=CatalogEmptyError())
-    )
-    response = client.post(path("create_plan", trip_id=world.trip_id))
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "plan.catalog_empty"
-
-
 def test_any_other_plan_input_error_stays_a_plain_422(
     client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -242,7 +220,7 @@ def test_any_other_plan_input_error_stays_a_plain_422(
     assert (response.status_code, response.json()["detail"]) == (422, "odd")
 
 
-def test_the_draft_plan_maps_a_city_outside_the_catalog_and_an_empty_one(
+def test_the_draft_plan_answers_with_the_same_contract(
     client: TestClient, world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
@@ -250,30 +228,29 @@ def test_the_draft_plan_maps_a_city_outside_the_catalog_and_an_empty_one(
         "build",
         AsyncMock(
             side_effect=MissingInputsError(
-                find_missing(world.trip, city_known=False, people=2),
-                "Unknown city 'x'",
+                find_missing(world.trip, city_known=False, people=2)
             )
         ),
     )
-    url = path("build_draft_plan", trip_id=world.trip_id)
-    response = client.post(url)
+    response = client.post(path("build_draft_plan", trip_id=world.trip_id))
     assert response.status_code == 422
-    assert response.json()["detail"]["message"] == "Unknown city 'x'"
-    monkeypatch.setattr(
-        draft_plan_service, "build", AsyncMock(side_effect=CatalogEmptyError())
-    )
-    assert client.post(url).status_code == 409
+    assert response.json()["detail"]["code"] == "plan.missing_inputs"
 
 
-def test_openapi_documents_both_errors_of_both_endpoints() -> None:
+def test_openapi_documents_the_errors_of_both_endpoints() -> None:
     schema = create_app().openapi()
-    for route in ("/trips/{trip_id}/plans", "/trips/{trip_id}/interview/draft-plan"):
+
+    def ref(route: str, code: str) -> str:
         operation = schema["paths"][f"/api/v1{route}"]["post"]["responses"]
-        refs = {
-            code: operation[code]["content"]["application/json"]["schema"]["$ref"]
-            for code in ("409", "422")
-        }
-        assert refs["422"].endswith("/PlanMissingInputs")
-        assert refs["409"].endswith("/PlanCatalogEmpty")
+        found = operation[code]["content"]["application/json"]["schema"]["$ref"]
+        assert isinstance(found, str)
+        return found
+
+    plans = "/trips/{trip_id}/plans"
+    assert ref(plans, "422").endswith("/PlanMissingInputs")
+    assert ref(plans, "409").endswith("/PlanCatalogMissing")
+    assert ref("/trips/{trip_id}/interview/draft-plan", "422").endswith(
+        "/PlanMissingInputs"
+    )
     codes = schema["components"]["schemas"]["PlanMissingInputsDetail"]["properties"]
     assert codes["code"]["const"] == "plan.missing_inputs"

@@ -108,6 +108,12 @@ def test_iconic_but_not_yours() -> None:
     )  # V_p = -1/3
 
 
+def test_a_unique_experience_is_iconic_for_the_verdict() -> None:
+    unique = MUSEUM.model_copy(update={"iconic": False, "unique_experience": True})
+    data = trio({}, {}, {}).model_copy(update={"places": (unique,)})
+    assert verdict_of(data, "muzeum_miejskie").verdict is VerdictKind.ICONIC_NOT_YOURS
+
+
 def test_a_place_in_the_plan_fits_whatever_the_opinion() -> None:
     data = trio({"museum": -1}, {"museum": -1}, {"museum": -1})
     assert verdict_of(data, "muzeum_miejskie", plan=("muzeum_miejskie",)).verdict is (

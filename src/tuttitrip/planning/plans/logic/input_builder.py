@@ -169,14 +169,6 @@ class MissingInputsError(PlanInputError):
         return PlanMissingInputsDetail(message=self.message, missing=self.missing)
 
 
-class CatalogEmptyError(PlanInputError):
-    """The trip's city has no places in the catalog, so there is nothing to plan."""
-
-    def __init__(self) -> None:
-        """Set the developer message."""
-        super().__init__("The city has no places in the catalog yet")
-
-
 def find_missing(
     trip: TripRead, *, city_known: bool, people: int
 ) -> list[MissingInput]:
@@ -184,7 +176,8 @@ def find_missing(
 
     Args:
         trip: The trip.
-        city_known: The trip has a city that is in the catalog.
+        city_known: The trip has a destination or a city (any city: a place outside
+            the catalog is fetched, not asked for again).
         people: How many people are on the trip.
 
     Returns:

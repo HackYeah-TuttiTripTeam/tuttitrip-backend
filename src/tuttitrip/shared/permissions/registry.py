@@ -123,6 +123,7 @@ class Feature(StrEnum):
 
     PLACES = "places"
     PLACES_CATALOG = "places.catalog"
+    PLACES_CANDIDATES = "places.candidates"
 
     MCP = "mcp"
     NOTIFICATIONS = "notifications"
@@ -194,6 +195,7 @@ DESCRIPTIONS: Final[dict[Feature, str]] = {
     Feature.JOBS: "Zadania w tle (stan i anulowanie)",
     Feature.PLACES: "Katalog miejsc",
     Feature.PLACES_CATALOG: "Katalog miejsc i miast: ceny i godziny ze źródłem",
+    Feature.PLACES_CANDIDATES: "Pobieranie kandydatów dla miasta spoza katalogu",
     Feature.MCP: "Serwer MCP: własne dane w Claude, ChatGPT i innych klientach",
     Feature.NOTIFICATIONS: "Powiadomienia: skrzynka, licznik i strumień na żywo",
 }

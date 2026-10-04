@@ -17,7 +17,9 @@ from uuid import UUID
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from tuttitrip.accommodation.schemas import RequirementStatus
+from tuttitrip.planning.logic.progress import PlanStep
 from tuttitrip.profiles.feedback.schemas import ReasonCode
+from tuttitrip.shared.jobs.contracts import Locale
 
 Money = Annotated[Decimal, Field(ge=0, decimal_places=2, max_digits=12)]
 Hash12 = Annotated[str, Field(min_length=12, max_length=12)]
@@ -192,8 +194,8 @@ class PlanErrorCode(StrEnum):
     """Stable code of a plan error, sent as ``detail.code``."""
 
     NOT_APPROVED = "plan.not_approved"
+    CATALOG_MISSING = "catalog_missing"
     MISSING_INPUTS = "plan.missing_inputs"
-    CATALOG_EMPTY = "plan.catalog_empty"
 
 
 class NotApprovedDetail(BaseModel):
@@ -207,6 +209,22 @@ class NotApprovedError(BaseModel):
     """409 body: no approved proposal for this plan version."""
 
     detail: NotApprovedDetail
+
+
+class PlanCatalogMissing(BaseModel):
+    """409: the trip's city has no places in the catalog, so no plan is computed."""
+
+    code: Literal[PlanErrorCode.CATALOG_MISSING] = PlanErrorCode.CATALOG_MISSING
+    message: str
+    city_slug: str
+    job_id: str | None = Field(
+        default=None,
+        description=(
+            "The fetch of candidates for the city, started or found; poll "
+            "`GET /trips/{id}/places/candidates/status?job_id=...`. Null when no "
+            "worker could take it (ask `POST /trips/{id}/places/candidates`)."
+        ),
+    )
 
 
 @unique
@@ -265,19 +283,6 @@ class PlanMissingInputs(BaseModel):
     detail: PlanMissingInputsDetail
 
 
-class PlanCatalogEmptyDetail(BaseModel):
-    """The trip's city has no places in the catalog yet; clients map by ``code``."""
-
-    code: Literal[PlanErrorCode.CATALOG_EMPTY] = PlanErrorCode.CATALOG_EMPTY
-    message: str = Field(description="For developers; clients map by code.")
-
-
-class PlanCatalogEmpty(BaseModel):
-    """409 body: there is nothing to plan from in this city yet."""
-
-    detail: PlanCatalogEmptyDetail
-
-
 class PlanCreate(BaseModel):
     """Optional knobs for generating a plan."""
 
@@ -306,6 +311,31 @@ class PlanCreate(BaseModel):
             "on the computation yet: the weights come from the profiles "
             "(`PUT /trips/{id}/profiles/weights`)."
         ),
+    )
+    locale: Locale = Field(
+        default="pl",
+        description=(
+            "Language of the verdict justifications the worker writes for this "
+            "version (read them with the same `locale`)."
+        ),
+    )
+
+
+class PlanProgressRead(BaseModel):
+    """Where the computation of the trip's plan is."""
+
+    step: PlanStep = Field(description="Stage of docs/algorytm.md being computed.")
+    position: int = Field(
+        ge=1, description="1-based place of `step` among the stages, in order."
+    )
+    total: int = Field(ge=1, description="Number of stages (some may be skipped).")
+    item: int | None = Field(
+        default=None,
+        ge=1,
+        description="1-based unit of work in the stage (e.g. person 2 of 4).",
+    )
+    items: int | None = Field(
+        default=None, ge=1, description="Units in the stage; set with `item`."
     )
 
 
@@ -648,6 +678,9 @@ class ExplainEntry(BaseModel):
     utility: float = Field(ge=0, le=100, description="u_ip (E1).")
 
 
+JustificationSource = Literal["template", "model"]
+
+
 class VoteReason(BaseModel):
     """A person on one side of a verdict, with a reason code."""
 
@@ -675,8 +708,15 @@ class PlanVerdict(BaseModel):
         ),
     )
     substitute_place_id: UUID | None = None
-    explanation: str | None = Field(
-        default=None, description="Written later by a model."
+    justification: str = Field(
+        description=(
+            "Why this verdict, one or two sentences in the requested `locale`. "
+            "A template from the verdict data until the worker's model text is "
+            "ready."
+        )
+    )
+    justification_source: JustificationSource = Field(
+        description="`template`: written by code. `model`: written by the worker."
     )
 
 
@@ -750,6 +790,41 @@ class PlanUpgrade(BaseModel):
     d_min_r: float = Field(description="Change of min r.")
 
 
+class AnywayEffects(BaseModel):
+    """What adding the place costs: the plan with it minus the plan without it."""
+
+    d_min_r: float = Field(description="Change of min r.")
+    d_cost: Decimal = Field(description="Change of c(P), in the trip currency.")
+    d_minutes: int = Field(description="Change of the active minutes of the plan.")
+
+
+class AnywayStatus(StrEnum):
+    """Where a suggestion stands."""
+
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+
+
+class AnywaySuggestion(BaseModel):
+    """The "anyway" suggestion of a day: an iconic or unique place that fits less.
+
+    At most one per day. ``justification`` is the template built from the numbers
+    until the model's text (``write_justifications``) arrives.
+    """
+
+    place_id: UUID
+    name: str
+    day: int = Field(ge=1, description="1-based day the place lands on.")
+    v_p: float = Field(ge=-1, le=1, description="Weighted opinion V_p of the group.")
+    effects: AnywayEffects
+    justification: str
+    justification_source: Literal["template", "model"]
+    status: AnywayStatus = Field(
+        default=AnywayStatus.PROPOSED,
+        description="`accepted` once the host made the place a `must` override.",
+    )
+
+
 class PlanTelemetry(BaseModel):
     """How the plan was computed."""
 
@@ -816,3 +891,11 @@ class PlanRead(BaseModel):
         ),
     )
     telemetry: PlanTelemetry
+    anyway: list[AnywaySuggestion] = Field(
+        default_factory=list,
+        description=(
+            'At most one "anyway" suggestion per day (an iconic or unique place that '
+            "fits the group less) with its cost. The host rejects it or makes it a "
+            "`must`; rejected ones are not listed."
+        ),
+    )

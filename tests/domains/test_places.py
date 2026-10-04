@@ -60,6 +60,7 @@ def make_place(**overrides: Any) -> Place:  # ruff: ignore[any-type]
         "wheelchair": None,
         "indoor": None,
         "iconic": True,
+        "unique_experience": False,
         "cuisine": None,
         "diet_tags": [],
         "amenities": [],

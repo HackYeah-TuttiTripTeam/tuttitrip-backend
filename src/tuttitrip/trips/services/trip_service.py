@@ -46,7 +46,10 @@ class TripInvalidError(Exception):
 def _read(trip: Trip, role: TripRole, status: MemberStatus) -> TripRead:
     details = TripDetails.model_validate(trip, from_attributes=True)
     return TripRead(
-        **details.model_dump(exclude={"kind"}), my_role=role, my_status=status
+        **details.model_dump(exclude={"kind"}),
+        my_role=role,
+        my_status=status,
+        is_sample=bool(trip.is_sample),  # None on a Trip not flushed yet
     )
 
 
@@ -69,6 +72,42 @@ async def create_trip(
     await profile_service.create_host_profile(session, trip.id, owner_sub)
     await session.commit()
     return _read(trip, TripRole.HOST, MemberStatus.CONFIRMED)
+
+
+async def has_sample(session: AsyncSession, sub: str) -> bool:
+    """Whether the user owns a sample trip.
+
+    Args:
+        session: Open session.
+        sub: Auth0 subject.
+
+    Returns:
+        True when one exists.
+    """
+    return await db.has_sample(session, sub)
+
+
+async def delete_samples(session: AsyncSession, sub: str) -> int:
+    """Delete the user's sample trips, without committing.
+
+    Args:
+        session: Open session (caller commits).
+        sub: Auth0 subject.
+
+    Returns:
+        How many trips were deleted.
+    """
+    return await db.delete_samples_owned_by(session, sub)
+
+
+async def mark_sample(session: AsyncSession, trip_id: UUID) -> None:
+    """Flag the trip as the sample trip, without committing.
+
+    Args:
+        session: Open session (caller commits).
+        trip_id: The trip just created for the sample.
+    """
+    await db.mark_sample(session, trip_id)
 
 
 async def list_trips(
