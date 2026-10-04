@@ -30,7 +30,7 @@ from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import Model, ModelResolutionContext
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.models.openrouter import OpenRouterModel
+from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.models.system_one import SystemOneModel
 from pydantic_ai.profiles.decision import DecisionModelProfile
 from pydantic_ai.providers.openai import OpenAIProvider
@@ -100,7 +100,8 @@ def _openrouter(settings: LlmSettings) -> Model | None:
 
 
 def _interview(settings: LlmSettings) -> list[Model | None]:
-    name = get_settings().interview.agent_model
+    interview = get_settings().interview
+    name = interview.agent_model
     if not name:
         return _qwen_then_openrouter(settings.gb10_agent_model, settings)
     key = _openrouter_key(settings)
@@ -108,7 +109,11 @@ def _interview(settings: LlmSettings) -> list[Model | None]:
         return []
     return [
         OpenRouterModel(
-            name.removeprefix("openrouter:"), provider=OpenRouterProvider(api_key=key)
+            name.removeprefix("openrouter:"),
+            provider=OpenRouterProvider(api_key=key),
+            settings=None
+            if interview.agent_thinking
+            else OpenRouterModelSettings(openrouter_reasoning={"effort": "none"}),
         )
     ]
 

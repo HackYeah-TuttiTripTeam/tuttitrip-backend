@@ -9,7 +9,7 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, override
+from typing import Any, Literal, override
 from unittest.mock import AsyncMock
 
 import httpx
@@ -505,6 +505,7 @@ class RecordingRealtimeModel(RealtimeModel):
         super().__init__()
         self.tools: list[str] = []
         self.instructions: str | None = None
+        self.recorded: Any = None
 
     @property
     @override
@@ -536,6 +537,7 @@ class RecordingRealtimeModel(RealtimeModel):
         model_settings: object = None,
     ) -> WebRTCAnswer:
         self.instructions = instructions
+        self.recorded = model_settings
         self.tools = [t.name for t in tools or []]
         return WebRTCAnswer(
             "ANSWER", session=WebRTCSession("openai", session_id="call_x")
@@ -912,3 +914,21 @@ def test_the_card_of_an_unknown_call_or_another_trip_is_404(
         ).status_code
         == 404
     )
+
+
+@pytest.mark.parametrize(("effort", "expected"), [(None, False), ("low", "low")])
+def test_voice_reasoning_is_off_unless_an_effort_is_configured(
+    world: World,
+    monkeypatch: pytest.MonkeyPatch,
+    effort: Literal["low"] | None,
+    expected: object,
+) -> None:
+    monkeypatch.setattr(
+        voice_service.get_settings().interview, "voice_reasoning_effort", effort
+    )
+    model = RecordingRealtimeModel()
+    deps = world.deps()
+    deps.voice = True
+    realtime = voice_service.realtime_for(deps, model)
+    asyncio.run(realtime.answer_webrtc_offer("OFFER"))
+    assert model.recorded["thinking"] == expected

@@ -198,3 +198,23 @@ def test_interview_agent_model_setting_uses_openrouter(
         get_settings.cache_clear()
     assert isinstance(interview, OpenRouterModel)
     assert interview.model_name == "anthropic/claude-opus-5.5"
+
+
+@pytest.mark.parametrize(
+    ("thinking", "expected"), [("", {"effort": "none"}), ("1", None)]
+)
+def test_interview_openrouter_agent_reasoning_is_off_by_default(
+    monkeypatch: pytest.MonkeyPatch, thinking: str, expected: object
+) -> None:
+    monkeypatch.setenv(
+        "TUTTITRIP_INTERVIEW__AGENT_MODEL", "anthropic/claude-sonnet-5.5"
+    )
+    if thinking:
+        monkeypatch.setenv("TUTTITRIP_INTERVIEW__AGENT_THINKING", thinking)
+    get_settings.cache_clear()
+    try:
+        interview = build_model(ModelKey.INTERVIEW, FAKE_KEYS)
+    finally:
+        get_settings.cache_clear()
+    assert isinstance(interview, OpenRouterModel)
+    assert (interview.settings or {}).get("openrouter_reasoning") == expected
