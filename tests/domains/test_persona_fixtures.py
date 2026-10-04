@@ -74,10 +74,11 @@ def _match(person: Persona, place: PlaceRead) -> float:
 def _allowed(person: Persona, place: PlaceRead) -> bool:
     """The E0 filters that depend only on one person and one place."""
     stairs = person.profile.stairs_sensitivity or 0.0
-    if person.preferences.constraints.wheelchair and place.stairs > 0:
+    place_stairs = place.stairs or 0.0  # the fixture city states every value
+    if person.preferences.constraints.wheelchair and place_stairs > 0:
         return False
     return (
-        place.stairs * stairs < STAIRS_LIMIT
+        place_stairs * stairs < STAIRS_LIMIT
         and place.segment_km <= SEGMENT_FACTOR * (person.profile.segment_km or 0.0)
     )
 
@@ -103,7 +104,7 @@ def test_city_covers_the_data_cases_the_spec_needs() -> None:
     assert any(not p.prices for p in catalog), "a place with no price row"
     assert any(p.hours.verified is False for p in catalog)
     assert any(p.hours.opening_hours is None for p in catalog)
-    assert any(p.stairs >= 0.9 for p in catalog)
+    assert any((p.stairs or 0.0) >= 0.9 for p in catalog)
     assert any(p.queue_min > 0 for p in catalog)
     assert any(
         price.amount == 0 and price.verified for p in catalog for price in p.prices

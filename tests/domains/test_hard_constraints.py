@@ -87,6 +87,22 @@ def test_stairs_reject_at_the_limit(data: PlanningInput, museum: PlaceRead) -> N
     assert RejectionCode.STAIRS not in reasons(result, "muzeum_miejskie")
 
 
+def test_unknown_stairs_are_not_step_free_for_someone_who_cannot_take_stairs(
+    data: PlanningInput, museum: PlaceRead
+) -> None:
+    unknown = replace_place(data, museum, stairs=None, wheelchair=None)
+    rider = with_(data.people[0], stairs_sensitivity=1.0)
+    result = filter_places(unknown.model_copy(update={"people": (rider,)}))
+    assert RejectionCode.STAIRS in reasons(result, "muzeum_miejskie")
+    # Confirmed step-free access keeps the place; so does a milder sensitivity.
+    ramp = replace_place(data, museum, stairs=None, wheelchair=True)
+    result = filter_places(ramp.model_copy(update={"people": (rider,)}))
+    assert RejectionCode.STAIRS not in reasons(result, "muzeum_miejskie")
+    mild = with_(rider, stairs_sensitivity=0.5)
+    result = filter_places(unknown.model_copy(update={"people": (mild,)}))
+    assert RejectionCode.STAIRS not in reasons(result, "muzeum_miejskie")
+
+
 def test_segment_over_one_and_a_half_times_s_rejects(
     data: PlanningInput, museum: PlaceRead
 ) -> None:
