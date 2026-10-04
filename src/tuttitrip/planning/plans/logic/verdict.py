@@ -30,6 +30,7 @@ from tuttitrip.planning.logic.hard_constraints import (
 )
 from tuttitrip.planning.logic.params import DEFAULT_PARAMS, AlgorithmParams
 from tuttitrip.planning.logic.utility import match, utility
+from tuttitrip.planning.plans.logic.justification import template_justification
 from tuttitrip.planning.plans.schemas import PlanVerdict, VerdictKind, VoteReason
 from tuttitrip.planning.schemas import PlanningInput, PlanningPerson
 from tuttitrip.profiles.feedback.schemas import ReasonCode
@@ -160,6 +161,7 @@ def build_verdicts(
             kind = VerdictKind.ICONIC_NOT_YOURS
         else:
             kind = VerdictKind.SKIP
+        codes = sorted({r.code.value for r in rejections})
         options = [] if place.id in in_plan else substitutes.get(place.category, [])
         substitute = next((pid for _, _, pid in options if pid != place.id), None)
         verdicts.append(
@@ -169,8 +171,12 @@ def build_verdicts(
                 v_p=v_p,
                 yes=yes,
                 no=no,
-                skip_codes=sorted({r.code.value for r in rejections}),
+                skip_codes=codes,
                 substitute_place_id=substitute,
+                justification=template_justification(
+                    kind, len(yes), len(no), codes, "pl"
+                ),
+                justification_source="template",
             )
         )
     return verdicts
