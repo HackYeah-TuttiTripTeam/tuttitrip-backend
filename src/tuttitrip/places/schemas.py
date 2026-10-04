@@ -339,6 +339,13 @@ class PlaceRead(BaseModel):
         description="Null when unknown (not the same as outdoors)."
     )
     iconic: bool
+    unique_experience: bool = Field(
+        default=False,
+        description=(
+            "A one-off experience of the place (not a landmark); like `iconic`, it "
+            'makes the place a candidate for the daily "anyway" suggestion.'
+        ),
+    )
     cuisine: Cuisine | None
     diet_tags: list[DietTag]
     amenities: list[Amenity] = Field(description="Lodging amenities.")

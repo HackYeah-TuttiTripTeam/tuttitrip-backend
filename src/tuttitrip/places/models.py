@@ -200,6 +200,9 @@ class Place(Base):
     wheelchair: Mapped[bool | None]
     indoor: Mapped[bool | None]  # NULL = unknown, which is not "outdoors"
     iconic: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    unique_experience: Mapped[bool] = mapped_column(
+        default=False, server_default=text("false")
+    )
     cuisine: Mapped[str | None] = mapped_column(String(32))
     diet_tags: Mapped[list[str]] = mapped_column(
         ARRAY(String(32)), default=list, server_default=_EMPTY_ARRAY

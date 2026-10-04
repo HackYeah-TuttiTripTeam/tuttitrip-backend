@@ -7,12 +7,14 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 
 from tuttitrip.places.candidates.services import candidate_service
+from tuttitrip.planning.anyway.services import anyway_service
 from tuttitrip.planning.plans.logic.sample_plan import Scenario, sample_plan
 from tuttitrip.planning.plans.schemas import (
     NotApprovedDetail,
     NotApprovedError,
     PlanCatalogMissing,
     PlanCreate,
+    PlanProgressRead,
     PlanRead,
     ReplanRead,
     ReplanRequest,
@@ -137,7 +139,38 @@ async def create_plan(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     if not created:
         response.status_code = status.HTTP_200_OK
+    else:
+        await anyway_service.request_justifications(
+            session, queue, plan.id, plan.anyway, owner=membership.sub
+        )
     return plan
+
+
+@router.get(
+    "/progress",
+    summary="Stage of the plan computation that is running",
+    description=(
+        "Poll while `POST .../plans` is in flight (about every 500 ms). Returns "
+        "the stage (`catalogue`, `reference`, `search`, `floors`, `budget`, "
+        "`verdicts`; `item` of `items` inside a stage that has units) or `null` "
+        "when no plan is being computed for the trip. Any member may read it. "
+        "Only the stage is exposed, never data, and it does not affect the plan "
+        "or its `plan_hash`. A plan answered from an existing version has no "
+        "stages, so the answer is `null`."
+    ),
+    responses={**NOT_FOUND},
+    dependencies=[requires(Feature.PLANNING_PLANS, Access.READ)],
+)
+async def get_plan_progress(membership: TripMember) -> PlanProgressRead | None:
+    """Stage of the running computation.
+
+    Args:
+        membership: The caller's membership of ``{trip_id}``.
+
+    Returns:
+        The stage, or None when nothing is being computed.
+    """
+    return plan_service.computation_progress(membership.trip_id)
 
 
 @router.get(

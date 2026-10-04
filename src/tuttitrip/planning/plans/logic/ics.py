@@ -37,7 +37,16 @@ def event_uid(plan_id: uuid.UUID, day: int, position: int) -> uuid.UUID:
     return uuid.uuid5(_UID_NAMESPACE, f"{plan_id}:{day}:{position}")
 
 
-def _description(stop: PlanStop, currency: str) -> str:
+def stop_description(stop: PlanStop, currency: str) -> str:
+    """Price and verification lines shown under a stop.
+
+    Args:
+        stop: The stop.
+        currency: Trip currency code.
+
+    Returns:
+        The lines joined by newlines.
+    """
     lines: list[str] = []
     if stop.cost_per_person is None:
         lines.append("Cena: brak danych")
@@ -74,7 +83,7 @@ def _event(  # ruff: ignore[too-many-arguments] one stop and the plan's context
         end=end,
         summary=stop.name,
         location=stop.address or stop.name,
-        description=_description(stop, plan.budget.currency),
+        description=stop_description(stop, plan.budget.currency),
     )
     event.add("geo", (stop.lat, stop.lon))
     return event
